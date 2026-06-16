@@ -1,6 +1,9 @@
 import { Users, Truck, Clock, CreditCard, TrendingUp } from "lucide-react";
 import { supabaseAdmin } from "@/lib/supabase";
 
+// Always render fresh — admin data must be live, not baked at build time
+export const dynamic = "force-dynamic";
+
 const BATCH_COLORS: Record<string, string> = {
   default: "bg-emerald-500",
 };

@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase"
 import { PartnersClient } from "./partners-client"
 
+export const dynamic = "force-dynamic"
+
 export default async function DeliveryPartnersPage() {
   const { data: partners } = await supabaseAdmin
     .from("delivery_partners")

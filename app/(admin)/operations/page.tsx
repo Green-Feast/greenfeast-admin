@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase";
 import { OperationsClient, type OperationsSubscriber } from "./operations-client";
 
+export const dynamic = "force-dynamic";
+
 export default async function OperationsPage({
   searchParams,
 }: {

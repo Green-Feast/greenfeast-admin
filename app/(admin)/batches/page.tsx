@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase"
 import BatchesClient from "./batches-client"
 
+export const dynamic = "force-dynamic"
+
 export default async function BatchesPage() {
   const [batchRes, partnersRes, subsRes] = await Promise.all([
     supabaseAdmin
