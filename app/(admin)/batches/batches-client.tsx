@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { GripVertical, MoreVertical, Plus, X, AlertCircle, Phone, MapPin, ChevronDown } from "lucide-react";
+import { GripVertical, MoreVertical, Plus, X, AlertCircle, Phone } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ─── Data ─────────────────────────────────────────────────────────────── */
@@ -93,84 +93,88 @@ const initialDrivers: Driver[] = [
   { id: "evening", name: "Evening", age: 30, phone: "9876543214", areas: ["Mahaveer Nagar", "Tonk Road Evening"], subscriberCount: 6, capacity: 25, joinDate: "2023-12-05", status: "active" },
 ];
 
-const driverColors: Record<string, { bg: string; border: string; text: string }> = {
-  nami: { bg: "bg-teal-50", border: "border-teal-200", text: "text-teal-700" },
-  rahul: { bg: "bg-purple-50", border: "border-purple-200", text: "text-purple-700" },
-  yashpal: { bg: "bg-orange-50", border: "border-orange-200", text: "text-orange-700" },
-  santu: { bg: "bg-pink-50", border: "border-pink-200", text: "text-pink-700" },
-  evening: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700" },
+const driverColors: Record<string, { avatarBg: string; textColor: string }> = {
+  nami: { avatarBg: "bg-emerald-100", textColor: "text-emerald-700" },
+  rahul: { avatarBg: "bg-blue-100", textColor: "text-blue-700" },
+  yashpal: { avatarBg: "bg-amber-100", textColor: "text-amber-700" },
+  santu: { avatarBg: "bg-pink-100", textColor: "text-pink-700" },
+  evening: { avatarBg: "bg-purple-100", textColor: "text-purple-700" },
 };
 
 /* ─── Components ────────────────────────────────────────────────────────── */
 
 function Toast({ message }: { message: string }) {
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1A1A1A] text-white text-sm px-4 py-2.5 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200">
+    <div className="fixed bottom-4 right-4 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-md shadow-sm">
       {message}
     </div>
   );
 }
 
 function DriverCard({ driver, isSelected, onClick, onMenuClick }: { driver: Driver; isSelected: boolean; onClick: () => void; onMenuClick: (e: React.MouseEvent, action: string) => void }) {
-  const unassignedCount = driver.subscriberCount;
-  const isFull = unassignedCount >= driver.capacity;
-  const statusColor = driver.status === "active" ? "bg-green-100 text-green-800" : driver.status === "onleave" ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-800";
-  const areaDisplay = driver.areas.slice(0, 2).join(", ") + (driver.areas.length > 2 ? `... +${driver.areas.length - 2} more` : "");
+  const isFull = driver.subscriberCount >= driver.capacity;
+  const initials = driver.name.substring(0, 2).toUpperCase();
+  const statusColors = {
+    active: "bg-emerald-50 text-emerald-700",
+    onleave: "bg-amber-50 text-amber-700",
+    inactive: "bg-gray-50 text-gray-700",
+  };
 
   return (
     <div
       onClick={onClick}
       className={cn(
-        "flex-shrink-0 p-3 rounded-lg border-2 cursor-pointer transition-all w-72",
-        isSelected ? "border-[#1B5E20] bg-[#F9FBF7]" : "border-gray-200 bg-white hover:border-gray-300"
+        "flex-shrink-0 p-5 rounded-lg border transition-all duration-200 cursor-pointer w-72",
+        isSelected ? "border-gray-300 bg-gray-50" : "border-gray-200 bg-white hover:border-gray-300"
       )}
     >
-      <div className="flex items-start justify-between mb-2">
-        <div>
-          <p className="font-semibold text-[#1A1A1A]">{driver.name}</p>
-          <p className="text-xs text-gray-600">{driver.age} years · <a href={`tel:${driver.phone}`} className="text-blue-600 hover:underline">{driver.phone}</a></p>
+      <div className="flex items-start justify-between mb-4">
+        <div className={cn(driverColors[driver.id]?.avatarBg, driverColors[driver.id]?.textColor, "w-10 h-10 rounded-full flex items-center justify-center font-semibold text-sm")}>
+          {initials}
         </div>
-        <button onClick={(e) => onMenuClick(e, "menu")} className="p-1 hover:bg-gray-100 rounded">
-          <MoreVertical className="w-4 h-4 text-gray-500" />
+        <button onClick={(e) => onMenuClick(e, "menu")} className="p-1 hover:bg-gray-100 rounded transition-colors">
+          <MoreVertical className="w-4 h-4 text-gray-400" />
         </button>
       </div>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex gap-1 flex-wrap">
+      <div className="mb-4">
+        <p className="font-semibold text-gray-900 mb-1">{driver.name}</p>
+        <p className="text-xs text-gray-500 mb-2">{driver.age} years old · <a href={`tel:${driver.phone}`} className="text-blue-600 hover:underline">{driver.phone}</a></p>
+        <div className="flex flex-wrap gap-1">
           {driver.areas.slice(0, 2).map((area, idx) => (
-            <span key={idx} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+            <span key={idx} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
               {area}
             </span>
           ))}
-          {driver.areas.length > 2 && <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">+{driver.areas.length - 2}</span>}
+          {driver.areas.length > 2 && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">+{driver.areas.length - 2}</span>}
         </div>
       </div>
-      <div className="flex items-center justify-between">
-        <span className={`text-sm font-medium ${isFull ? "text-red-600" : "text-[#1A1A1A]"}`}>
-          {unassignedCount} / {driver.capacity}
-          {isFull && <AlertCircle className="w-4 h-4 inline ml-1" />}
-        </span>
-        <span className={`text-xs px-2 py-1 rounded-full ${statusColor}`}>
-          {driver.status === "active" ? "Active" : driver.status === "onleave" ? "On Leave" : "Inactive"}
-        </span>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium text-gray-900">{driver.subscriberCount} / {driver.capacity}</span>
+        <div className="flex-1 h-1.5 bg-gray-200 rounded-full mx-3 overflow-hidden">
+          <div className="h-full bg-emerald-600 rounded-full" style={{ width: `${(driver.subscriberCount / driver.capacity) * 100}%` }}></div>
+        </div>
       </div>
+      {isFull && <p className="text-xs text-red-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" />At capacity</p>}
+      <span className={cn("text-xs px-2 py-1 rounded inline-block mt-3 font-medium", statusColors[driver.status])}>
+        {driver.status === "active" ? "Active" : driver.status === "onleave" ? "On Leave" : "Inactive"}
+      </span>
     </div>
   );
 }
 
 function SubscriberCard({ subscriber, isDragging }: { subscriber: Subscriber; isDragging: boolean }) {
   return (
-    <div className={cn("p-3 rounded-lg border border-gray-200 bg-white hover:shadow-md transition-all cursor-grab active:cursor-grabbing", isDragging && "opacity-50")} draggable>
-      <div className="flex items-start gap-2 mb-1">
-        <GripVertical className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+    <div className={cn("p-3 rounded-lg border border-gray-200 bg-white transition-all duration-200", isDragging ? "opacity-50" : "hover:shadow-sm")}>
+      <div className="flex items-start gap-2 mb-2">
+        <GripVertical className="w-4 h-4 text-gray-300 flex-shrink-0 mt-0.5 cursor-grab" />
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-sm text-[#1A1A1A] truncate">{subscriber.name}</p>
-          <p className="text-xs text-gray-600 truncate">{subscriber.code}</p>
-          <p className="text-xs text-gray-600 truncate">{subscriber.phone}</p>
+          <p className="font-medium text-sm text-gray-900">{subscriber.name}</p>
+          <p className="text-xs text-gray-500">{subscriber.code} · {subscriber.phone}</p>
         </div>
       </div>
-      <div className="ml-6 text-xs space-y-1">
-        <p className="text-gray-700">{subscriber.meal}</p>
-        {subscriber.constraints && <p className="text-gray-600 truncate" title={subscriber.constraints}>{subscriber.constraints}</p>}
+      <div className="ml-6 space-y-1">
+        <p className="text-xs text-gray-700">{subscriber.meal}</p>
+        {subscriber.constraints && <p className="text-xs text-gray-600 italic truncate">{subscriber.constraints}</p>}
       </div>
     </div>
   );
@@ -198,26 +202,43 @@ function AddDriverModal({ isOpen, onClose, onAdd }: { isOpen: boolean; onClose: 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-[#1A1A1A]">Add New Driver</h2>
-          <button onClick={onClose}>
-            <X className="w-5 h-5" />
+    <div className="fixed inset-0 bg-black/10 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Add New Driver</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
         <div className="space-y-4">
-          <input placeholder="Driver Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <input type="number" placeholder="Age" value={formData.age} onChange={(e) => setFormData({ ...formData, age: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <input type="tel" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <textarea placeholder="Areas (comma-separated)" value={formData.areas} onChange={(e) => setFormData({ ...formData, areas: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20] resize-none h-20" />
-          <input type="number" placeholder="Capacity" value={formData.capacity} onChange={(e) => setFormData({ ...formData, capacity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
+          <div>
+            <label className="text-sm font-medium text-gray-700">Name</label>
+            <input placeholder="Driver name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Age</label>
+              <input type="number" placeholder="Age" value={formData.age} onChange={(e) => setFormData({ ...formData, age: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Phone</label>
+              <input type="tel" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Areas</label>
+            <textarea placeholder="Sitapura, Jagatpura, JNU Area" value={formData.areas} onChange={(e) => setFormData({ ...formData, areas: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 resize-none h-20" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Capacity</label>
+            <input type="number" placeholder="Capacity" value={formData.capacity} onChange={(e) => setFormData({ ...formData, capacity: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+          </div>
         </div>
         <div className="flex gap-3 mt-6">
-          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-300 text-[#1A1A1A] rounded-lg hover:bg-gray-50 font-medium text-sm">
+          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 font-medium text-sm transition-colors">
             Cancel
           </button>
-          <button onClick={handleSubmit} className="flex-1 px-4 py-2 bg-[#1B5E20] text-white rounded-lg hover:bg-[#145214] font-medium text-sm">
+          <button onClick={handleSubmit} className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 font-medium text-sm transition-colors">
             Create Driver
           </button>
         </div>
@@ -238,26 +259,43 @@ function EditDriverModal({ isOpen, onClose, driver, onSave }: { isOpen: boolean;
   if (!isOpen || !driver) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-[#1A1A1A]">Edit Driver</h2>
-          <button onClick={onClose}>
-            <X className="w-5 h-5" />
+    <div className="fixed inset-0 bg-black/10 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Edit Driver</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
         <div className="space-y-4">
-          <input placeholder="Driver Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <input type="number" placeholder="Age" value={formData.age} onChange={(e) => setFormData({ ...formData, age: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <input type="tel" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
-          <textarea placeholder="Areas (comma-separated)" value={formData.areas} onChange={(e) => setFormData({ ...formData, areas: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20] resize-none h-20" />
-          <input type="number" placeholder="Capacity" value={formData.capacity} onChange={(e) => setFormData({ ...formData, capacity: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]" />
+          <div>
+            <label className="text-sm font-medium text-gray-700">Name</label>
+            <input placeholder="Driver name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium text-gray-700">Age</label>
+              <input type="number" placeholder="Age" value={formData.age} onChange={(e) => setFormData({ ...formData, age: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700">Phone</label>
+              <input type="tel" placeholder="Phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Areas</label>
+            <textarea placeholder="Sitapura, Jagatpura, JNU Area" value={formData.areas} onChange={(e) => setFormData({ ...formData, areas: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 resize-none h-20" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700">Capacity</label>
+            <input type="number" placeholder="Capacity" value={formData.capacity} onChange={(e) => setFormData({ ...formData, capacity: e.target.value })} className="w-full px-3 py-2 mt-1 border border-gray-200 rounded-md text-sm focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600" />
+          </div>
         </div>
         <div className="flex gap-3 mt-6">
-          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-300 text-[#1A1A1A] rounded-lg hover:bg-gray-50 font-medium text-sm">
+          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 font-medium text-sm transition-colors">
             Cancel
           </button>
-          <button onClick={handleSubmit} className="flex-1 px-4 py-2 bg-[#1B5E20] text-white rounded-lg hover:bg-[#145214] font-medium text-sm">
+          <button onClick={handleSubmit} className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 font-medium text-sm transition-colors">
             Save Changes
           </button>
         </div>
@@ -272,36 +310,36 @@ function ViewDetailsModal({ isOpen, onClose, driver, subscribers }: { isOpen: bo
   const driverSubs = subscribers.filter((s) => s.driverId === driver.id);
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full max-h-96 overflow-y-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-[#1A1A1A]">Driver Details</h2>
-          <button onClick={onClose}>
-            <X className="w-5 h-5" />
+    <div className="fixed inset-0 bg-black/10 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full max-h-96 overflow-y-auto p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Driver Details</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
         <div className="space-y-4">
           <div>
-            <p className="text-sm text-gray-600">Name</p>
-            <p className="text-sm font-medium text-[#1A1A1A]">{driver.name}</p>
+            <p className="text-sm text-gray-500">Name</p>
+            <p className="text-sm font-medium text-gray-900">{driver.name}</p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-sm text-gray-600">Age</p>
-              <p className="text-sm font-medium text-[#1A1A1A]">{driver.age}</p>
+              <p className="text-sm text-gray-500">Age</p>
+              <p className="text-sm font-medium text-gray-900">{driver.age}</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Phone</p>
+              <p className="text-sm text-gray-500">Phone</p>
               <a href={`tel:${driver.phone}`} className="text-sm font-medium text-blue-600 hover:underline">
                 {driver.phone}
               </a>
             </div>
           </div>
           <div>
-            <p className="text-sm text-gray-600">Areas</p>
-            <div className="flex flex-wrap gap-1 mt-1">
+            <p className="text-sm text-gray-500 mb-2">Areas</p>
+            <div className="flex flex-wrap gap-1">
               {driver.areas.map((area, idx) => (
-                <span key={idx} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                <span key={idx} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
                   {area}
                 </span>
               ))}
@@ -309,31 +347,31 @@ function ViewDetailsModal({ isOpen, onClose, driver, subscribers }: { isOpen: bo
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-sm text-gray-600">Capacity</p>
-              <p className="text-sm font-medium text-[#1A1A1A]">{driver.subscriberCount} / {driver.capacity}</p>
+              <p className="text-sm text-gray-500">Capacity</p>
+              <p className="text-sm font-medium text-gray-900">{driver.subscriberCount} / {driver.capacity}</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Join Date</p>
-              <p className="text-sm font-medium text-[#1A1A1A]">{driver.joinDate}</p>
+              <p className="text-sm text-gray-500">Join Date</p>
+              <p className="text-sm font-medium text-gray-900">{driver.joinDate}</p>
             </div>
           </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-2">Assigned Subscribers ({driverSubs.length})</p>
-            <div className="space-y-1 max-h-40 overflow-y-auto">
+          <div className="border-t border-gray-200 pt-4">
+            <p className="text-sm text-gray-500 mb-2">Assigned Subscribers ({driverSubs.length})</p>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
               {driverSubs.length === 0 ? (
                 <p className="text-xs text-gray-500">No subscribers assigned</p>
               ) : (
                 driverSubs.map((sub) => (
                   <div key={sub.id} className="text-xs text-gray-700 p-2 bg-gray-50 rounded">
                     <p className="font-medium">{sub.name}</p>
-                    <p className="text-gray-600">{sub.phone}</p>
+                    <p className="text-gray-500">{sub.phone}</p>
                   </div>
                 ))
               )}
             </div>
           </div>
         </div>
-        <button onClick={onClose} className="w-full mt-6 px-4 py-2 bg-gray-100 text-[#1A1A1A] rounded-lg hover:bg-gray-200 font-medium text-sm">
+        <button onClick={onClose} className="w-full mt-6 px-4 py-2 border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 font-medium text-sm transition-colors">
           Close
         </button>
       </div>
@@ -341,33 +379,33 @@ function ViewDetailsModal({ isOpen, onClose, driver, subscribers }: { isOpen: bo
   );
 }
 
-function DeleteDriverModal({ isOpen, onClose, driver, onDelete, onReassign }: { isOpen: boolean; onClose: () => void; driver: Driver | null; onDelete: () => void; onReassign: () => void }) {
+function DeleteDriverModal({ isOpen, onClose, driver, onDelete }: { isOpen: boolean; onClose: () => void; driver: Driver | null; onDelete: () => void }) {
   if (!isOpen || !driver) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-[#1A1A1A]">Delete Driver</h2>
-          <button onClick={onClose}>
-            <X className="w-5 h-5" />
+    <div className="fixed inset-0 bg-black/10 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 max-w-md w-full p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Delete Driver</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+            <X className="w-5 h-5 text-gray-400" />
           </button>
         </div>
         <p className="text-sm text-gray-700 mb-4">
-          Delete driver <strong>{driver.name}</strong>?
+          Are you sure you want to delete <strong>{driver.name}</strong>?
         </p>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
-          <p className="text-sm text-yellow-800">
-            <AlertCircle className="w-4 h-4 inline mr-2" />
-            This will move all {driver.subscriberCount} subscribers to Unassigned
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6">
+          <p className="text-sm text-amber-800 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            This will move {driver.subscriberCount} subscribers to Unassigned
           </p>
         </div>
         <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-300 text-[#1A1A1A] rounded-lg hover:bg-gray-50 font-medium text-sm">
+          <button onClick={onClose} className="flex-1 px-4 py-2 border border-gray-200 text-gray-700 rounded-md hover:bg-gray-50 font-medium text-sm transition-colors">
             Cancel
           </button>
-          <button onClick={onDelete} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium text-sm">
-            Delete & Move
+          <button onClick={onDelete} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 font-medium text-sm transition-colors">
+            Delete
           </button>
         </div>
       </div>
@@ -434,7 +472,6 @@ export default function BatchesClient() {
 
   const handleDropOnDriver = (driverId: string) => {
     if (!draggedSubscriber) return;
-    const oldDriverId = draggedSubscriber.driverId;
     setSubscribers(
       subscribers.map((s) =>
         s.id === draggedSubscriber.id ? { ...s, driverId } : s
@@ -487,35 +524,38 @@ export default function BatchesClient() {
   const getDriverSubscribers = (driverId: string | null) => subscribers.filter((s) => s.driverId === driverId);
 
   return (
-    <div className="flex flex-col h-full bg-[#F9FBF7]">
+    <div className="flex flex-col h-full bg-gray-50">
       {/* Header */}
-      <div className="px-6 py-6 bg-white border-b border-gray-200">
-        <div className="flex items-center justify-between mb-4">
+      <div className="px-8 py-8 bg-white border-b border-gray-200">
+        <div className="flex items-start justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-[#1A1A1A]">Batch & Driver Management</h1>
-            <p className="text-sm text-gray-600 mt-1">Manage delivery drivers and reassign subscribers</p>
+            <h1 className="text-3xl font-semibold text-gray-900">Batch & Driver Management</h1>
+            <p className="text-gray-600 mt-1">Manage delivery drivers and reassign subscribers</p>
           </div>
-          <button onClick={() => setModals({ ...modals, addDriver: true })} className="flex items-center gap-2 px-4 py-2 bg-[#1B5E20] text-white rounded-lg hover:bg-[#145214] font-medium text-sm">
+          <button onClick={() => setModals({ ...modals, addDriver: true })} className="flex items-center gap-2 px-4 py-2 bg-yellow-400 text-gray-900 rounded-md hover:bg-yellow-500 font-medium text-sm transition-colors">
             <Plus className="w-4 h-4" />
             Add New Driver
           </button>
         </div>
-        <div className="flex gap-6 text-sm">
+        <div className="flex gap-8">
           <div>
-            <p className="text-gray-600">{activeDriversCount} active drivers</p>
+            <p className="text-3xl font-semibold text-gray-900">{activeDriversCount}</p>
+            <p className="text-sm text-gray-600">active drivers</p>
           </div>
           <div>
-            <p className="text-gray-600">{totalSubscribers} subscribers</p>
+            <p className="text-3xl font-semibold text-gray-900">{totalSubscribers}</p>
+            <p className="text-sm text-gray-600">subscribers</p>
           </div>
           <div>
-            <p className="text-gray-600">{unassignedCount} unassigned</p>
+            <p className="text-3xl font-semibold text-yellow-600">{unassignedCount}</p>
+            <p className="text-sm text-gray-600">unassigned</p>
           </div>
         </div>
       </div>
 
       {/* Drivers List */}
-      <div className="px-6 py-4 overflow-x-auto">
-        <div className="flex gap-3">
+      <div className="px-8 py-6 overflow-x-auto border-b border-gray-200 bg-white">
+        <div className="flex gap-4">
           {drivers.map((driver) => (
             <div key={driver.id} className="relative">
               <DriverCard
@@ -528,17 +568,17 @@ export default function BatchesClient() {
                 }}
               />
               {menuDriver === driver.id && (
-                <div className="absolute top-12 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 min-w-max">
-                  <button onClick={() => openDriverMenu(driver.id, "edit")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-b">
+                <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-sm z-20 min-w-max">
+                  <button onClick={() => openDriverMenu(driver.id, "edit")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     Edit
                   </button>
-                  <button onClick={() => openDriverMenu(driver.id, "viewDetails")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-b">
+                  <button onClick={() => openDriverMenu(driver.id, "viewDetails")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-200">
                     View Details
                   </button>
-                  <button onClick={() => openDriverMenu(driver.id, "leave")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-b">
+                  <button onClick={() => openDriverMenu(driver.id, "leave")} className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-200">
                     {driver.status === "active" ? "Mark On Leave" : "Mark Active"}
                   </button>
-                  <button onClick={() => openDriverMenu(driver.id, "delete")} className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+                  <button onClick={() => openDriverMenu(driver.id, "delete")} className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 border-t border-gray-200">
                     Delete
                   </button>
                 </div>
@@ -549,21 +589,21 @@ export default function BatchesClient() {
       </div>
 
       {/* Drag-Drop Board */}
-      <div className="flex-1 px-6 py-4 overflow-x-auto">
+      <div className="flex-1 px-8 py-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
           {/* Unassigned Column */}
-          <div className="flex-shrink-0 w-80 flex flex-col bg-gray-50 rounded-lg border-2 border-gray-200">
-            <div className="p-3 bg-gray-100 border-b border-gray-200 rounded-t-md">
-              <p className="font-semibold text-gray-700">Unassigned</p>
-              <p className="text-xs text-gray-600">{unassignedCount} subscribers</p>
+          <div className="flex-shrink-0 w-80 flex flex-col bg-white rounded-lg border border-gray-200">
+            <div className="p-4 border-b border-gray-200">
+              <p className="font-semibold text-gray-900">Unassigned</p>
+              <p className="text-xs text-gray-500 mt-0.5">{unassignedCount} subscribers</p>
             </div>
             <div
               onDragOver={handleDragOver}
               onDrop={handleDropOnUnassigned}
-              className="flex-1 p-3 space-y-2 overflow-y-auto min-h-96"
+              className="flex-1 p-4 space-y-2 overflow-y-auto min-h-96"
             >
               {getDriverSubscribers(null).map((sub) => (
-                <div key={sub.id} onDragStart={(e) => handleDragStart(e, sub)}>
+                <div key={sub.id} onDragStart={(e) => handleDragStart(e, sub)} draggable>
                   <SubscriberCard subscriber={sub} isDragging={draggedSubscriber?.id === sub.id} />
                 </div>
               ))}
@@ -572,26 +612,26 @@ export default function BatchesClient() {
 
           {/* Driver Columns */}
           {drivers.map((driver) => (
-            <div key={driver.id} className="flex-shrink-0 w-80 flex flex-col bg-white rounded-lg border-2 border-gray-200">
-              <div className={cn("p-3 rounded-t-md border-b border-gray-200", driverColors[driver.id]?.bg || "bg-gray-50")}>
+            <div key={driver.id} className="flex-shrink-0 w-80 flex flex-col bg-white rounded-lg border border-gray-200">
+              <div className="p-4 border-b border-gray-200">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className={`font-semibold ${driverColors[driver.id]?.text || "text-gray-700"}`}>{driver.name}</p>
-                    <p className="text-xs text-gray-600">{driver.phone}</p>
+                    <p className="font-semibold text-gray-900">{driver.name}</p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1 mt-1"><Phone className="w-3 h-3" />{driver.phone}</p>
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-700">{getDriverSubscribers(driver.id).length} / {driver.capacity}</span>
-                  {driver.status !== "active" && <span className="text-xs px-2 py-1 bg-yellow-100 text-yellow-800 rounded">On Leave</span>}
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-sm font-medium text-gray-900">{getDriverSubscribers(driver.id).length} / {driver.capacity}</span>
+                  {driver.status !== "active" && <span className="text-xs px-2 py-1 bg-amber-50 text-amber-700 rounded font-medium">On Leave</span>}
                 </div>
               </div>
               <div
                 onDragOver={handleDragOver}
                 onDrop={() => handleDropOnDriver(driver.id)}
-                className="flex-1 p-3 space-y-2 overflow-y-auto min-h-96"
+                className="flex-1 p-4 space-y-2 overflow-y-auto min-h-96"
               >
                 {getDriverSubscribers(driver.id).map((sub) => (
-                  <div key={sub.id} onDragStart={(e) => handleDragStart(e, sub)}>
+                  <div key={sub.id} onDragStart={(e) => handleDragStart(e, sub)} draggable>
                     <SubscriberCard subscriber={sub} isDragging={draggedSubscriber?.id === sub.id} />
                   </div>
                 ))}
@@ -605,7 +645,7 @@ export default function BatchesClient() {
       <AddDriverModal isOpen={modals.addDriver} onClose={() => setModals({ ...modals, addDriver: false })} onAdd={handleAddDriver} />
       <EditDriverModal isOpen={modals.editDriver} onClose={() => setModals({ ...modals, editDriver: false })} driver={selectedDriver} onSave={handleEditDriver} />
       <ViewDetailsModal isOpen={modals.viewDetails} onClose={() => setModals({ ...modals, viewDetails: false })} driver={selectedDriver} subscribers={subscribers} />
-      <DeleteDriverModal isOpen={modals.deleteDriver} onClose={() => setModals({ ...modals, deleteDriver: false })} driver={selectedDriver} onDelete={() => handleDeleteDriver(selectedDriver?.id || "")} onReassign={() => setModals({ ...modals, deleteDriver: false })} />
+      <DeleteDriverModal isOpen={modals.deleteDriver} onClose={() => setModals({ ...modals, deleteDriver: false })} driver={selectedDriver} onDelete={() => handleDeleteDriver(selectedDriver?.id || "")} />
 
       {/* Toast */}
       {toast && <Toast message={toast} />}
