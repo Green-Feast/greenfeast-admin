@@ -1,88 +1,43 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle } from "lucide-react";
+import Link from "next/link";
+import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/* ─── Data ─────────────────────────────────────────────────────────────────── */
+/* ─── Types ─────────────────────────────────────────────────────────────────── */
 
-type Subscriber = {
+export type Subscriber = {
+  id: string;
   code: string;
   name: string;
   phone: string;
   batch: string;
   plan: string;
-  status: "Active" | "Paused" | "Expired";
+  status: "Active" | "Paused" | "Expired" | "Pending";
   meal: string;
   constraints: string;
+  addons: string;
+  timing: string;
+  notes: string;
+  address: string;
+  rc: "C" | "R";
   expiry: string;
-};
-
-const subscribers: Subscriber[] = [
-  { code: "N/C/01", name: "Nitika Shilp Sangam", phone: "7610030677", batch: "Nami", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Extra Paneer", expiry: "2026-06-15" },
-  { code: "N/C/02", name: "Aanchal", phone: "9782212557", batch: "Nami", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No tofu, No Buddha Avo protein", expiry: "2026-06-10" },
-  { code: "N/C/03", name: "Hiya", phone: "9571660678", batch: "Nami", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No peanut, No Pesto, No mushroom", expiry: "2026-06-08" },
-  { code: "N/C/04", name: "Dr. Nisha", phone: "8080475554", batch: "Nami", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "No Bell pepper, No Mushroom, No chilli tofu", expiry: "2026-06-20" },
-  { code: "N/C/05", name: "Dr. Ishika Nanda", phone: "8171675992", batch: "Nami", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "No Bell pepper, extra Lettuce", expiry: "2026-06-20" },
-  { code: "N/C/06", name: "Jasleen", phone: "9815406442", batch: "Nami", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No pasta, add quinoa", expiry: "2026-06-12" },
-  { code: "N/C/07", name: "Dr. Muskan Jindal", phone: "9971414065", batch: "Nami", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "ALLERGIC TO QUINOA", expiry: "2026-06-18" },
-  { code: "N/C/08", name: "Karan Dutt", phone: "8628072700", batch: "Nami", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "Use quinoa", expiry: "2026-06-05" },
-  { code: "N/C/09", name: "Dr. Gurusha Kausal", phone: "8955652679", batch: "Nami", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "NO PANEER, Add tofu", expiry: "2026-06-22" },
-  { code: "N/R/10", name: "Pallavi Bhadu", phone: "9782946260", batch: "Nami", plan: "Daily", status: "Paused", meal: "Asian Bowl", constraints: "", expiry: "2026-06-01" },
-  { code: "N/R/11", name: "Shweta Khari", phone: "7290929167", batch: "Nami", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "", expiry: "2026-06-03" },
-  { code: "N/R/12", name: "Abhimanyu Sinha", phone: "9172220043", batch: "Nami", plan: "Daily", status: "Active", meal: "Thai Zen Bowl", constraints: "Mexican, Soya panini alternating", expiry: "2026-06-14" },
-  { code: "R/C/01", name: "Ankit Chitlangiya", phone: "9829005037", batch: "Rahul", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Dressing Outside, Extra protein", expiry: "2026-06-19" },
-  { code: "R/C/02", name: "Deepanshu Sarda", phone: "9460102650", batch: "Rahul", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No Mushrooms, Gluten Free", expiry: "2026-06-11" },
-  { code: "R/C/03", name: "Vandana Chandana", phone: "9829648888", batch: "Rahul", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "GLUTEN FREE, 2 dressings", expiry: "2026-06-17" },
-  { code: "R/C/04", name: "Gunjan Khandelwal", phone: "9829993434", batch: "Rahul", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No Mushroom, No Tofu", expiry: "2026-06-09" },
-  { code: "R/R/05", name: "Muskan Karnawat", phone: "9828899959", batch: "Rahul", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "", expiry: "2026-06-04" },
-  { code: "R/R/06", name: "Arvind Gupta", phone: "9829050571", batch: "Rahul", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "2 Meals", expiry: "2026-06-16" },
-  { code: "Y/C/01", name: "Sonal Mendiratta", phone: "9829722323", batch: "Yashpal", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "EXTRA PROTEIN", expiry: "2026-06-21" },
-  { code: "Y/C/02", name: "Rahul Janani", phone: "9829160415", batch: "Yashpal", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No salt, no cheese, no butter", expiry: "2026-06-13" },
-  { code: "Y/C/03", name: "Rohit Thawrani", phone: "9509508345", batch: "Yashpal", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "No carbs, No Quinoa, No wraps", expiry: "2026-06-07" },
-  { code: "Y/C/04", name: "Pratyush Agarwal", phone: "9929407481", batch: "Yashpal", plan: "5-day", status: "Active", meal: "Peri Peri Panini", constraints: "Thursdays only panini", expiry: "2026-06-23" },
-  { code: "Y/C/05", name: "Dr. Charul", phone: "9001024212", batch: "Yashpal", plan: "Daily", status: "Active", meal: "Umami Soba Bowl", constraints: "No lettuce, add other veggies", expiry: "2026-06-18" },
-  { code: "Y/C/06", name: "Dr. Sanjana Somani", phone: "9873848847", batch: "Yashpal", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "Less quinoa, more panini", expiry: "2026-06-10" },
-  { code: "Y/C/07", name: "Utsav Sharma", phone: "8302648202", batch: "Yashpal", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "NO Quinoa", expiry: "2026-06-15" },
-  { code: "Y/C/08", name: "Puru", phone: "8955708287", batch: "Yashpal", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "NO mushroom", expiry: "2026-06-06" },
-  { code: "S/C/01", name: "Aditii Sisodiya", phone: "9820415361", batch: "Santu", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Less carbs, no beetroot, no chickpeas, no tofu", expiry: "2026-06-20" },
-  { code: "S/C/02", name: "Dr. Shivam", phone: "9992787315", batch: "Santu", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "No Papaya, No corn", expiry: "2026-06-14" },
-  { code: "S/C/03", name: "Dr. Sidhant", phone: "8225000777", batch: "Santu", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "Gluten Free", expiry: "2026-06-11" },
-  { code: "S/C/04", name: "Dr. Ashray Jain", phone: "6387668569", batch: "Santu", plan: "Daily", status: "Active", meal: "Tropical Fruit Salad", constraints: "Extra spicy smoothie Thursdays", expiry: "2026-06-19" },
-  { code: "S/C/05", name: "Anant", phone: "8619957997", batch: "Santu", plan: "Daily", status: "Active", meal: "Mexican Fiesta Bowl", constraints: "More dressing", expiry: "2026-06-16" },
-  { code: "S/C/06", name: "Surabhi Pannu", phone: "9636456512", batch: "Santu", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "DAIRY FREE ALLERGEN", expiry: "2026-06-08" },
-  { code: "S/C/07", name: "Ashwin Ji", phone: "7021139318", batch: "Santu", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Less Carbs, No tofu, No Quinoa", expiry: "2026-06-22" },
-  { code: "S/C/08", name: "Akash Chauhan", phone: "8233186472", batch: "Santu", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "No Pasta, No Mushroom, No Noodles", expiry: "2026-06-17" },
-  { code: "S/C/09", name: "Giri Raj", phone: "7568387373", batch: "Santu", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Extra Paneer, Extra Corn", expiry: "2026-06-12" },
-  { code: "E/C/01", name: "Praveen Vijayvegiya", phone: "9982613131", batch: "Evening", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "EXTRA Protein", expiry: "2026-06-20" },
-  { code: "E/C/02", name: "Shubham Gangwal", phone: "9597445822", batch: "Evening", plan: "5-day", status: "Active", meal: "Asian Bowl", constraints: "NO AVOCADO, 2 Egg alternating", expiry: "2026-06-13" },
-  { code: "E/C/03", name: "Shivani Puri", phone: "9982511715", batch: "Evening", plan: "Daily", status: "Active", meal: "Asian Bowl", constraints: "Chipotle + Peanut dressing, No avo protein", expiry: "2026-06-09" },
-  { code: "E/C/04", name: "Aman Dua", phone: "7597092777", batch: "Evening", plan: "Daily", status: "Active", meal: "Quinoa Buddha Bowl", constraints: "No beetroot, No sweet potato, add paneer", expiry: "2026-06-18" },
-];
-
-/* Hardcoded remaining deliveries per subscriber code */
-const deliveriesRemaining: Record<string, number> = {
-  "N/C/01": 12, "N/C/02": 8,  "N/C/03": 6,  "N/C/04": 18, "N/C/05": 18,
-  "N/C/06": 10, "N/C/07": 15, "N/C/08": 4,  "N/C/09": 20, "N/R/10": 0,
-  "N/R/11": 2,  "N/R/12": 11, "R/C/01": 17, "R/C/02": 9,  "R/C/03": 14,
-  "R/C/04": 7,  "R/R/05": 3,  "R/R/06": 13, "Y/C/01": 19, "Y/C/02": 11,
-  "Y/C/03": 5,  "Y/C/04": 21, "Y/C/05": 16, "Y/C/06": 8,  "Y/C/07": 12,
-  "Y/C/08": 4,  "S/C/01": 18, "S/C/02": 11, "S/C/03": 9,  "S/C/04": 17,
-  "S/C/05": 13, "S/C/06": 6,  "S/C/07": 20, "S/C/08": 14, "S/C/09": 10,
-  "E/C/01": 18, "E/C/02": 11, "E/C/03": 7,  "E/C/04": 16,
+  deliveriesRemaining: number | null;
+  source: "legacy" | "app";
 };
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
 
-const TODAY = new Date("2026-05-30");
-
 function daysUntil(dateStr: string) {
+  if (!dateStr) return 999;
   const d = new Date(dateStr);
-  return Math.ceil((d.getTime() - TODAY.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 }
 
 function formatDate(dateStr: string) {
+  if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString("en-IN", {
     day: "numeric", month: "short", year: "numeric",
   });
@@ -103,6 +58,7 @@ function StatusBadge({ status }: { status: Subscriber["status"] }) {
     Active:  "bg-green-100 text-green-700 border-green-200",
     Paused:  "bg-yellow-100 text-yellow-700 border-yellow-200",
     Expired: "bg-red-100 text-red-600 border-red-200",
+    Pending: "bg-gray-100 text-gray-600 border-gray-200",
   };
   return (
     <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border", map[status])}>
@@ -163,8 +119,8 @@ function DetailPanel({
   if (!displayed) return null;
 
   const days = daysUntil(displayed.expiry);
-  const remaining = deliveriesRemaining[displayed.code] ?? 10;
-  const hasAddOn = displayed.code === "N/C/08"; // Karan Dutt
+  const remaining = displayed.deliveriesRemaining;
+  const hasAddOn = displayed.addons.trim().length > 0;
 
   const constraintList = displayed.constraints
     ? displayed.constraints.split(/,\s*/).filter(Boolean)
@@ -237,7 +193,7 @@ function DetailPanel({
               </span>
             </Row>
             <Row label="Deliveries left">
-              <span className="font-medium">{remaining}</span>
+              <span className="font-medium">{remaining ?? "—"}</span>
             </Row>
           </Section>
 
@@ -265,8 +221,29 @@ function DetailPanel({
 
           {/* Add-ons */}
           <Section title="Add-ons">
-            <p className="text-sm text-[#1A1A1A]">{hasAddOn ? "🥤 Smoothie" : "None"}</p>
+            <p className="text-sm text-[#1A1A1A]">{hasAddOn ? displayed.addons : "None"}</p>
           </Section>
+
+          {/* Timing */}
+          {displayed.timing && (
+            <Section title="Delivery Timing">
+              <p className="text-sm text-[#1A1A1A]">{displayed.timing}</p>
+            </Section>
+          )}
+
+          {/* Address */}
+          {displayed.address && (
+            <Section title="Address">
+              <p className="text-sm text-gray-600 leading-relaxed">{displayed.address}</p>
+            </Section>
+          )}
+
+          {/* Notes */}
+          {displayed.notes && (
+            <Section title="Notes">
+              <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-3 py-2 leading-relaxed">{displayed.notes}</p>
+            </Section>
+          )}
 
           {/* Admin Notes */}
           <Section title="Admin Notes">
@@ -284,8 +261,14 @@ function DetailPanel({
         </div>
 
         {/* Quick actions */}
-        <div className="px-5 py-4 border-t border-[#e2e8d5] bg-[#F9FBF7]">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-2.5">Quick Actions</p>
+        <div className="px-5 py-4 border-t border-[#e2e8d5] bg-[#F9FBF7] space-y-2.5">
+          <Link
+            href={`/subscribers/${displayed.id}`}
+            className="flex items-center justify-center gap-1.5 w-full py-2 text-xs font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] transition-colors"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Full Profile
+          </Link>
           <div className="flex gap-2">
             <button
               onClick={onAction}
@@ -298,12 +281,6 @@ function DetailPanel({
               className="flex-1 py-2 text-xs font-medium rounded-lg border border-[#e2e8d5] bg-white text-[#1B5E20] hover:bg-green-50 transition-colors"
             >
               Extend Plan
-            </button>
-            <button
-              onClick={onAction}
-              className="flex-1 py-2 text-xs font-medium rounded-lg border border-[#e2e8d5] bg-white text-[#1A1A1A] hover:bg-gray-50 transition-colors"
-            >
-              Change Batch
             </button>
           </div>
         </div>
@@ -359,7 +336,7 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
 
 const PAGE_SIZE = 15;
 
-export function SubscribersClient() {
+export function SubscribersClient({ initialSubscribers }: { initialSubscribers: Subscriber[] }) {
   const [search, setSearch] = useState("");
   const [batchFilter, setBatchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -368,9 +345,20 @@ export function SubscribersClient() {
   const [selected, setSelected] = useState<Subscriber | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  const batches = useMemo(() => {
+    const seen = new Set<string>();
+    initialSubscribers.forEach((s) => seen.add(s.batch));
+    return ["All", ...Array.from(seen).sort()];
+  }, [initialSubscribers]);
+
+  const activeCount = useMemo(
+    () => initialSubscribers.filter((s) => s.status === "Active").length,
+    [initialSubscribers]
+  );
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return subscribers.filter((s) => {
+    return initialSubscribers.filter((s) => {
       if (q && !s.name.toLowerCase().includes(q) && !s.phone.includes(q)) return false;
       if (batchFilter !== "All" && s.batch !== batchFilter) return false;
       if (statusFilter !== "All" && s.status !== statusFilter) return false;
@@ -396,7 +384,7 @@ export function SubscribersClient() {
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-[#1A1A1A] tracking-tight">Subscribers</h1>
-          <p className="text-sm text-gray-500 mt-0.5">58 active subscribers across 5 batches</p>
+          <p className="text-sm text-gray-500 mt-0.5">{activeCount} active subscribers across {batches.length - 1} batches</p>
         </div>
         <Button
           onClick={showToast}
@@ -422,7 +410,7 @@ export function SubscribersClient() {
         <FilterSelect
           value={batchFilter}
           onChange={setBatchFilter}
-          options={["All", "Nami", "Rahul", "Yashpal", "Santu", "Evening"]}
+          options={batches}
           label="Filter by batch"
         />
         <FilterSelect
