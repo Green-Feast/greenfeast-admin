@@ -1,14 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2 } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { advanceBatchStatus, type DeliveryStatus } from "./actions";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
 
 export type OperationsSubscriber = {
+  orderId: string;
+  batchId: string | null;
+  status: string;
   code: string;
   batch: string;
   rc: "C" | "R";
@@ -32,6 +36,24 @@ const BATCH_COLORS: Record<string, { light: [number, number, number]; dark: [num
 
 function getBatchColors(batch: string) {
   return BATCH_COLORS[batch] ?? { light: [230, 230, 230] as [number,number,number], dark: [100, 100, 100] as [number,number,number] };
+}
+
+const STATUS_LABEL: Record<DeliveryStatus, string> = {
+  preparing: "In Kitchen",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered",
+};
+
+// Collapse raw order statuses into the 4 display buckets, in delivery order.
+function statusCounts(subs: OperationsSubscriber[]) {
+  const c = { scheduled: 0, preparing: 0, out_for_delivery: 0, delivered: 0 };
+  for (const s of subs) {
+    if (s.status === "preparing") c.preparing++;
+    else if (s.status === "out_for_delivery") c.out_for_delivery++;
+    else if (s.status === "delivered") c.delivered++;
+    else c.scheduled++; // scheduled / confirmed
+  }
+  return c;
 }
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
@@ -352,6 +374,8 @@ export function OperationsClient({
     delivery: {},
   });
   const [toast, setToast] = useState("");
+  const [, startTransition] = useTransition();
+  const [advancing, setAdvancing] = useState<string | null>(null);
 
   const batchNames = [...new Set(initialSubscribers.map((s) => s.batch))].sort();
   const totalDeliveries = initialSubscribers.length;
@@ -401,6 +425,21 @@ export function OperationsClient({
     } finally {
       setLoading((l) => ({ ...l, delivery: { ...l.delivery, [batch]: false } }));
     }
+  }
+
+  function handleAdvance(batch: string, batchId: string, status: DeliveryStatus) {
+    setAdvancing(`${batch}:${status}`);
+    startTransition(async () => {
+      try {
+        await advanceBatchStatus(batchId, serverDate, status);
+        router.refresh();
+        showToast(`${batch} → ${STATUS_LABEL[status]}`);
+      } catch {
+        showToast("Could not update status. Try again.");
+      } finally {
+        setAdvancing(null);
+      }
+    });
   }
 
   return (
@@ -462,6 +501,9 @@ export function OperationsClient({
         {batchNames.map((batch) => {
           const batchSubs = initialSubscribers.filter((s) => s.batch === batch);
           const colors = getBatchColors(batch);
+          const batchId = batchSubs.find((s) => s.batchId)?.batchId ?? null;
+          const counts = statusCounts(batchSubs);
+          const allDelivered = batchSubs.length > 0 && counts.delivered === batchSubs.length;
           return (
             <div key={batch} className="bg-white rounded-xl border border-[#e2e8d5] shadow-sm overflow-hidden hover:shadow-md transition-shadow">
               {/* Batch header */}
@@ -471,6 +513,47 @@ export function OperationsClient({
               >
                 <h3 className="text-lg font-bold text-[#1A1A1A]">{batch}</h3>
                 <p className="text-sm font-semibold text-[#1B5E20] mt-1">{batchSubs.length} deliveries</p>
+              </div>
+
+              {/* Status pipeline */}
+              <div className="px-4 pt-4">
+                <div className="flex items-center gap-1.5 flex-wrap text-xs mb-3">
+                  {counts.scheduled > 0 && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{counts.scheduled} scheduled</span>}
+                  {counts.preparing > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{counts.preparing} in kitchen</span>}
+                  {counts.out_for_delivery > 0 && <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{counts.out_for_delivery} out</span>}
+                  {counts.delivered > 0 && <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700">{counts.delivered} delivered</span>}
+                </div>
+
+                {batchId ? (
+                  allDelivered ? (
+                    <div className="flex items-center justify-center gap-1.5 py-2 text-sm font-medium text-[#1B5E20] bg-green-50 rounded-lg">
+                      <CheckCircle2 className="w-4 h-4" /> All delivered
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {([
+                        { status: "preparing" as const, label: "In Kitchen", Icon: ChefHat },
+                        { status: "out_for_delivery" as const, label: "Out", Icon: Truck },
+                        { status: "delivered" as const, label: "Delivered", Icon: CheckCircle2 },
+                      ]).map(({ status, label, Icon }) => {
+                        const busy = advancing === `${batch}:${status}`;
+                        return (
+                          <button
+                            key={status}
+                            onClick={() => handleAdvance(batch, batchId, status)}
+                            disabled={!!advancing}
+                            className="flex flex-col items-center justify-center gap-1 px-1 py-2 rounded-lg border border-[#e2e8d5] text-[11px] font-medium text-gray-600 hover:border-[#1B5E20] hover:text-[#1B5E20] hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                          >
+                            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                ) : (
+                  <p className="text-xs text-gray-400 text-center py-1.5">Assign this batch a route to manage status.</p>
+                )}
               </div>
 
               {/* Buttons */}

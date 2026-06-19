@@ -41,7 +41,7 @@ type DocKey = typeof DOCS[number]["key"]
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function PartnersClient({ initialPartners }: { initialPartners: Partner[] }) {
+export function PartnersClient({ initialPartners, loadError }: { initialPartners: Partner[]; loadError?: string | null }) {
   const [partners, setPartners] = useState(initialPartners)
   const [panelOpen, setPanelOpen] = useState(false)
   const [editing, setEditing] = useState<Partner | null>(null) // null = create mode
@@ -172,6 +172,17 @@ export function PartnersClient({ initialPartners }: { initialPartners: Partner[]
           Add Partner
         </button>
       </div>
+
+      {/* Load error banner */}
+      {loadError && (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">Couldn&apos;t load delivery partners.</p>
+            <p className="text-red-600/80 text-xs mt-0.5">{loadError}</p>
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white rounded-2xl border border-[#e2e8d5] shadow-sm overflow-hidden">

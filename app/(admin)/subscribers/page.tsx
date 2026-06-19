@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 import { SubscribersClient, type Subscriber } from "./subscribers-client";
 
 export const dynamic = "force-dynamic";

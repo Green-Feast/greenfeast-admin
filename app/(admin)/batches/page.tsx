@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 import BatchesClient from "./batches-client"
 
 export const dynamic = "force-dynamic"

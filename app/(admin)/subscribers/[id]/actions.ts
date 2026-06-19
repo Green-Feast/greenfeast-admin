@@ -1,7 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { supabaseAdmin } from "@/lib/supabase"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export async function saveNotes(subId: string, notes: string) {
   await supabaseAdmin.from("subscriptions").update({ special_notes: notes }).eq("id", subId)

@@ -1,7 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { supabaseAdmin } from "@/lib/supabase"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { CreateSubInput } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────

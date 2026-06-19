@@ -1,5 +1,5 @@
 import { Users, Truck, Clock, CreditCard, TrendingUp } from "lucide-react";
-import { supabaseAdmin } from "@/lib/supabase";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 
 // Always render fresh — admin data must be live, not baked at build time
 export const dynamic = "force-dynamic";
