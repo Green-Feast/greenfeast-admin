@@ -1,5 +1,6 @@
 "use server"
 
+import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { WeeklyMenuRow } from "./kitchen-client"
 
@@ -86,3 +87,14 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
     }
   }
 }
+
+export async function swapMealForOrder(orderId: string, mealTemplateId: string) {
+  const { error } = await supabaseAdmin
+    .from("orders")
+    .update({ meal_template_id: mealTemplateId, is_customized: true })
+    .eq("id", orderId)
+
+  if (error) throw error
+  revalidatePath("/kitchen")
+}
+

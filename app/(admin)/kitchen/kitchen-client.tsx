@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useState, useTransition } from "react"
-import { Loader2, ChevronDown, X } from "lucide-react"
+import { Loader2, ChevronDown, X, ArrowRight } from "lucide-react"
 import { supabase } from "@/lib/supabase"
-import { updateWeeklyMenu, propagateMenuChanges } from "./actions"
+import { updateWeeklyMenu, propagateMenuChanges, swapMealForOrder } from "./actions"
 
 export type WeeklyMenuRow = {
   id: string
@@ -12,6 +12,16 @@ export type WeeklyMenuRow = {
   mealSlot: "lunch" | "dinner"
   mealTemplateId: string | null
   mealName: string | null
+}
+
+export type NextMealItem = {
+  orderId: string
+  subscriptionId: string
+  menuType: "M1" | "M2"
+  userName: string
+  mealName: string
+  deliveryDate: string
+  mealSlot: "lunch" | "dinner"
 }
 
 type MealTemplate = {
@@ -23,12 +33,15 @@ type MealTemplate = {
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 const SLOTS = ["lunch", "dinner"] as const
 
-export function KitchenClient({ initialRows }: { initialRows: WeeklyMenuRow[] }) {
+export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: WeeklyMenuRow[]; initialNextMeals: NextMealItem[] }) {
   const [rows, setRows] = useState(initialRows)
+  const [nextMeals, setNextMeals] = useState(initialNextMeals)
   const [meals, setMeals] = useState<MealTemplate[]>([])
   const [saving, setSaving] = useState(false)
   const [, startTransition] = useTransition()
   const [openPicker, setOpenPicker] = useState<string | null>(null)
+  const [swappingOrder, setSwappingOrder] = useState<string | null>(null)
+  const [swapping, setSwapping] = useState(false)
   const [toast, setToast] = useState("")
 
   useEffect(() => {
@@ -103,6 +116,22 @@ export function KitchenClient({ initialRows }: { initialRows: WeeklyMenuRow[] })
       console.error(e)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSwapMeal(orderId: string, mealId: string, mealName: string) {
+    setSwapping(true)
+    try {
+      await swapMealForOrder(orderId, mealId)
+      // Update local state
+      setNextMeals(nextMeals.map(m => m.orderId === orderId ? { ...m, mealName } : m))
+      setSwappingOrder(null)
+      showToast("Meal swapped")
+    } catch (e: any) {
+      showToast("Swap failed. Try again.")
+      console.error(e)
+    } finally {
+      setSwapping(false)
     }
   }
 
@@ -187,7 +216,7 @@ export function KitchenClient({ initialRows }: { initialRows: WeeklyMenuRow[] })
         ))}
       </div>
 
-      <div className="flex gap-3">
+      <div className="flex gap-3 mb-8">
         <button
           onClick={handleSave}
           disabled={saving}
@@ -196,6 +225,81 @@ export function KitchenClient({ initialRows }: { initialRows: WeeklyMenuRow[] })
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           Save menu
         </button>
+      </div>
+
+      {/* Next meal per user */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Next meal per user</h2>
+
+        {nextMeals.length === 0 ? (
+          <p className="text-gray-500">No upcoming orders</p>
+        ) : (
+          <div className="space-y-2">
+            {nextMeals.map((item) => {
+              const fmtDate = new Date(item.deliveryDate + "T00:00:00").toLocaleDateString("en-IN", {
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+              })
+
+              return (
+                <div key={item.orderId} className="flex items-center justify-between p-3 border border-gray-100 rounded bg-gray-50">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3">
+                      <div className="w-6 h-6 rounded bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">
+                        {item.menuType}
+                      </div>
+                      <div>
+                        <Text className="font-medium text-gray-900">{item.userName}</Text>
+                        <Text className="text-sm text-gray-500">
+                          {item.mealName} · {item.mealSlot} · {fmtDate}
+                        </Text>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setSwappingOrder(item.orderId)}
+                    className="px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:border-blue-400 hover:text-blue-600 text-sm font-medium transition flex items-center gap-1"
+                  >
+                    Swap <ArrowRight size={14} />
+                  </button>
+
+                  {/* Swap picker modal */}
+                  {swappingOrder === item.orderId && (
+                    <div className="absolute top-0 left-0 right-0 bottom-0 bg-black/50 flex items-center justify-center z-50 rounded">
+                      <div className="bg-white rounded-lg shadow-lg p-4 max-h-96 w-80 overflow-y-auto">
+                        <div className="flex justify-between items-center mb-3">
+                          <Text className="font-bold text-gray-900">Swap meal</Text>
+                          <button
+                            onClick={() => setSwappingOrder(null)}
+                            className="text-gray-400 hover:text-gray-600"
+                          >
+                            <X size={20} />
+                          </button>
+                        </div>
+
+                        <div className="space-y-1">
+                          {meals.map((meal) => (
+                            <button
+                              key={meal.id}
+                              onClick={() => handleSwapMeal(item.orderId, meal.id, meal.name)}
+                              disabled={swapping}
+                              className="w-full text-left px-3 py-2 rounded text-sm text-gray-900 hover:bg-blue-50 border border-transparent hover:border-blue-200 transition disabled:opacity-50"
+                            >
+                              {meal.name} <span className="text-gray-500 text-xs">({meal.category})</span>
+                              {swapping && <Loader2 className="w-3 h-3 animate-spin inline ml-2" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {toast && (
