@@ -6,6 +6,7 @@ import { useState } from "react";
 import {
   LayoutDashboard,
   Users,
+  UserCog,
   Truck,
   Package,
   Menu,
@@ -16,6 +17,7 @@ import {
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/users", label: "Users", icon: UserCog },
   { href: "/subscribers", label: "Subscribers", icon: Users },
   { href: "/operations", label: "Operations", icon: Truck },
   { href: "/batches", label: "Batches", icon: Package },
