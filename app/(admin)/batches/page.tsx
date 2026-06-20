@@ -20,7 +20,7 @@ export default async function BatchesPage() {
       .order("name"),
     supabaseAdmin
       .from("subscriptions")
-      .select("id, user_id, plan_name, batch_id, users!inner ( name, phone )")
+      .select("id, user_id, status, plan_name, batch_id, users!inner ( name, phone )")
       .in("status", ["active", "paused", "pending"])
       .order("created_at"),
   ])

@@ -25,7 +25,7 @@ export default async function SubscribersPage() {
     .order("created_at", { ascending: false });
 
   // Deduplicate: one row per user, preferring active > paused > pending then most recent.
-  const best = new Map<string, typeof data extends Array<infer T> ? T : never>();
+  const best = new Map<string, any>()
   for (const s of (data ?? [])) {
     const existing = best.get(s.user_id);
     if (!existing) { best.set(s.user_id, s); continue; }

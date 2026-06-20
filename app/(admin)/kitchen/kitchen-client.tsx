@@ -24,6 +24,23 @@ export type NextMealItem = {
   mealSlot: "lunch" | "dinner"
 }
 
+export type WeeklyOverviewCell = {
+  mealName: string
+  slot: string
+  dow: string
+  dowNum: number
+  quantity: number
+  isCustomized: boolean
+  addons: string[]
+}
+
+export type WeeklyOverviewRow = {
+  subscriptionId: string
+  userName: string
+  menuType: string
+  days: Record<string, WeeklyOverviewCell>
+}
+
 type MealTemplate = {
   id: string
   name: string
@@ -45,7 +62,17 @@ const GRIDS = [
   { menuType: "M2" as const, slot: "dinner" as const, label: "M2 — Dinner" },
 ]
 
-export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: WeeklyMenuRow[]; initialNextMeals: NextMealItem[] }) {
+export function KitchenClient({
+  initialRows,
+  initialNextMeals,
+  weeklyOverview,
+  weekDates,
+}: {
+  initialRows: WeeklyMenuRow[]
+  initialNextMeals: NextMealItem[]
+  weeklyOverview: WeeklyOverviewRow[]
+  weekDates: { weekStart: string; weekEnd: string }
+}) {
   const [rows, setRows] = useState(initialRows)
   const [nextMeals, setNextMeals] = useState(initialNextMeals)
   const [meals, setMeals] = useState<MealTemplate[]>([])
@@ -277,6 +304,83 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
                 </div>
               )
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Weekly subscriber meal overview */}
+      <div className="mt-8 bg-white rounded-xl border border-gray-200 p-6">
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-gray-900">This week's orders</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {weekDates.weekStart} → {weekDates.weekEnd} &nbsp;·&nbsp; {weeklyOverview.length} active subscriber{weeklyOverview.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+
+        {weeklyOverview.length === 0 ? (
+          <p className="text-gray-500 text-sm">No orders found for this week.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse min-w-[700px]">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left font-semibold text-gray-700 py-2 pr-4 whitespace-nowrap w-36">Subscriber</th>
+                  {DOW_NAMES.map((d) => (
+                    <th key={d} className="text-center font-semibold text-gray-700 py-2 px-1 w-[13%]">{d}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {weeklyOverview.map((sub) => (
+                  <tr key={sub.subscriptionId} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
+                    <td className="py-2 pr-4 align-top">
+                      <div className="font-medium text-gray-900 truncate max-w-[8rem]">{sub.userName}</div>
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-[10px] font-bold mt-0.5">
+                        {sub.menuType}
+                      </span>
+                    </td>
+                    {DOW_NAMES.map((_, dowNum) => {
+                      const lunch = sub.days[`${dowNum}-lunch`]
+                      const dinner = sub.days[`${dowNum}-dinner`]
+                      return (
+                        <td key={dowNum} className="py-2 px-1 align-top">
+                          {lunch && (
+                            <div className={`mb-1 ${lunch.isCustomized ? "text-amber-700" : "text-gray-700"}`}>
+                              <span className="font-medium text-[10px] uppercase text-gray-400 block">L</span>
+                              <span className="block leading-tight">
+                                {lunch.mealName}
+                                {lunch.isCustomized && <span className="ml-1 text-amber-500" title="Switched">✦</span>}
+                                {lunch.quantity > 1 && <span className="ml-1 text-gray-400">×{lunch.quantity}</span>}
+                              </span>
+                              {lunch.addons.length > 0 && (
+                                <span className="block text-[10px] text-gray-400 leading-tight">{lunch.addons.join(", ")}</span>
+                              )}
+                            </div>
+                          )}
+                          {dinner && (
+                            <div className={dinner.isCustomized ? "text-amber-700" : "text-gray-700"}>
+                              <span className="font-medium text-[10px] uppercase text-gray-400 block">D</span>
+                              <span className="block leading-tight">
+                                {dinner.mealName}
+                                {dinner.isCustomized && <span className="ml-1 text-amber-500" title="Switched">✦</span>}
+                                {dinner.quantity > 1 && <span className="ml-1 text-gray-400">×{dinner.quantity}</span>}
+                              </span>
+                              {dinner.addons.length > 0 && (
+                                <span className="block text-[10px] text-gray-400 leading-tight">{dinner.addons.join(", ")}</span>
+                              )}
+                            </div>
+                          )}
+                          {!lunch && !dinner && (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-3 text-[11px] text-gray-400">✦ = subscriber-switched meal</p>
           </div>
         )}
       </div>
