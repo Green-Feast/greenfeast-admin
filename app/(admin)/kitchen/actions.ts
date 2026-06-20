@@ -5,8 +5,6 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { WeeklyMenuRow } from "./kitchen-client"
 
 export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
-  const today = new Date().toISOString().split("T")[0]
-
   for (const row of rows) {
     // Skip temp rows (not yet saved)
     if (row.id.startsWith("temp-")) {
