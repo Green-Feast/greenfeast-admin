@@ -43,6 +43,8 @@ type SubscriberCard = {
 
 type Partner = { id: string; name: string }
 
+const BATCH_CAPACITY = 25
+
 const TIME_ICONS = {
   morning: Sun,
   noon: Package,
@@ -378,14 +380,25 @@ export default function BatchesClient({
                   <span className={cn("inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border capitalize", TIME_COLORS[batch.time_window])}>
                     <TimeIcon className="w-3 h-3" />{batch.time_window}
                   </span>
-                  <span className="text-xs text-gray-400">{subCount} subscribers</span>
+                  {batch.primaryPartnerName && (
+                    <span className="text-xs text-gray-400 truncate">{batch.primaryPartnerName}</span>
+                  )}
                 </div>
-                {batch.primaryPartnerName && (
-                  <p className="text-xs text-gray-500 mt-1.5">
-                    {batch.primaryPartnerName}
-                    {batch.secondaryPartnerName && ` · ${batch.secondaryPartnerName}`}
-                  </p>
-                )}
+                <div className="mt-2">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>{subCount} / {BATCH_CAPACITY}</span>
+                    <span>{Math.min(100, Math.round((subCount / BATCH_CAPACITY) * 100))}%</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-300",
+                        subCount / BATCH_CAPACITY >= 0.8 ? "bg-orange-400" : "bg-[#1B5E20]"
+                      )}
+                      style={{ width: `${Math.min(100, (subCount / BATCH_CAPACITY) * 100)}%` }}
+                    />
+                  </div>
+                </div>
               </div>
             )
           })}
