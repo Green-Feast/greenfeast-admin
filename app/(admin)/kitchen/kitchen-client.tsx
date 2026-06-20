@@ -310,32 +310,41 @@ export function KitchenClient({
 
       {/* Weekly subscriber meal overview */}
       <div className="mt-8 bg-white rounded-xl border border-gray-200 p-6">
-        <div className="mb-4">
-          <h2 className="text-xl font-bold text-gray-900">This week's orders</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {weekDates.weekStart} → {weekDates.weekEnd} &nbsp;·&nbsp; {weeklyOverview.length} active subscriber{weeklyOverview.length !== 1 ? "s" : ""}
-          </p>
+        <div className="mb-5 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">This week's orders</h2>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {new Date(weekDates.weekStart + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+              {" – "}
+              {new Date(weekDates.weekEnd + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E8F5E9] text-[#1B5E20] text-sm font-semibold">
+              {weeklyOverview.length} subscriber{weeklyOverview.length !== 1 ? "s" : ""}
+            </span>
+          </div>
         </div>
 
         {weeklyOverview.length === 0 ? (
           <p className="text-gray-500 text-sm">No orders found for this week.</p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-lg border border-gray-100">
             <table className="w-full text-xs border-collapse min-w-[700px]">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left font-semibold text-gray-700 py-2 pr-4 whitespace-nowrap w-36">Subscriber</th>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left font-semibold text-gray-600 py-2.5 px-3 whitespace-nowrap w-36">Subscriber</th>
                   {DOW_NAMES.map((d) => (
-                    <th key={d} className="text-center font-semibold text-gray-700 py-2 px-1 w-[13%]">{d}</th>
+                    <th key={d} className="text-center font-semibold text-gray-600 py-2.5 px-1 w-[13%]">{d}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {weeklyOverview.map((sub) => (
-                  <tr key={sub.subscriptionId} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
-                    <td className="py-2 pr-4 align-top">
-                      <div className="font-medium text-gray-900 truncate max-w-[8rem]">{sub.userName}</div>
-                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-[10px] font-bold mt-0.5">
+                {weeklyOverview.map((sub, idx) => (
+                  <tr key={sub.subscriptionId} className={`border-b border-gray-100 last:border-0 hover:bg-green-50/30 transition-colors ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                    <td className="py-2.5 px-3 align-top">
+                      <div className="font-semibold text-gray-900 truncate max-w-[8rem]">{sub.userName}</div>
+                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-[10px] font-bold mt-1">
                         {sub.menuType}
                       </span>
                     </td>
@@ -343,7 +352,7 @@ export function KitchenClient({
                       const lunch = sub.days[`${dowNum}-lunch`]
                       const dinner = sub.days[`${dowNum}-dinner`]
                       return (
-                        <td key={dowNum} className="py-2 px-1 align-top">
+                        <td key={dowNum} className="py-2.5 px-1.5 align-top">
                           {lunch && (
                             <div className={`mb-1 ${lunch.isCustomized ? "text-amber-700" : "text-gray-700"}`}>
                               <span className="font-medium text-[10px] uppercase text-gray-400 block">L</span>
