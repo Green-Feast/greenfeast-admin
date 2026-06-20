@@ -37,6 +37,9 @@ type Subscription = {
   batchId: string | null
   batchName: string
   deliveryMode: string
+  menuType: string
+  mealsLunch: number
+  mealsDinner: number
 }
 
 type User = { name: string; phone: string; createdAt: string }
@@ -86,17 +89,21 @@ export function ProfileClient({
   subscription,
   user,
   dietary,
-  address,
+  addresses,
   payments,
   allBatches,
+  addons,
+  walletBalance,
 }: {
   subscriptionId: string
   subscription: Subscription
   user: User
   dietary: any
-  address: any
+  addresses: any[]
   payments: Payment[]
   allBatches: { id: string; name: string }[]
+  addons: { id: string; name: string; category: string; price_per_meal: number }[]
+  walletBalance: number | null
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -261,6 +268,33 @@ export function ProfileClient({
                 </div>
               </div>
 
+              {/* Plan composition */}
+              <div className="flex flex-wrap gap-2 text-sm">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#E8F5E9] text-[#1B5E20] font-semibold text-xs">
+                  {subscription.menuType}
+                </span>
+                {subscription.mealsLunch > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs">
+                    {subscription.mealsLunch} lunch{subscription.mealsLunch > 1 ? "es" : ""}
+                  </span>
+                )}
+                {subscription.mealsDinner > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs">
+                    {subscription.mealsDinner} dinner{subscription.mealsDinner > 1 ? "s" : ""}
+                  </span>
+                )}
+                {addons.map((a) => (
+                  <span key={a.id} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs">
+                    {a.name} +₹{(a.price_per_meal / 100).toLocaleString("en-IN")}/meal
+                  </span>
+                ))}
+                {walletBalance !== null && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+                    Wallet: ₹{(walletBalance / 100).toLocaleString("en-IN")}
+                  </span>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">
                 <InfoRow label="Start date"     value={fmtDate(subscription.startDate)} />
                 <InfoRow label="End date"       value={fmtDate(subscription.endDate)} />
@@ -354,26 +388,30 @@ export function ProfileClient({
         {/* ─── Right col (2/5) ─── */}
         <div className="lg:col-span-2 space-y-6">
 
-          {/* Address */}
+          {/* Addresses */}
           <Card>
-            <CardHeader title="Delivery Address" icon={<MapPin className="w-3.5 h-3.5" />} />
-            <div className="px-5 pb-5">
-              {address ? (
-                <div className="space-y-1.5 text-sm">
-                  <p className="font-medium text-[#1A1A1A]">{address.label ?? address.type}</p>
-                  <p className="text-gray-600 leading-relaxed">{address.line1}</p>
-                  {address.landmark && <p className="text-gray-500">Near: {address.landmark}</p>}
-                  <p className="text-gray-500">{address.city} — {address.pincode}</p>
-                  {address.time_window && (
-                    <p className="text-gray-500 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5" />
-                      {address.time_window}
+            <CardHeader title="Delivery Addresses" icon={<MapPin className="w-3.5 h-3.5" />} />
+            <div className="px-5 pb-5 space-y-3">
+              {addresses.length === 0 ? (
+                <p className="text-sm text-gray-400">No address on file.</p>
+              ) : addresses.map((addr: any) => (
+                <div key={addr.id} className="text-sm border border-[#e2e8d5] rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-medium text-[#1A1A1A]">{addr.label ?? addr.type}</span>
+                    {addr.is_default && (
+                      <span className="text-xs bg-[#E8F5E9] text-[#1B5E20] px-1.5 py-0.5 rounded-full font-medium">Default</span>
+                    )}
+                  </div>
+                  <p className="text-gray-600">{addr.line1}</p>
+                  {addr.landmark && <p className="text-gray-500 text-xs">Near: {addr.landmark}</p>}
+                  <p className="text-gray-500 text-xs">{[addr.city, addr.pincode].filter(Boolean).join(" — ")}</p>
+                  {addr.time_window && (
+                    <p className="text-gray-500 text-xs flex items-center gap-1 mt-1">
+                      <Clock className="w-3 h-3" />{addr.time_window}
                     </p>
                   )}
                 </div>
-              ) : (
-                <p className="text-sm text-gray-400">No address on file.</p>
-              )}
+              ))}
             </div>
           </Card>
 

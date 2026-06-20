@@ -20,7 +20,7 @@ export default async function BatchesPage() {
       .order("name"),
     supabaseAdmin
       .from("subscriptions")
-      .select("id, plan_name, batch_id, users!inner ( name, phone ), addresses ( city )")
+      .select("id, user_id, plan_name, batch_id, users!inner ( name, phone )")
       .in("status", ["active", "paused", "pending"])
       .order("created_at"),
   ])
@@ -38,16 +38,25 @@ export default async function BatchesPage() {
 
   const partners = (partnersRes.data ?? []) as { id: string; name: string }[]
 
-  const subscribers = (subsRes.data ?? []).map((s: any) => {
+  // Deduplicate by user_id: one card per user, prefer active > paused > pending
+  const STATUS_RANK: Record<string, number> = { active: 0, paused: 1, pending: 2 }
+  const bestSub = new Map<string, any>()
+  for (const s of (subsRes.data ?? [])) {
+    const existing = bestSub.get(s.user_id)
+    if (!existing || (STATUS_RANK[s.status] ?? 99) < (STATUS_RANK[existing.status] ?? 99)) {
+      bestSub.set(s.user_id, s)
+    }
+  }
+
+  const subscribers = Array.from(bestSub.values()).map((s: any) => {
     const user = Array.isArray(s.users) ? s.users[0] : s.users
-    const addr = Array.isArray(s.addresses) ? s.addresses[0] : s.addresses
     return {
       subscriptionId: s.id as string,
       name: (user as any)?.name ?? "Unknown",
       phone: (user as any)?.phone ?? "",
       plan: s.plan_name ?? "—",
       batchId: s.batch_id as string | null,
-      city: (addr as any)?.city ?? "",
+      city: "",
     }
   })
 

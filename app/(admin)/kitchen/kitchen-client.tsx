@@ -32,7 +32,18 @@ type MealTemplate = {
 
 // day_of_week convention: 0=Mon, 1=Tue, ..., 6=Sun (matches propagateMenuChanges + instantiate-orders)
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-const SLOTS = ["lunch", "dinner"] as const
+
+// Today's day-of-week in Mon=0 convention (used to grey out past days)
+function todayDow(): number {
+  return (new Date().getDay() + 6) % 7
+}
+
+const GRIDS = [
+  { menuType: "M1" as const, slot: "lunch" as const, label: "M1 — Lunch" },
+  { menuType: "M1" as const, slot: "dinner" as const, label: "M1 — Dinner" },
+  { menuType: "M2" as const, slot: "lunch" as const, label: "M2 — Lunch" },
+  { menuType: "M2" as const, slot: "dinner" as const, label: "M2 — Dinner" },
+]
 
 export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: WeeklyMenuRow[]; initialNextMeals: NextMealItem[] }) {
   const [rows, setRows] = useState(initialRows)
@@ -43,6 +54,7 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
   const [swappingOrder, setSwappingOrder] = useState<string | null>(null)
   const [swapping, setSwapping] = useState(false)
   const [toast, setToast] = useState("")
+  const [currentDow] = useState(todayDow)
 
   useEffect(() => {
     supabase
@@ -131,77 +143,87 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
     <>
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Kitchen Menu</h1>
-        <p className="text-gray-600">Edit M1 and M2 weekly menus. Changes apply to future un-swapped orders.</p>
+        <p className="text-gray-600">Set M1 and M2 menus for each day. Changes apply to future un-swapped orders.</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {(["M1", "M2"] as const).map((menuType) => (
-          <div key={menuType} className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">{menuType} Menu</h2>
+      {/* 4 grids: M1 Lunch, M1 Dinner, M2 Lunch, M2 Dinner */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+        {GRIDS.map(({ menuType, slot, label }) => (
+          <div key={label} className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-xs font-bold">
+                {menuType}
+              </span>
+              <span className="capitalize text-gray-700">{slot}</span>
+            </h2>
 
-            <div className="space-y-3">
-              {DOW_NAMES.map((dow, dayOfWeek) => (
-                <div key={dow} className="border border-gray-100 rounded p-3">
-                  <div className="font-semibold text-gray-700 mb-2 text-sm">{dow}</div>
+            <div className="space-y-1.5">
+              {DOW_NAMES.map((dow, dayOfWeek) => {
+                const isPast = dayOfWeek < currentDow
+                const row = getRow(menuType, dayOfWeek, slot)
+                const pickerKey = rowKey(menuType, dayOfWeek, slot)
+                const isOpen = openPicker === pickerKey
 
-                  <div className="space-y-2">
-                    {SLOTS.map((slot) => {
-                      const row = getRow(menuType, dayOfWeek, slot)
-                      const pickerKey = rowKey(menuType, dayOfWeek, slot)
-                      const isOpen = openPicker === pickerKey
+                return (
+                  <div
+                    key={dow}
+                    className={`relative flex items-center gap-3 p-2.5 rounded-lg border ${
+                      isPast ? "border-gray-100 bg-gray-50/50 opacity-50" : "border-gray-100 bg-gray-50"
+                    }`}
+                  >
+                    <span className={`w-8 shrink-0 text-xs font-semibold ${isPast ? "text-gray-400" : "text-gray-600"}`}>
+                      {dow}
+                    </span>
 
-                      return (
-                        // relative here so the absolute dropdown is scoped to this cell
-                        <div key={`${dow}-${slot}`} className="relative flex items-center justify-between p-2 bg-gray-50 rounded">
-                          <div className="text-sm text-gray-600 capitalize w-12 shrink-0">{slot}</div>
+                    <div className="flex-1 min-w-0">
+                      {row ? (
+                        <span className="text-sm font-medium text-gray-900 truncate block">{row.mealName}</span>
+                      ) : (
+                        <span className="text-sm text-gray-400">— not set —</span>
+                      )}
+                    </div>
 
-                          <div className="flex-1 mx-3 min-w-0">
-                            {row ? (
-                              <div className="text-sm font-medium text-gray-900 truncate">{row.mealName}</div>
-                            ) : (
-                              <div className="text-sm text-gray-400">—</div>
-                            )}
-                          </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        disabled={isPast}
+                        onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
+                        className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition disabled:cursor-not-allowed"
+                      >
+                        <ChevronDown size={13} />
+                      </button>
+                      {row && !isPast && (
+                        <button
+                          onClick={() => handleClear(menuType, dayOfWeek, slot)}
+                          className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
 
-                          <div className="flex gap-1 shrink-0">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
-                              className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
-                            >
-                              <ChevronDown size={14} />
-                            </button>
-                            {row && (
-                              <button
-                                onClick={() => handleClear(menuType, dayOfWeek, slot)}
-                                className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
-                              >
-                                <X size={14} />
-                              </button>
-                            )}
-                          </div>
-
-                          {isOpen && (
-                            <div
-                              className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-52 overflow-y-auto"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {meals.map((meal) => (
-                                <button
-                                  key={meal.id}
-                                  onClick={() => handleSelectMeal(menuType, dayOfWeek, slot, meal.id, meal.name)}
-                                  className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-green-50 border-b border-gray-100 last:border-0"
-                                >
-                                  {meal.name} <span className="text-gray-400 text-xs">({meal.category})</span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
+                    {isOpen && (
+                      <div
+                        className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {meals.map((meal) => (
+                          <button
+                            key={meal.id}
+                            onClick={() => handleSelectMeal(menuType, dayOfWeek, slot, meal.id, meal.name)}
+                            className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-green-50 border-b border-gray-100 last:border-0"
+                          >
+                            {meal.name}{" "}
+                            <span className="text-gray-400 text-xs">({meal.category})</span>
+                          </button>
+                        ))}
+                        {meals.length === 0 && (
+                          <div className="px-3 py-2 text-sm text-gray-400">No meal templates found</div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         ))}
@@ -219,7 +241,7 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
       </div>
 
       {/* Next meal per user */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Next meal per user</h2>
 
         {nextMeals.length === 0 ? (
@@ -231,7 +253,7 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
                 weekday: "short", month: "short", day: "numeric",
               })
               return (
-                <div key={item.orderId} className="flex items-center justify-between p-3 border border-gray-100 rounded bg-gray-50">
+                <div key={item.orderId} className="flex items-center justify-between p-3 border border-gray-100 rounded-lg bg-gray-50">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center justify-center w-7 h-7 rounded bg-[#E8F5E9] text-[#1B5E20] text-xs font-bold shrink-0">
@@ -259,7 +281,7 @@ export function KitchenClient({ initialRows, initialNextMeals }: { initialRows: 
         )}
       </div>
 
-      {/* Swap picker — fixed full-screen overlay so it always renders correctly */}
+      {/* Swap picker overlay */}
       {swappingOrder && (
         <div
           className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"

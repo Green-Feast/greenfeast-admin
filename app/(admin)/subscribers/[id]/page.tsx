@@ -14,12 +14,13 @@ export default async function SubscriberProfilePage({
   const { data: sub, error } = await supabaseAdmin
     .from("subscriptions")
     .select(`
-      id, status, payment_method, plan_name, plan_id, deliveries_remaining,
-      start_date, end_date, pause_from, pause_until,
+      id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
+      start_date, end_date, pause_from, pause_until, menu_type, meals_lunch, meals_dinner,
       special_notes, meals_per_day, delivery_mode, batch_id, created_at,
       users!inner ( id, name, phone, created_at ),
       batches ( id, name ),
-      plans ( name, meals_total, days_per_week, base_price )
+      plans ( name, meals_total, days_per_week, base_price ),
+      subscription_addons ( addons ( id, name, category, price_per_meal ) )
     `)
     .eq("id", id)
     .single()
@@ -33,12 +34,13 @@ export default async function SubscriberProfilePage({
 
   const [
     { data: dietary },
-    { data: address },
+    { data: addresses },
     { data: payments },
     { data: allBatches },
+    { data: wallet },
   ] = await Promise.all([
     supabaseAdmin.from("dietary_profiles").select("*").eq("user_id", userId).maybeSingle(),
-    supabaseAdmin.from("addresses").select("*").eq("user_id", userId).order("created_at").limit(1).maybeSingle(),
+    supabaseAdmin.from("addresses").select("*").eq("user_id", userId).order("is_default", { ascending: false }).order("created_at"),
     supabaseAdmin
       .from("payments")
       .select("id, amount, status, created_at, razorpay_payment_id")
@@ -46,6 +48,7 @@ export default async function SubscriberProfilePage({
       .order("created_at", { ascending: false })
       .limit(10),
     supabaseAdmin.from("batches").select("id, name").order("name"),
+    supabaseAdmin.from("wallets").select("balance").eq("user_id", userId).maybeSingle(),
   ])
 
   const userName = (user as any).name ?? "Unknown"
@@ -79,6 +82,9 @@ export default async function SubscriberProfilePage({
           batchId: sub.batch_id,
           batchName: (batch as any)?.name ?? "Unassigned",
           deliveryMode: sub.delivery_mode,
+          menuType: (sub as any).menu_type ?? "M1",
+          mealsLunch: (sub as any).meals_lunch ?? 1,
+          mealsDinner: (sub as any).meals_dinner ?? 0,
         }}
         user={{
           name: userName,
@@ -86,9 +92,11 @@ export default async function SubscriberProfilePage({
           createdAt: (user as any).created_at,
         }}
         dietary={dietary}
-        address={address}
+        addresses={(addresses ?? []) as any[]}
         payments={(payments ?? []) as any[]}
         allBatches={(allBatches ?? []) as { id: string; name: string }[]}
+        addons={((sub as any).subscription_addons ?? []).map((sa: any) => sa.addons).filter(Boolean)}
+        walletBalance={wallet?.balance ?? null}
       />
     </div>
   )

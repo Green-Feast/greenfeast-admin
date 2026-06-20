@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 export type Subscriber = {
   id: string;
+  userId?: string;
   code: string;
   name: string;
   phone: string;
