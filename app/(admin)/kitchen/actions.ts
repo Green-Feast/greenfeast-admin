@@ -52,12 +52,17 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
   for (const row of rows) {
     if (!row.mealTemplateId) continue // Skip cleared entries
 
-    // Fetch all active/paused subscriptions with this menu_type
+    // Fetch all active/paused subscriptions with this menu_type.
+    // NULL menu_type defaults to M1, so include IS NULL when propagating M1 changes.
+    const menuTypeFilter =
+      row.menuType === "M1"
+        ? "menu_type.eq.M1,menu_type.is.null"
+        : "menu_type.eq.M2"
     const { data: subs } = await supabaseAdmin
       .from("subscriptions")
       .select("id, user_id")
       .in("status", ["active", "paused"])
-      .eq("menu_type", row.menuType)
+      .or(menuTypeFilter)
 
     for (const sub of (subs ?? [])) {
       // Find future un-swapped orders for this subscription matching the day_of_week and meal_slot
@@ -84,6 +89,21 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
       }
     }
   }
+
+  // Kick off order creation for any active subscriptions that have no future
+  // orders yet (e.g. menu was empty when they signed up). Fire-and-forget so
+  // the admin Save button doesn't block waiting for 14 days of inserts.
+  fetch(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/instantiate-orders`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    }
+  ).catch(() => {})
 }
 
 export async function swapMealForOrder(orderId: string, mealTemplateId: string) {
