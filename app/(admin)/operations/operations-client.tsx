@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { advanceBatchStatus, type DeliveryStatus } from "./actions";
@@ -54,6 +55,13 @@ function statusCounts(subs: OperationsSubscriber[]) {
     else c.scheduled++; // scheduled / confirmed
   }
   return c;
+}
+
+// Returns the most-advanced active status for a batch (for button highlight).
+function batchCurrentStage(counts: ReturnType<typeof statusCounts>): DeliveryStatus | null {
+  if (counts.out_for_delivery > 0) return "out_for_delivery";
+  if (counts.preparing > 0) return "preparing";
+  return null;
 }
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
@@ -504,6 +512,7 @@ export function OperationsClient({
           const batchId = batchSubs.find((s) => s.batchId)?.batchId ?? null;
           const counts = statusCounts(batchSubs);
           const allDelivered = batchSubs.length > 0 && counts.delivered === batchSubs.length;
+          const stage = batchCurrentStage(counts);
           return (
             <div key={batch} className="bg-white rounded-xl border border-[#e2e8d5] shadow-sm overflow-hidden hover:shadow-md transition-shadow">
               {/* Batch header */}
@@ -537,12 +546,18 @@ export function OperationsClient({
                         { status: "delivered" as const, label: "Delivered", Icon: CheckCircle2 },
                       ]).map(({ status, label, Icon }) => {
                         const busy = advancing === `${batch}:${status}`;
+                        const isActive = stage === status;
                         return (
                           <button
                             key={status}
                             onClick={() => handleAdvance(batch, batchId, status)}
                             disabled={!!advancing}
-                            className="flex flex-col items-center justify-center gap-1 px-1 py-2 rounded-lg border border-[#e2e8d5] text-[11px] font-medium text-gray-600 hover:border-[#1B5E20] hover:text-[#1B5E20] hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                            className={cn(
+                              "flex flex-col items-center justify-center gap-1 px-1 py-2 rounded-lg border text-[11px] font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed",
+                              isActive
+                                ? "border-[#1B5E20] bg-[#E8F5E9] text-[#1B5E20] font-semibold"
+                                : "border-[#e2e8d5] text-gray-600 hover:border-[#1B5E20] hover:text-[#1B5E20] hover:bg-green-50"
+                            )}
                           >
                             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
                             {label}

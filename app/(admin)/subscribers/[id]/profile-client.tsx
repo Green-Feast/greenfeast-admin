@@ -102,7 +102,7 @@ export function ProfileClient({
   addresses: any[]
   payments: Payment[]
   allBatches: { id: string; name: string }[]
-  addons: { id: string; name: string; category: string; price_per_meal: number }[]
+  addons: { id: string; name: string; price_per_meal: number }[]
   walletBalance: number | null
 }) {
   const router = useRouter()

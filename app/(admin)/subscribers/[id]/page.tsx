@@ -20,7 +20,7 @@ export default async function SubscriberProfilePage({
       users!inner ( id, name, phone, created_at ),
       batches ( id, name ),
       plans ( name, meals_total, days_per_week, base_price ),
-      subscription_addons ( addons ( id, name, category, price_per_meal ) )
+      subscription_addons ( addons ( id, name, price_per_meal ) )
     `)
     .eq("id", id)
     .single()

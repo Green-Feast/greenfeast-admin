@@ -4,14 +4,13 @@ import { useState, useMemo, useEffect, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
-  Search, X, Phone, Mail, Calendar, Plus, Pause, Play, Trash2,
+  Search, X, Phone, Mail, Calendar, Plus, Trash2,
   RotateCcw, Pencil, ExternalLink, ChevronLeft, ChevronRight,
   AlertCircle, CheckCircle, ShieldAlert,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   createSubscription, resetUserData, deleteUser, editUserProfile,
-  pauseSub, resumeSub, cancelSub, extendSub,
 } from "./actions"
 import type { CreateSubInput } from "./types"
 
@@ -112,9 +111,6 @@ export function UsersClient({
   const [editOpen, setEditOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [pauseOpen, setPauseOpen] = useState(false)
-  const [extendOpen, setExtendOpen] = useState(false)
-  const [cancelOpen, setCancelOpen] = useState(false)
 
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
 
@@ -124,8 +120,7 @@ export function UsersClient({
   }
 
   function closeModals() {
-    setCreateOpen(false); setEditOpen(false); setResetOpen(false)
-    setDeleteOpen(false); setPauseOpen(false); setExtendOpen(false); setCancelOpen(false)
+    setCreateOpen(false); setEditOpen(false); setResetOpen(false); setDeleteOpen(false)
   }
 
   // Run a server action, surface its result, refresh the table.
@@ -314,10 +309,6 @@ export function UsersClient({
           onEdit={() => setEditOpen(true)}
           onReset={() => setResetOpen(true)}
           onDelete={() => setDeleteOpen(true)}
-          onPause={() => setPauseOpen(true)}
-          onResume={() => run(() => resumeSub(selected.subscriptionId!), "Subscription resumed.")}
-          onExtend={() => setExtendOpen(true)}
-          onCancel={() => setCancelOpen(true)}
         />
       )}
 
@@ -365,35 +356,6 @@ export function UsersClient({
         />
       )}
 
-      {cancelOpen && selected && (
-        <ConfirmModal
-          title="Cancel subscription?"
-          body="All upcoming scheduled orders will be cancelled."
-          confirmLabel="Cancel plan"
-          danger
-          isPending={isPending}
-          onClose={() => setCancelOpen(false)}
-          onConfirm={() => run(() => cancelSub(selected.subscriptionId!), "Subscription cancelled.")}
-        />
-      )}
-
-      {pauseOpen && selected && (
-        <PauseModal
-          isPending={isPending}
-          onClose={() => setPauseOpen(false)}
-          onSubmit={(from, until) => run(() => pauseSub(selected.subscriptionId!, from, until), "Subscription paused.")}
-        />
-      )}
-
-      {extendOpen && selected && (
-        <ExtendModal
-          current={selected.deliveriesRemaining ?? 0}
-          isPending={isPending}
-          onClose={() => setExtendOpen(false)}
-          onSubmit={(meals) => run(() => extendSub(selected.subscriptionId!, meals), `Added ${meals} meals.`)}
-        />
-      )}
-
       {/* Toast */}
       {toast && (
         <div className={cn(
@@ -412,7 +374,6 @@ export function UsersClient({
 
 function DetailPanel({
   user, isPending, onClose, onCreate, onEdit, onReset, onDelete,
-  onPause, onResume, onExtend, onCancel,
 }: {
   user: UserRow
   isPending: boolean
@@ -421,14 +382,8 @@ function DetailPanel({
   onEdit: () => void
   onReset: () => void
   onDelete: () => void
-  onPause: () => void
-  onResume: () => void
-  onExtend: () => void
-  onCancel: () => void
 }) {
   const tier = tierOf(user)
-  const hasSub = !!user.subStatus && user.subStatus !== "cancelled" && user.subStatus !== "expired"
-  const isPaused = user.subStatus === "paused"
 
   return (
     <>
@@ -487,29 +442,14 @@ function DetailPanel({
         {/* Actions */}
         <div className="px-5 py-4 border-t border-[#e2e8d5] bg-[#F9FBF7] space-y-2.5">
           {user.subStatus ? (
-            <>
-              {user.subscriptionId && (
-                <Link
-                  href={`/subscribers/${user.subscriptionId}`}
-                  className="flex items-center justify-center gap-1.5 w-full py-2 text-xs font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] transition-colors"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" /> Full profile
-                </Link>
-              )}
-              {hasSub && (
-                <div className="flex gap-2">
-                  {isPaused ? (
-                    <PanelBtn color="green" disabled={isPending} onClick={onResume} icon={<Play className="w-3.5 h-3.5" />} label="Resume" />
-                  ) : (
-                    <PanelBtn color="yellow" disabled={isPending} onClick={onPause} icon={<Pause className="w-3.5 h-3.5" />} label="Pause" />
-                  )}
-                  <PanelBtn color="blue" disabled={isPending} onClick={onExtend} icon={<Plus className="w-3.5 h-3.5" />} label="Extend" />
-                </div>
-              )}
-              {hasSub && (
-                <PanelBtn color="red" disabled={isPending} onClick={onCancel} icon={<X className="w-3.5 h-3.5" />} label="Cancel subscription" full />
-              )}
-            </>
+            user.subscriptionId && (
+              <Link
+                href={`/subscribers/${user.subscriptionId}`}
+                className="flex items-center justify-center gap-1.5 w-full py-2 text-xs font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Full profile
+              </Link>
+            )
           ) : (
             <button
               onClick={onCreate}

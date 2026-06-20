@@ -26,6 +26,7 @@ export default async function KitchenPage() {
     { data: weeklyMenuRows, error },
     { data: nextMeals, error: nextError },
     { data: weekOrders },
+    { data: activeSubs },
   ] = await Promise.all([
     supabaseAdmin
       .from("weekly_menu")
@@ -56,6 +57,10 @@ export default async function KitchenPage() {
       .lte("delivery_date", weekEnd)
       .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
       .order("delivery_date"),
+    supabaseAdmin
+      .from("subscriptions")
+      .select("id, menu_type, users ( name )")
+      .eq("status", "active"),
   ])
 
   const menuRows = (weeklyMenuRows ?? []).map((row: any) => ({
@@ -115,6 +120,19 @@ export default async function KitchenPage() {
       quantity: (order.quantity ?? 1) as number,
       isCustomized: (order.is_customized ?? false) as boolean,
       addons,
+    }
+  }
+
+  // Ensure every active subscription appears in the weekly overview, even with no orders yet.
+  for (const sub of (activeSubs ?? []) as any[]) {
+    if (!subMap.has(sub.id)) {
+      const user = Array.isArray(sub.users) ? sub.users[0] : sub.users
+      subMap.set(sub.id, {
+        subscriptionId: sub.id,
+        userName: (user?.name ?? "Unknown") as string,
+        menuType: (sub.menu_type ?? "M1") as string,
+        days: {},
+      })
     }
   }
 
