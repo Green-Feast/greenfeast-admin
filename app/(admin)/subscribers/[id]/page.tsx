@@ -11,34 +11,41 @@ export default async function SubscriberProfilePage({
 }) {
   const { id } = params
 
+  // Core row + the two embeds proven to work elsewhere (users, batches).
+  // The fragile embeds (plans, subscription_addons) are fetched separately
+  // below so a relationship hiccup can't 404 the whole page.
   const { data: sub, error } = await supabaseAdmin
     .from("subscriptions")
     .select(`
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, menu_type, meals_lunch, meals_dinner,
       special_notes, meals_per_day, delivery_mode, batch_id, created_at,
-      users!inner ( id, name, phone, created_at ),
-      batches ( id, name ),
-      plans ( name, meals_total, days_per_week, base_price ),
-      subscription_addons ( addons ( id, name, price_per_meal ) )
+      users ( id, name, phone, created_at ),
+      batches ( id, name )
     `)
     .eq("id", id)
-    .single()
+    .maybeSingle()
 
-  if (error || !sub) notFound()
+  // Surface the real reason instead of a blank 404 — a silent notFound() here
+  // is what hid the actual query error in the first place.
+  if (error) throw new Error(`Failed to load subscriber ${id}: ${error.message}`)
+  if (!sub) notFound()
 
   const user   = Array.isArray(sub.users)   ? sub.users[0]   : sub.users
   const batch  = Array.isArray(sub.batches) ? sub.batches[0] : sub.batches
-  const plan   = Array.isArray(sub.plans)   ? sub.plans[0]   : sub.plans
   const userId = (user as any).id as string
 
   const [
+    { data: plan },
+    { data: subAddons },
     { data: dietary },
     { data: addresses },
     { data: payments },
     { data: allBatches },
     { data: wallet },
   ] = await Promise.all([
+    supabaseAdmin.from("plans").select("name, meals_total, days_per_week, base_price").eq("id", sub.plan_id).maybeSingle(),
+    supabaseAdmin.from("subscription_addons").select("addons ( id, name, price_per_meal )").eq("subscription_id", id),
     supabaseAdmin.from("dietary_profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabaseAdmin.from("addresses").select("*").eq("user_id", userId).order("is_default", { ascending: false }).order("created_at"),
     supabaseAdmin
@@ -95,7 +102,7 @@ export default async function SubscriberProfilePage({
         addresses={(addresses ?? []) as any[]}
         payments={(payments ?? []) as any[]}
         allBatches={(allBatches ?? []) as { id: string; name: string }[]}
-        addons={((sub as any).subscription_addons ?? []).map((sa: any) => sa.addons).filter(Boolean)}
+        addons={((subAddons as any[]) ?? []).map((sa: any) => sa.addons).filter(Boolean)}
         walletBalance={wallet?.balance ?? null}
       />
     </div>
