@@ -145,6 +145,13 @@ export function ProfileClient({
     ? Math.min(100, Math.round((subscription.deliveriesRemaining / subscription.mealsTotal) * 100))
     : 0
 
+  const slotsPerDay = (subscription.mealsLunch ?? 0) + (subscription.mealsDinner ?? 0)
+  const baseMealRate = subscription.mealsTotal > 0
+    ? Math.round(subscription.basePrice / Math.max(subscription.mealsTotal, 1))
+    : 0
+  const addonTotalPerSlot = addons.reduce((s, a) => s + a.price_per_meal, 0)
+  const perDayCost = (baseMealRate + addonTotalPerSlot) * Math.max(slotsPerDay, 1)
+
   return (
     <div className="space-y-6">
       {/* ── Header ── */}
@@ -288,11 +295,6 @@ export function ProfileClient({
                     {a.name} +₹{(a.price_per_meal / 100).toLocaleString("en-IN")}/meal
                   </span>
                 ))}
-                {walletBalance !== null && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
-                    Wallet: ₹{(walletBalance / 100).toLocaleString("en-IN")}
-                  </span>
-                )}
               </div>
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">
@@ -300,6 +302,13 @@ export function ProfileClient({
                 <InfoRow label="End date"       value={fmtDate(subscription.endDate)} />
                 <InfoRow label="Delivery mode"  value={subscription.deliveryMode === "opt-in" ? "Opt-in" : "Opt-out"} />
                 <InfoRow label="Batch"          value={subscription.batchName} />
+                <InfoRow
+                  label="Wallet balance"
+                  value={walletBalance !== null ? fmtRupees(walletBalance) : "—"}
+                />
+                {perDayCost > 0 && (
+                  <InfoRow label="Default cart/day" value={fmtRupees(perDayCost)} />
+                )}
                 {isPaused && (
                   <>
                     <InfoRow label="Paused from"  value={fmtDate(subscription.pauseFrom)} />

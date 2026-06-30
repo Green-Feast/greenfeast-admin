@@ -51,7 +51,7 @@ export default async function KitchenPage() {
         id, subscription_id, delivery_date, meal_slot, is_customized, quantity,
         subscriptions ( id, menu_type, user_id, users ( name ) ),
         meal_templates ( name ),
-        order_addons ( addons ( name ) )
+        order_addons ( kind, quantity, addons ( name ) )
       `)
       .gte("delivery_date", weekStart)
       .lte("delivery_date", weekEnd)
@@ -111,7 +111,13 @@ export default async function KitchenPage() {
     const dowNum = (deliveryDate.getUTCDay() + 6) % 7
     const key = `${dowNum}-${order.meal_slot}`
     const addons = ((order.order_addons ?? []) as any[])
-      .map((oa: any) => oa.addons?.name).filter(Boolean)
+      .filter((oa: any) => oa.kind !== 'fee')   // fee lines aren't cooked — exclude from prep
+      .map((oa: any) => {
+        const name = oa.addons?.name
+        if (!name) return null
+        return (oa.quantity ?? 1) > 1 ? `${name} ×${oa.quantity}` : name
+      })
+      .filter(Boolean) as string[]
     row.days[key] = {
       mealName: (order.meal_templates?.name ?? "—") as string,
       slot: order.meal_slot as string,
