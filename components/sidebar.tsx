@@ -14,7 +14,9 @@ import {
   Leaf,
   Bike,
   ChefHat,
+  LogOut,
 } from "lucide-react";
+import { logout } from "@/app/login/actions";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -26,7 +28,7 @@ const navItems = [
   { href: "/delivery-partners", label: "Partners", icon: Bike },
 ];
 
-export function Sidebar() {
+export function Sidebar({ email }: { email: string }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -70,7 +72,17 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-white/15">
+      <div className="px-5 py-4 border-t border-white/15 space-y-3">
+        {email && <p className="text-white/60 text-xs truncate">{email}</p>}
+        <form action={logout}>
+          <button
+            type="submit"
+            className="flex items-center gap-2 text-white/70 hover:text-white text-xs font-medium transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Log out
+          </button>
+        </form>
         <p className="text-white/40 text-xs">GreenFeast Admin v1.0</p>
         <p className="text-white/30 text-xs">Jaipur, Rajasthan</p>
       </div>
