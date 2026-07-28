@@ -15,6 +15,7 @@ import {
   Bike,
   ChefHat,
   LogOut,
+  Bell,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/kitchen", label: "Kitchen", icon: ChefHat },
   { href: "/batches", label: "Batches", icon: Package },
   { href: "/delivery-partners", label: "Partners", icon: Bike },
+  { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
 export function Sidebar({ email }: { email: string }) {
