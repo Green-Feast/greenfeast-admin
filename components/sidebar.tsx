@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
@@ -11,7 +12,6 @@ import {
   Package,
   Menu,
   X,
-  Leaf,
   Bike,
   ChefHat,
   LogOut,
@@ -36,8 +36,8 @@ export function Sidebar({ email }: { email: string }) {
     <>
       {/* Logo */}
       <div className="flex items-center gap-2 px-5 py-5 border-b border-white/15">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[#FDD835]">
-          <Leaf className="w-4 h-4 text-[#1B5E20]" strokeWidth={2.5} />
+        <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
+          <Image src="/logo.png" alt="" width={32} height={32} className="w-full h-full object-cover" />
         </div>
         <div className="flex items-baseline gap-1">
           <span className="text-white font-bold text-lg leading-none tracking-tight">
@@ -99,8 +99,8 @@ export function Sidebar({ email }: { email: string }) {
       {/* Mobile top bar */}
       <div className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3 bg-[#1B5E20] shadow-md">
         <div className="flex items-center gap-2">
-          <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-[#FDD835]">
-            <Leaf className="w-3.5 h-3.5 text-[#1B5E20]" strokeWidth={2.5} />
+          <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0">
+            <Image src="/logo.png" alt="" width={28} height={28} className="w-full h-full object-cover" />
           </div>
           <span className="text-white font-bold text-base">
             Green<span className="text-[#FDD835]">Feast</span>

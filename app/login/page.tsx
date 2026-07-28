@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { Leaf } from "lucide-react";
+import Image from "next/image";
 import { login } from "./actions";
 
 export default function LoginPage() {
@@ -11,8 +11,8 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-[#F9FBF7] px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center gap-2 mb-8">
-          <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-[#FDD835]">
-            <Leaf className="w-6 h-6 text-[#1B5E20]" strokeWidth={2.5} />
+          <div className="w-11 h-11 rounded-xl overflow-hidden">
+            <Image src="/logo.png" alt="" width={44} height={44} className="w-full h-full object-cover" />
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-bold text-xl leading-none tracking-tight text-[#1B5E20]">
