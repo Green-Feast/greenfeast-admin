@@ -7,9 +7,9 @@ import { ProfileClient } from "./profile-client"
 export default async function SubscriberProfilePage({
   params,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
-  const { id } = params
+  const { id } = await params
 
   // Core row + the two embeds proven to work elsewhere (users, batches).
   // The fragile embeds (plans, subscription_addons) are fetched separately

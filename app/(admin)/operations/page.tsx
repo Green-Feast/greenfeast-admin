@@ -6,9 +6,10 @@ export const dynamic = "force-dynamic";
 export default async function OperationsPage({
   searchParams,
 }: {
-  searchParams: { date?: string };
+  searchParams: Promise<{ date?: string }>;
 }) {
-  const date = searchParams.date ?? new Date().toISOString().split("T")[0];
+  const params = await searchParams;
+  const date = params.date ?? new Date().toISOString().split("T")[0];
 
   const { data, error } = await supabaseAdmin
     .from("orders")
