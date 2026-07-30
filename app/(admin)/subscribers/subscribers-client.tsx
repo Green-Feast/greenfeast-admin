@@ -2,7 +2,9 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink } from "lucide-react";
+import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +29,14 @@ export type Subscriber = {
   expiry: string;
   deliveriesRemaining: number | null;
   source: "legacy" | "app";
+  // CRM-export-only fields — not rendered in the table, only in the export.
+  mealsTotal: number;
+  mealsLunch: number;
+  mealsDinner: number;
+  deliveryMode: string;
+  walletBalance: number;
+  joinedDate: string;
+  renewalDue: boolean;
 };
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
@@ -378,6 +388,66 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
     setToast("Feature available in full version");
   }
 
+  const CRM_COLUMNS: { header: string; get: (s: Subscriber) => string }[] = [
+    { header: "Code", get: (s) => s.code },
+    { header: "Name", get: (s) => s.name },
+    { header: "Phone", get: (s) => s.phone },
+    { header: "Status", get: (s) => s.status },
+    { header: "Plan", get: (s) => s.plan },
+    { header: "Meals Total", get: (s) => String(s.mealsTotal) },
+    { header: "Meals Left", get: (s) => (s.deliveriesRemaining ?? 0).toString() },
+    { header: "Renewal Due", get: (s) => (s.renewalDue ? "Yes" : "No") },
+    { header: "Menu Type", get: (s) => s.meal },
+    { header: "Lunch Qty", get: (s) => String(s.mealsLunch) },
+    { header: "Dinner Qty", get: (s) => String(s.mealsDinner) },
+    { header: "Batch", get: (s) => s.batch },
+    { header: "Delivery Mode", get: (s) => s.deliveryMode },
+    { header: "Address", get: (s) => s.address },
+    { header: "Dietary / Allergens", get: (s) => s.constraints },
+    { header: "Add-ons", get: (s) => s.addons },
+    { header: "Wallet Balance", get: (s) => `₹${(s.walletBalance / 100).toFixed(0)}` },
+    { header: "Joined", get: (s) => s.joinedDate },
+    { header: "Notes", get: (s) => s.notes },
+  ];
+
+  function handleExportCsv() {
+    const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = [
+      CRM_COLUMNS.map((c) => csvEscape(c.header)).join(","),
+      ...filtered.map((s) => CRM_COLUMNS.map((c) => csvEscape(c.get(s))).join(",")),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `GreenFeast-CRM-List-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleExportPdf() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.text("GreenFeast — Master CRM List", pageWidth / 2, 12, { align: "center" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Generated ${new Date().toLocaleString("en-IN")} · ${filtered.length} subscribers`, pageWidth / 2, 18, { align: "center" });
+
+    autoTable(doc, {
+      startY: 24,
+      head: [CRM_COLUMNS.map((c) => c.header)],
+      body: filtered.map((s) => CRM_COLUMNS.map((c) => c.get(s))),
+      headStyles: { fillColor: [27, 94, 32], textColor: [255, 255, 255], fontSize: 7, fontStyle: "bold" },
+      bodyStyles: { fontSize: 6.5 },
+      alternateRowStyles: { fillColor: [249, 251, 247] },
+      margin: { top: 24, bottom: 10 },
+    });
+
+    doc.save(`GreenFeast-CRM-List-${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
 
@@ -387,13 +457,31 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
           <h1 className="text-2xl font-bold text-[#1A1A1A] tracking-tight">Subscribers</h1>
           <p className="text-sm text-gray-500 mt-0.5">{activeCount} active subscribers across {batches.length - 1} batches</p>
         </div>
-        <Button
-          onClick={showToast}
-          className="bg-[#1B5E20] hover:bg-[#155116] text-white h-9 px-4 gap-1.5"
-        >
-          <Plus className="w-4 h-4" />
-          Add Subscriber
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            onClick={handleExportCsv}
+            variant="outline"
+            className="h-9 px-4 gap-1.5 border-[#1B5E20] text-[#1B5E20] hover:bg-green-50"
+          >
+            <Download className="w-4 h-4" />
+            Export CRM (CSV)
+          </Button>
+          <Button
+            onClick={handleExportPdf}
+            variant="outline"
+            className="h-9 px-4 gap-1.5 border-[#1B5E20] text-[#1B5E20] hover:bg-green-50"
+          >
+            <FileText className="w-4 h-4" />
+            Export CRM (PDF)
+          </Button>
+          <Button
+            onClick={showToast}
+            className="bg-[#1B5E20] hover:bg-[#155116] text-white h-9 px-4 gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            Add Subscriber
+          </Button>
+        </div>
       </div>
 
       {/* Filter bar */}
