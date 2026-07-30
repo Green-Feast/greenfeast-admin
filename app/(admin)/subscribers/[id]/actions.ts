@@ -62,12 +62,15 @@ export async function markCodPaid(subId: string) {
     .update({ status: "active", deliveries_remaining: plan?.meals_total ?? 0 })
     .eq("id", subId)
 
-  await supabaseAdmin.from("payments").insert({
+  const { error: payErr } = await supabaseAdmin.from("payments").insert({
     user_id: (sub as any).user_id,
     subscription_id: subId,
     amount: plan?.base_price ?? 0,
     status: "paid",
   })
+  // Surface it: an unrecorded cash collection is a revenue hole, and the
+  // subscription above is already active by this point.
+  if (payErr) throw new Error(`Subscription activated but the payment record failed: ${payErr.message}`)
 
   revalidatePath(`/subscribers/${subId}`)
 }

@@ -153,12 +153,15 @@ export async function createSubscription(
 
   // 7. Activated-now subs log a paid payment for history.
   if (!isCod) {
-    await supabaseAdmin.from("payments").insert({
+    const { error: payErr } = await supabaseAdmin.from("payments").insert({
       user_id: userId,
       subscription_id: sub.id,
       amount: plan.base_price,
       status: "paid",
     })
+    // Non-fatal (the subscription is already created and usable) but must not
+    // be silent — this row is the revenue record.
+    if (payErr) console.error("createSubscription: payment record failed:", payErr.message)
   }
 
   // 8. Generate the next 14 days of orders (active + CoD-pending are eligible).

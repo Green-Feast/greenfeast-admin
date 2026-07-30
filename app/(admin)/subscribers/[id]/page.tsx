@@ -50,7 +50,7 @@ export default async function SubscriberProfilePage({
     supabaseAdmin.from("addresses").select("*").eq("user_id", userId).order("is_default", { ascending: false }).order("created_at"),
     supabaseAdmin
       .from("payments")
-      .select("id, amount, status, created_at, razorpay_payment_id")
+      .select("id, amount, status, created_at, cf_payment_id")
       .eq("subscription_id", id)
       .order("created_at", { ascending: false })
       .limit(10),

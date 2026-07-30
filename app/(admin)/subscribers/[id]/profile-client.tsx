@@ -49,7 +49,7 @@ type Payment = {
   amount: number
   status: string
   created_at: string
-  razorpay_payment_id: string | null
+  cf_payment_id: string | null
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -382,8 +382,8 @@ export function ProfileClient({
                             {p.status}
                           </span>
                         </td>
-                        <td className="px-5 py-3 font-mono text-xs text-gray-400 truncate max-w-[160px]" title={p.razorpay_payment_id ?? ""}>
-                          {p.razorpay_payment_id ?? "—"}
+                        <td className="px-5 py-3 font-mono text-xs text-gray-400 truncate max-w-[160px]" title={p.cf_payment_id ?? ""}>
+                          {p.cf_payment_id ?? "—"}
                         </td>
                       </tr>
                     ))}
