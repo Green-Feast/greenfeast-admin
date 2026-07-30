@@ -98,7 +98,10 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        // INTERNAL_FN_SECRET, not SUPABASE_SERVICE_ROLE_KEY — see
+        // app/api/cron/instantiate-orders/route.ts for why.
+        Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({}),

@@ -17,6 +17,17 @@ function isAuthorized(req: NextRequest) {
 // "nightly cron mode" (called with no subscription_id, service-role auth,
 // processes every active subscription) — it just never had a caller. This
 // route is that caller.
+//
+// Auth note: instantiate-orders does NOT accept this app's
+// SUPABASE_SERVICE_ROLE_KEY as a bearer token — that env var holds the
+// legacy long-form JWT-style key, but Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+// *inside* an Edge Function resolves to Supabase's newer short-form secret
+// key, which is a different string. Other edge functions calling
+// instantiate-orders (manage-subscription, razorpay-webhook) read that same
+// reserved var on their own side, so they match each other fine — but any
+// caller outside Supabase's edge runtime never could. INTERNAL_FN_SECRET is
+// a dedicated shared secret for exactly this (external → edge function)
+// case; instantiate-orders accepts either.
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -27,7 +38,8 @@ export async function GET(req: NextRequest) {
   const res = await fetch(url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
+      apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({}),

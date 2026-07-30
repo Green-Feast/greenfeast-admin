@@ -32,15 +32,19 @@ async function wipeUserData(userId: string) {
 
 async function instantiateOrders(subscriptionId: string) {
   // Reuse the tested edge function (ingredient snapshot, addon copy, pause skip).
-  // Service-role key in the Authorization header unlocks any subscription_id.
+  // INTERNAL_FN_SECRET (not SUPABASE_SERVICE_ROLE_KEY — see
+  // app/api/cron/instantiate-orders/route.ts for why that doesn't work from
+  // outside Supabase's own edge runtime) unlocks any subscription_id.
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) return
+  const secret = process.env.INTERNAL_FN_SECRET
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !secret || !anonKey) return
   try {
     await fetch(`${url}/functions/v1/instantiate-orders`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${secret}`,
+        apikey: anonKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ subscription_id: subscriptionId }),
