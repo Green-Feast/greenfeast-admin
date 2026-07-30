@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
 export async function createBatch(data: {
   name: string
@@ -53,5 +54,6 @@ export async function moveSubscriberToBatch(subscriptionId: string, batchId: str
     .update({ batch_id: batchId })
     .eq("id", subscriptionId)
   if (error) throw error
+  await syncFutureOrdersBatch(subscriptionId, batchId)
   revalidatePath("/batches")
 }

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { istToday } from "@/lib/ist";
 import { OperationsClient, type OperationsSubscriber } from "./operations-client";
 
 export const dynamic = "force-dynamic";
@@ -9,13 +10,14 @@ export default async function OperationsPage({
   searchParams: Promise<{ date?: string }>;
 }) {
   const params = await searchParams;
-  const date = params.date ?? new Date().toISOString().split("T")[0];
+  const date = params.date ?? istToday();
 
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select(`
       id,
       status,
+      meal_slot,
       subscriptions!inner (
         id,
         batches ( id, name ),
@@ -25,7 +27,12 @@ export default async function OperationsPage({
       addresses ( line1, landmark, city )
     `)
     .eq("delivery_date", date)
-    .not("status", "in", "(cancelled,skipped)");
+    .not("status", "in", "(cancelled,skipped)")
+    // Stable order so row codes don't reshuffle between the kitchen's copy
+    // and the driver's copy of the same day's lists (there was no .order()
+    // at all before — codes came from whatever order Postgres happened to
+    // return that request).
+    .order("id");
 
   if (error) console.error("[operations] load failed:", error);
 
@@ -45,6 +52,7 @@ export default async function OperationsPage({
       orderId: o.id as string,
       batchId: ((batch as any)?.id ?? null) as string | null,
       status: (o.status as string) ?? "scheduled",
+      mealSlot: (o.meal_slot as "lunch" | "dinner") ?? "lunch",
       code: String(i + 1).padStart(2, "0"),
       batch: batchName,
       rc: "C" as const,

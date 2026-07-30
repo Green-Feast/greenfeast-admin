@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
 export async function saveNotes(subId: string, notes: string) {
   await supabaseAdmin.from("subscriptions").update({ special_notes: notes }).eq("id", subId)
@@ -79,5 +80,6 @@ export async function changeBatch(subId: string, batchId: string | null) {
   await supabaseAdmin.from("subscriptions")
     .update({ batch_id: batchId || null })
     .eq("id", subId)
+  await syncFutureOrdersBatch(subId, batchId || null)
   revalidatePath(`/subscribers/${subId}`)
 }

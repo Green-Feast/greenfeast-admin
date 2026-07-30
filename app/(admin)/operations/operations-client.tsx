@@ -6,7 +6,8 @@ import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2 } from "lucid
 import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { advanceBatchStatus, type DeliveryStatus } from "./actions";
+import { advanceBatchStatus, type DeliveryStatus, type MealSlot } from "./actions";
+import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
 
@@ -14,6 +15,7 @@ export type OperationsSubscriber = {
   orderId: string;
   batchId: string | null;
   status: string;
+  mealSlot: MealSlot;
   code: string;
   batch: string;
   rc: "C" | "R";
@@ -83,10 +85,11 @@ function mealCountsText(counts: Record<string, number>) {
 
 /* ─── PDF Generators ────────────────────────────────────────────────────────── */
 
-function generateMasterListPDF(subs: OperationsSubscriber[], date: string) {
+function generateMasterListPDF(subs: OperationsSubscriber[], date: string, slot: MealSlot, provisional: boolean) {
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const slotLabel = slot === "lunch" ? "Lunch" : "Dinner";
 
   let pageNum = 1;
 
@@ -97,12 +100,17 @@ function generateMasterListPDF(subs: OperationsSubscriber[], date: string) {
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(12);
-    doc.text("MASTER LIST", pageWidth / 2, 14, { align: "center" });
+    doc.text(`MASTER LIST — ${slotLabel}`, pageWidth / 2, 14, { align: "center" });
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.text(`Date: ${date}`, pageWidth - 20, 8, { align: "right" });
     doc.text(`Page ${pageNum} of ?`, pageWidth - 20, 14, { align: "right" });
+    if (provisional) {
+      doc.setTextColor(180, 100, 0);
+      doc.text(`PROVISIONAL — generated ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 19, { align: "center" });
+      doc.setTextColor(0, 0, 0);
+    }
   }
 
   function addFooter(allCounts: Record<string, number>) {
@@ -115,8 +123,13 @@ function generateMasterListPDF(subs: OperationsSubscriber[], date: string) {
     doc.text(mealCountsText(allCounts), 10, pageHeight - 4);
   }
 
+  // Page 1's header was never drawn before this — addHeader() only ever ran
+  // inside the page-break branch below, so the title/date/page-number row
+  // was missing from the first (often only) page of every Master List.
+  addHeader();
+
   // Group by batch and add table
-  let currentY = 22;
+  let currentY = provisional ? 26 : 22;
   let allMealCounts: Record<string, number> = {};
 
   const batchNames = [...new Set(subs.map((s) => s.batch))].sort();
@@ -187,13 +200,14 @@ function generateMasterListPDF(subs: OperationsSubscriber[], date: string) {
   });
 
   addFooter(allMealCounts);
-  doc.save(`GreenFeast-Master-List-${date.replace(/\//g, "-")}.pdf`);
+  doc.save(`GreenFeast-Master-List-${slotLabel}-${date.replace(/\//g, "-")}.pdf`);
 }
 
-function generateKitchenSheetPDF(subs: OperationsSubscriber[], date: string) {
+function generateKitchenSheetPDF(subs: OperationsSubscriber[], date: string, slot: MealSlot, provisional: boolean) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const slotLabel = slot === "lunch" ? "Lunch" : "Dinner";
 
   // Header
   doc.setFont("helvetica", "normal");
@@ -202,13 +216,18 @@ function generateKitchenSheetPDF(subs: OperationsSubscriber[], date: string) {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text("Kitchen Sheet", pageWidth / 2, 14, { align: "center" });
+  doc.text(`Kitchen Sheet — ${slotLabel}`, pageWidth / 2, 14, { align: "center" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.text(`Date: ${date}`, pageWidth - 15, 8, { align: "right" });
+  if (provisional) {
+    doc.setTextColor(180, 100, 0);
+    doc.text(`PROVISIONAL — generated ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 19, { align: "center" });
+    doc.setTextColor(0, 0, 0);
+  }
 
-  let currentY = 22;
+  let currentY = provisional ? 26 : 22;
   let allMealCounts: Record<string, number> = {};
 
   const batchNames = [...new Set(subs.map((s) => s.batch))].sort();
@@ -299,12 +318,13 @@ function generateKitchenSheetPDF(subs: OperationsSubscriber[], date: string) {
   doc.setFontSize(8);
   doc.text(mealCountsText(allMealCounts), 10, currentY + 8);
 
-  doc.save(`GreenFeast-Kitchen-${date.replace(/\//g, "-")}.pdf`);
+  doc.save(`GreenFeast-Kitchen-${slotLabel}-${date.replace(/\//g, "-")}.pdf`);
 }
 
-function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], date: string) {
+function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], date: string, slot: MealSlot, provisional: boolean) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
+  const slotLabel = slot === "lunch" ? "Lunch" : "Dinner";
 
   // Header
   doc.setFont("helvetica", "normal");
@@ -313,11 +333,16 @@ function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], d
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text(`${batch} — Delivery`, pageWidth / 2, 14, { align: "center" });
+  doc.text(`${batch} — ${slotLabel} Delivery`, pageWidth / 2, 14, { align: "center" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.text(`Date: ${date}`, pageWidth - 15, 8, { align: "right" });
+  if (provisional) {
+    doc.setTextColor(180, 100, 0);
+    doc.text(`PROVISIONAL — generated ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 19, { align: "center" });
+    doc.setTextColor(0, 0, 0);
+  }
 
   // Table
   const tableData = subs.map((s) => [
@@ -329,7 +354,7 @@ function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], d
   ]);
 
   autoTable(doc, {
-    startY: 22,
+    startY: provisional ? 26 : 22,
     head: [["Code", "Name", "Phone", "Address", "Timing"]],
     body: tableData,
     columnStyles: {
@@ -345,7 +370,7 @@ function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], d
     margin: { bottom: 15 },
   });
 
-  doc.save(`GreenFeast-${batch}-Delivery-${date.replace(/\//g, "-")}.pdf`);
+  doc.save(`GreenFeast-${batch}-${slotLabel}-Delivery-${date.replace(/\//g, "-")}.pdf`);
 }
 
 /* ─── Components ────────────────────────────────────────────────────────────── */
@@ -376,6 +401,15 @@ export function OperationsClient({
   const [y, m, d] = serverDate.split("-");
   const displayDate = `${d}/${m}/${y}`;
 
+  // Default to whichever slot is still "current" — before dinner's cutoff,
+  // that's lunch; after, dinner. Matches the mobile app's own default.
+  const [slot, setSlot] = useState<MealSlot>(istHour() < SLOT_CUTOFF_HOUR.dinner ? "lunch" : "dinner");
+  const slotSubs = initialSubscribers.filter((s) => s.mealSlot === slot);
+  // Provisional = before this slot's cutoff, so the menu/orders could still
+  // change (see kitchen/actions.ts's propagateMenuChanges cutoff guard) —
+  // any list generated now is a preview, not the frozen final version.
+  const provisional = !isSlotLocked(serverDate, slot);
+
   const [loading, setLoading] = useState<LoadingState>({
     all: false,
     kitchen: {},
@@ -385,8 +419,8 @@ export function OperationsClient({
   const [, startTransition] = useTransition();
   const [advancing, setAdvancing] = useState<string | null>(null);
 
-  const batchNames = [...new Set(initialSubscribers.map((s) => s.batch))].sort();
-  const totalDeliveries = initialSubscribers.length;
+  const batchNames = [...new Set(slotSubs.map((s) => s.batch))].sort();
+  const totalDeliveries = slotSubs.length;
 
   function showToast(msg: string) {
     setToast(msg);
@@ -396,15 +430,15 @@ export function OperationsClient({
   async function handleGenerateAll() {
     setLoading((l) => ({ ...l, all: true }));
     try {
-      generateMasterListPDF(initialSubscribers, displayDate);
+      generateMasterListPDF(slotSubs, displayDate, slot, provisional);
       await new Promise((r) => setTimeout(r, 300));
 
-      generateKitchenSheetPDF(initialSubscribers, displayDate);
+      generateKitchenSheetPDF(slotSubs, displayDate, slot, provisional);
       await new Promise((r) => setTimeout(r, 300));
 
       for (const batch of batchNames) {
-        const batchSubs = initialSubscribers.filter((s) => s.batch === batch);
-        generateDeliverySheetPDF(batch, batchSubs, displayDate);
+        const batchSubs = slotSubs.filter((s) => s.batch === batch);
+        generateDeliverySheetPDF(batch, batchSubs, displayDate, slot, provisional);
         await new Promise((r) => setTimeout(r, 300));
       }
 
@@ -417,7 +451,7 @@ export function OperationsClient({
   async function handleGenerateKitchen() {
     setLoading((l) => ({ ...l, kitchen: { ...l.kitchen, standalone: true } }));
     try {
-      generateKitchenSheetPDF(initialSubscribers, displayDate);
+      generateKitchenSheetPDF(slotSubs, displayDate, slot, provisional);
       showToast("Kitchen sheet generated");
     } finally {
       setLoading((l) => ({ ...l, kitchen: { ...l.kitchen, standalone: false } }));
@@ -427,8 +461,8 @@ export function OperationsClient({
   async function handleGenerateDelivery(batch: string) {
     setLoading((l) => ({ ...l, delivery: { ...l.delivery, [batch]: true } }));
     try {
-      const batchSubs = initialSubscribers.filter((s) => s.batch === batch);
-      generateDeliverySheetPDF(batch, batchSubs, displayDate);
+      const batchSubs = slotSubs.filter((s) => s.batch === batch);
+      generateDeliverySheetPDF(batch, batchSubs, displayDate, slot, provisional);
       showToast(`${batch} delivery sheet generated`);
     } finally {
       setLoading((l) => ({ ...l, delivery: { ...l.delivery, [batch]: false } }));
@@ -439,9 +473,12 @@ export function OperationsClient({
     setAdvancing(`${batch}:${status}`);
     startTransition(async () => {
       try {
-        await advanceBatchStatus(batchId, serverDate, status);
+        const summary = await advanceBatchStatus(batchId, serverDate, status, slot);
         router.refresh();
-        showToast(`${batch} → ${STATUS_LABEL[status]}`);
+        const suffix = summary && summary.skipped_insufficient > 0
+          ? ` — ${summary.skipped_insufficient} skipped (low wallet balance)`
+          : "";
+        showToast(`${batch} (${slot}) → ${STATUS_LABEL[status]}${suffix}`);
       } catch {
         showToast("Could not update status. Try again.");
       } finally {
@@ -456,18 +493,44 @@ export function OperationsClient({
       <div className="mb-8 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-[#1A1A1A] tracking-tight">Operations</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Daily sheet generation — {displayDate}</p>
+          <p className="text-sm text-gray-500 mt-0.5">Daily sheet generation — {displayDate} · {slot === "lunch" ? "Lunch" : "Dinner"}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-gray-600">Date:</label>
-          <input
-            type="date"
-            value={serverDate}
-            onChange={(e) => router.push(`?date=${e.target.value}`)}
-            className="text-sm border border-[#e2e8d5] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
-          />
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex rounded-lg border border-[#e2e8d5] overflow-hidden">
+            {(["lunch", "dinner"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSlot(s)}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium transition-colors",
+                  slot === s ? "bg-[#1B5E20] text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                )}
+              >
+                {s === "lunch" ? "Lunch" : "Dinner"}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-gray-600">Date:</label>
+            <input
+              type="date"
+              value={serverDate}
+              onChange={(e) => router.push(`?date=${e.target.value}`)}
+              className="text-sm border border-[#e2e8d5] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+            />
+          </div>
         </div>
       </div>
+
+      {provisional && (
+        <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+          <span className="font-semibold">Provisional</span>
+          <span>
+            — {slot} for {displayDate} locks at {slot === "lunch" ? "8:00 AM" : "1:00 PM"}. Menu/order changes are
+            still possible until then; sheets generated now may not match what's finally cooked.
+          </span>
+        </div>
+      )}
 
       {/* Generate All card */}
       <div className="bg-gradient-to-r from-[#1B5E20] to-[#2E7D32] text-white rounded-2xl p-8 mb-8 shadow-lg">
@@ -507,7 +570,7 @@ export function OperationsClient({
       {/* Batch cards grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {batchNames.map((batch) => {
-          const batchSubs = initialSubscribers.filter((s) => s.batch === batch);
+          const batchSubs = slotSubs.filter((s) => s.batch === batch);
           const colors = getBatchColors(batch);
           const batchId = batchSubs.find((s) => s.batchId)?.batchId ?? null;
           const counts = statusCounts(batchSubs);

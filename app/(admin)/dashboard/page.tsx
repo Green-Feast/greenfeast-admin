@@ -1,10 +1,11 @@
 import { Users, Truck, Clock, CreditCard, TrendingUp, ArrowUpRight, ArrowDownLeft } from "lucide-react";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { istToday } from "@/lib/ist";
 
 export const dynamic = "force-dynamic";
 
 async function getDashboardData() {
-  const today = new Date().toISOString().split("T")[0];
+  const today = istToday();
 
   const [
     { count: activeCount },
