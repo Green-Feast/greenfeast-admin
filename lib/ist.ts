@@ -14,6 +14,14 @@ export function istHour(): number {
   return new Date(Date.now() + IST_MS).getUTCHours();
 }
 
+// Pure calendar-date arithmetic — safe regardless of timezone, since it
+// never touches "now", only a given YYYY-MM-DD string.
+export function addDaysISO(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
 // Mirrors src/lib/ist.ts's isSlotLocked() in the mobile app repo exactly —
 // same cutoffs (lunch 8 AM, dinner 1 PM IST, same day). Used here to gate
 // the kitchen/delivery/CRM list downloads and to stamp a PDF

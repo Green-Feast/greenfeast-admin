@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { istToday, isSlotLocked } from "@/lib/ist"
 import type { WeeklyMenuRow } from "./kitchen-client"
 
 export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
@@ -39,7 +40,8 @@ export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
 }
 
 export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
-  const today = new Date().toISOString().split("T")[0]
+  const today = istToday()
+  let frozen = 0
 
   // Build a map of (menu_type, day_of_week, meal_slot) → meal_template_id for quick lookup
   const menuMap: Record<string, string | null> = {}
@@ -64,6 +66,13 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
       .in("status", ["active", "paused"])
       .or(menuTypeFilter)
 
+    // Today's cutoff for this slot may already be behind us (same check the
+    // mobile app and is_slot_locked enforce for subscriber edits) — if so,
+    // today's already-printed/committed orders for this slot must not be
+    // silently rewritten out from under the kitchen. Every other future date
+    // is unaffected; only "today, this slot, past its cutoff" is frozen.
+    const todayFrozen = isSlotLocked(today, row.mealSlot)
+
     for (const sub of (subs ?? [])) {
       // Find future un-swapped orders for this subscription matching the day_of_week and meal_slot
       const { data: orders } = await supabaseAdmin
@@ -79,13 +88,18 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
       for (const order of (orders ?? []) as Array<{ id: string; delivery_date: string }>) {
         const deliveryDate = new Date(order.delivery_date + "T00:00:00")
         const orderDow = (deliveryDate.getUTCDay() + 6) % 7 // Convert Sunday=0 to Mon=0
-        if (orderDow === row.dayOfWeek) {
-          // This order matches; update it
-          await supabaseAdmin
-            .from("orders")
-            .update({ meal_template_id: row.mealTemplateId })
-            .eq("id", order.id)
+        if (orderDow !== row.dayOfWeek) continue
+
+        if (order.delivery_date === today && todayFrozen) {
+          frozen++
+          continue
         }
+
+        // This order matches; update it
+        await supabaseAdmin
+          .from("orders")
+          .update({ meal_template_id: row.mealTemplateId })
+          .eq("id", order.id)
       }
     }
   }
@@ -107,6 +121,8 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
       body: JSON.stringify({}),
     }
   ).catch(() => {})
+
+  return { frozen }
 }
 
 export async function swapMealForOrder(orderId: string, mealTemplateId: string) {

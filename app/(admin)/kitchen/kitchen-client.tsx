@@ -141,8 +141,12 @@ export function KitchenClient({
     setSaving(true)
     try {
       await updateWeeklyMenu(rows)
-      await propagateMenuChanges(rows)
-      showToast("Menu saved & applied to future orders")
+      const { frozen } = await propagateMenuChanges(rows)
+      showToast(
+        frozen > 0
+          ? `Menu saved. ${frozen} of today's orders already past cutoff — left unchanged.`
+          : "Menu saved & applied to future orders"
+      )
     } catch (e: any) {
       showToast("Save failed. Try again.")
       console.error(e)
