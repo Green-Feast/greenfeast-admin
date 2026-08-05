@@ -42,6 +42,10 @@ type Subscription = {
   menuType: string
   mealsLunch: number
   mealsDinner: number
+  // Empty = opt-out (every day, skipped individually from the app). Non-empty
+  // = opt-in — delivery only happens on these days. See instantiate-orders'
+  // hasScheduleDays for the exact rule this mirrors.
+  deliveryDays: string[]
 }
 
 type User = { name: string; phone: string; createdAt: string }
@@ -68,6 +72,9 @@ function fmtRupees(paise: number) {
 function today() {
   return new Date().toISOString().split("T")[0]
 }
+
+// Matches subscription_schedule.day_of_week's CHECK constraint order.
+const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 const STATUS_STYLES: Record<string, string> = {
   active:    "bg-green-100 text-green-700 border-green-200",
@@ -302,6 +309,33 @@ export function ProfileClient({
                     {a.name} +₹{(a.price_per_meal / 100).toLocaleString("en-IN")}/meal
                   </span>
                 ))}
+              </div>
+
+              {/* Delivery schedule — opt-out subscribers get every day and
+                  skip individually from the app; opt-in subscribers only
+                  get delivered on the days they picked at signup. */}
+              <div className="pt-1">
+                <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">Delivery Days</label>
+                {subscription.deliveryMode === "opt-out" ? (
+                  <span className="text-sm text-[#1A1A1A]">All days <span className="text-xs text-gray-400">(subscriber skips individually)</span></span>
+                ) : (
+                  <div className="flex gap-1.5">
+                    {DOW_ORDER.map((d) => {
+                      const active = subscription.deliveryDays.includes(d)
+                      return (
+                        <span
+                          key={d}
+                          className={cn(
+                            "w-9 h-9 flex items-center justify-center rounded-lg text-xs font-semibold",
+                            active ? "bg-[#1B5E20] text-white" : "bg-gray-100 text-gray-300"
+                          )}
+                        >
+                          {d}
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">

@@ -72,6 +72,68 @@ export async function advanceBatchStatus(
   return billingSummary
 }
 
+/**
+ * Same as advanceBatchStatus but for a single order — the per-subscriber
+ * buttons on the Operations page. "delivered" runs advance_order_delivered
+ * (migration 036), which mirrors advance_batch_delivered's billing/counter
+ * logic exactly so the two paths can never diverge.
+ */
+export async function advanceOrderStatus(orderId: string, newStatus: DeliveryStatus, slot: MealSlot) {
+  let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
+
+  if (newStatus === "delivered") {
+    const { data, error } = await supabaseAdmin.rpc("advance_order_delivered", { p_order: orderId })
+    if (error) throw error
+    result = data?.result ?? null
+  } else {
+    const { error } = await supabaseAdmin
+      .from("orders")
+      .update({ status: newStatus })
+      .eq("id", orderId)
+      .in("status", PRIOR[newStatus])
+    if (error) throw error
+  }
+
+  revalidatePath("/operations")
+
+  const copy = notifyCopy(slot)[newStatus]
+  if (copy && result !== "skipped_insufficient" && result !== "already_settled") {
+    await notifyOrderSubscriber(orderId, copy.title, copy.body, newStatus)
+  }
+
+  return result
+}
+
+// Same best-effort contract as notifyAffectedSubscribers — a notification
+// failure must never undo or block the status advance above.
+async function notifyOrderSubscriber(orderId: string, title: string, body: string, status: DeliveryStatus) {
+  try {
+    const { data: order } = await supabaseAdmin
+      .from("orders")
+      .select("subscription_id, subscriptions ( user_id, users ( name, phone ) )")
+      .eq("id", orderId)
+      .single()
+    if (!order) return
+
+    const sub = Array.isArray(order.subscriptions) ? order.subscriptions[0] : order.subscriptions
+    const user = Array.isArray((sub as any)?.users) ? (sub as any).users[0] : (sub as any)?.users
+    if (!(sub as any)?.user_id) return
+
+    const recipients = [{ user_id: (sub as any).user_id, name: (user as any)?.name ?? "Unknown", phone: (user as any)?.phone ?? null }]
+    const results = await notifyUsers(recipients, title, body, "delivery_status", ["push"])
+    await logBroadcast({
+      type: "delivery_status",
+      title,
+      body,
+      channels: ["push"],
+      audience: { description: `Order ${orderId}, status=${status}`, count: 1 },
+      results,
+    })
+  } catch {
+    // best-effort — see comment above
+  }
+}
+
 // Best-effort — a notification failure should never undo or block the actual
 // status advance above, so this is deliberately swallowed on error.
 async function notifyAffectedSubscribers(

@@ -45,6 +45,7 @@ export default async function SubscriberProfilePage({
     { data: payments },
     { data: allBatches },
     { data: wallet },
+    { data: schedule },
   ] = await Promise.all([
     supabaseAdmin.from("plans").select("name, meals_total, days_per_week, base_price").eq("id", sub.plan_id).maybeSingle(),
     supabaseAdmin.from("subscription_addons").select("addons ( id, name, price_per_meal )").eq("subscription_id", id),
@@ -58,6 +59,10 @@ export default async function SubscriberProfilePage({
       .limit(10),
     supabaseAdmin.from("batches").select("id, name, meal_slot").order("name"),
     supabaseAdmin.from("wallets").select("balance").eq("user_id", userId).maybeSingle(),
+    // Opt-in subscribers have one row per day they actually take delivery;
+    // opt-out subscribers have none here (they get every day and skip
+    // individually from the app instead) — see instantiate-orders' hasScheduleDays.
+    supabaseAdmin.from("subscription_schedule").select("day_of_week").eq("subscription_id", id),
   ])
 
   const userName = (user as any).name ?? "Unknown"
@@ -96,6 +101,7 @@ export default async function SubscriberProfilePage({
           menuType: (sub as any).menu_type ?? "M1",
           mealsLunch: (sub as any).meals_lunch ?? 1,
           mealsDinner: (sub as any).meals_dinner ?? 0,
+          deliveryDays: (schedule ?? []).map((r: any) => r.day_of_week as string),
         }}
         user={{
           name: userName,

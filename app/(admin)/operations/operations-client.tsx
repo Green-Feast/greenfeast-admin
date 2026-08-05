@@ -6,7 +6,7 @@ import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2 } from "lucid
 import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { advanceBatchStatus, type DeliveryStatus, type MealSlot } from "./actions";
+import { advanceBatchStatus, advanceOrderStatus, type DeliveryStatus, type MealSlot } from "./actions";
 import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
@@ -418,6 +418,7 @@ export function OperationsClient({
   const [toast, setToast] = useState("");
   const [, startTransition] = useTransition();
   const [advancing, setAdvancing] = useState<string | null>(null);
+  const [advancingOrder, setAdvancingOrder] = useState<string | null>(null);
 
   const batchNames = [...new Set(slotSubs.map((s) => s.batch))].sort();
   const totalDeliveries = slotSubs.length;
@@ -483,6 +484,29 @@ export function OperationsClient({
         showToast("Could not update status. Try again.");
       } finally {
         setAdvancing(null);
+      }
+    });
+  }
+
+  // Per-subscriber status advance — the delivered path is the one that
+  // actually matters end-to-end: it runs advance_order_delivered (mirrors
+  // advance_batch_delivered's billing/counter logic) so marking one person
+  // delivered debits their wallet and burns exactly one delivery, the same
+  // as the batch-level bulk button does.
+  function handleAdvanceOrder(orderId: string, name: string, status: DeliveryStatus) {
+    setAdvancingOrder(`${orderId}:${status}`);
+    startTransition(async () => {
+      try {
+        const result = await advanceOrderStatus(orderId, status, slot);
+        router.refresh();
+        const suffix =
+          result === "skipped_insufficient" ? " — skipped (low wallet balance)" :
+          result === "already_settled" ? " — already settled" : "";
+        showToast(`${name} → ${STATUS_LABEL[status]}${suffix}`);
+      } catch {
+        showToast("Could not update status. Try again.");
+      } finally {
+        setAdvancingOrder(null);
       }
     });
   }
@@ -632,6 +656,60 @@ export function OperationsClient({
                 ) : (
                   <p className="text-xs text-gray-400 text-center py-1.5">Assign this batch a route to manage status.</p>
                 )}
+              </div>
+
+              {/* Individual subscribers — status can be advanced one person
+                  at a time as well as in bulk above; this is what actually
+                  needs to work reliably, since "delivered" is what drives
+                  deliveries_remaining and wallet billing per subscriber. */}
+              <div className="px-4 pt-3 space-y-0.5">
+                {batchSubs.map((s) => {
+                  const terminal = s.status === "cancelled" || s.status === "skipped";
+                  return (
+                    <div key={s.orderId} className="flex items-center justify-between gap-2 py-2 border-b border-[#e2e8d5] last:border-0">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-[#1A1A1A] truncate">{s.name}</p>
+                        <p className="text-xs text-gray-400 truncate">{s.address}</p>
+                      </div>
+                      {s.status === "delivered" ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1B5E20] bg-green-50 px-2 py-1 rounded-md shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" />Delivered
+                        </span>
+                      ) : terminal ? (
+                        <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md shrink-0 capitalize">
+                          {s.status}
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-1 shrink-0">
+                          {([
+                            { status: "preparing" as const, Icon: ChefHat, title: "In Kitchen" },
+                            { status: "out_for_delivery" as const, Icon: Truck, title: "Out for Delivery" },
+                            { status: "delivered" as const, Icon: CheckCircle2, title: "Delivered" },
+                          ]).map(({ status, Icon, title }) => {
+                            const busy = advancingOrder === `${s.orderId}:${status}`;
+                            const isActive = s.status === status;
+                            return (
+                              <button
+                                key={status}
+                                title={title}
+                                onClick={() => handleAdvanceOrder(s.orderId, s.name, status)}
+                                disabled={!!advancingOrder}
+                                className={cn(
+                                  "flex items-center justify-center w-7 h-7 rounded-md border transition-all disabled:opacity-50 disabled:cursor-not-allowed",
+                                  isActive
+                                    ? "border-[#1B5E20] bg-[#E8F5E9] text-[#1B5E20]"
+                                    : "border-[#e2e8d5] text-gray-400 hover:border-[#1B5E20] hover:text-[#1B5E20] hover:bg-green-50"
+                                )}
+                              >
+                                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Buttons */}
