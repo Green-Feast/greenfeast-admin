@@ -17,7 +17,7 @@ import {
   CheckCircle, AlertCircle, X, Package,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { createBatch, updateBatch, deleteBatch, moveSubscriberToBatch } from "./actions"
+import { createBatch, updateBatch, deleteBatch, moveSubscriberToBatch, type MealSlot } from "./actions"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +26,7 @@ type Batch = {
   name: string
   area: string | null
   time_window: "morning" | "noon" | "evening"
+  meal_slot: MealSlot
   primary_partner_id: string | null
   secondary_partner_id: string | null
   primaryPartnerName: string | null
@@ -37,7 +38,10 @@ type SubscriberCard = {
   name: string
   phone: string
   plan: string
-  batchId: string | null
+  batchIdLunch: string | null
+  batchIdDinner: string | null
+  mealsLunch: number
+  mealsDinner: number
   city: string
 }
 
@@ -56,6 +60,16 @@ const TIME_COLORS = {
   noon:    "bg-blue-50 text-blue-700 border-blue-200",
   evening: "bg-violet-50 text-violet-700 border-violet-200",
 }
+
+// Batches are colour-coded by which meal they belong to — lunch and dinner
+// are visually distinct everywhere a batch appears (left panel, kanban
+// columns, the create/edit form).
+const SLOT_ICONS = { lunch: Sun, dinner: Moon }
+const SLOT_COLORS: Record<MealSlot, string> = {
+  lunch:  "bg-amber-50 text-amber-700 border-amber-200",
+  dinner: "bg-indigo-50 text-indigo-700 border-indigo-200",
+}
+const SLOT_LABEL: Record<MealSlot, string> = { lunch: "Lunch", dinner: "Dinner" }
 
 // ── Draggable subscriber card ───────────────────────────────────────────────
 
@@ -93,6 +107,16 @@ function DraggableCard({ sub, isDragOverlay = false }: { sub: SubscriberCard; is
           <p className="text-xs text-gray-400 mt-0.5">{sub.phone}</p>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
             <span className="text-xs bg-[#1B5E20]/10 text-[#1B5E20] px-1.5 py-0.5 rounded-md font-medium">{sub.plan}</span>
+            {/* Which meal(s) this subscriber actually has on their plan — a
+                batch assignment can still exist for a meal they don't have
+                yet (e.g. pre-assigning a dinner route before they add it). */}
+            {sub.mealsLunch > 0 && sub.mealsDinner > 0 ? (
+              <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md">Lunch + Dinner</span>
+            ) : sub.mealsLunch > 0 ? (
+              <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-md">Lunch</span>
+            ) : sub.mealsDinner > 0 ? (
+              <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md">Dinner</span>
+            ) : null}
             {sub.city && <span className="text-xs text-gray-400">{sub.city}</span>}
           </div>
         </div>
@@ -147,16 +171,18 @@ function KanbanColumn({ id, title, subtitle, subscribers, isUnassigned = false }
 
 function BatchForm({
   initial,
+  defaultSlot,
   allPartners,
   onSave,
   onCancel,
   isPending,
 }: {
   initial?: Batch
+  defaultSlot: MealSlot
   allPartners: Partner[]
   onSave: (data: {
     name: string; area: string; time_window: "morning" | "noon" | "evening"
-    primary_partner_id: string; secondary_partner_id: string
+    meal_slot: MealSlot; primary_partner_id: string; secondary_partner_id: string
   }) => void
   onCancel: () => void
   isPending: boolean
@@ -164,6 +190,7 @@ function BatchForm({
   const [name, setName]                   = useState(initial?.name ?? "")
   const [area, setArea]                   = useState(initial?.area ?? "")
   const [tw, setTw]                       = useState<"morning" | "noon" | "evening">(initial?.time_window ?? "morning")
+  const [slot, setSlot]                   = useState<MealSlot>(initial?.meal_slot ?? defaultSlot)
   const [primaryId, setPrimaryId]         = useState(initial?.primary_partner_id ?? "")
   const [secondaryId, setSecondaryId]     = useState(initial?.secondary_partner_id ?? "")
 
@@ -174,6 +201,27 @@ function BatchForm({
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
         {initial ? "Edit Batch" : "New Batch"}
       </p>
+
+      <div>
+        <label className="block text-xs text-gray-500 mb-1">Meal *</label>
+        <div className="flex gap-2">
+          {(["lunch", "dinner"] as const).map(s => {
+            const Icon = SLOT_ICONS[s]
+            return (
+              <button
+                key={s}
+                onClick={() => setSlot(s)}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors",
+                  slot === s ? SLOT_COLORS[s] : "border-[#e2e8d5] text-gray-400 hover:bg-gray-50"
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" />{SLOT_LABEL[s]}
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">Name *</label>
@@ -224,7 +272,7 @@ function BatchForm({
           Cancel
         </button>
         <button
-          onClick={() => onSave({ name, area, time_window: tw, primary_partner_id: primaryId, secondary_partner_id: secondaryId })}
+          onClick={() => onSave({ name, area, time_window: tw, meal_slot: slot, primary_partner_id: primaryId, secondary_partner_id: secondaryId })}
           disabled={isPending || !name.trim()}
           className="flex-1 h-9 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] disabled:opacity-40 transition-colors"
         >
@@ -250,6 +298,12 @@ export default function BatchesClient({
   const [subs, setSubs]             = useState(initialSubscribers)
   const [isPending, startTransition] = useTransition()
 
+  // Batches are meal-specific, so the whole page (left panel + kanban) views
+  // one slot at a time — a subscriber's lunch and dinner batch assignments
+  // are tracked and edited independently.
+  const [activeSlot, setActiveSlot] = useState<MealSlot>("lunch")
+  const slotBatches = batches.filter(b => b.meal_slot === activeSlot)
+
   const [formMode, setFormMode]     = useState<"none" | "create" | "edit">("none")
   const [editingBatch, setEditingBatch] = useState<Batch | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -267,6 +321,8 @@ export default function BatchesClient({
     setActiveId(event.active.id as string)
   }
 
+  const batchField = activeSlot === "lunch" ? "batchIdLunch" as const : "batchIdDinner" as const
+
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event
     setActiveId(null)
@@ -275,16 +331,16 @@ export default function BatchesClient({
     const subscriptionId = active.id as string
     const newBatchId = over.id === "unassigned" ? null : (over.id as string)
     const sub = subs.find(s => s.subscriptionId === subscriptionId)
-    if (!sub || sub.batchId === newBatchId) return
+    if (!sub || sub[batchField] === newBatchId) return
 
-    const oldBatchId = sub.batchId
-    setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, batchId: newBatchId } : s))
+    const oldBatchId = sub[batchField]
+    setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, [batchField]: newBatchId } : s))
 
     startTransition(async () => {
       try {
-        await moveSubscriberToBatch(subscriptionId, newBatchId)
+        await moveSubscriberToBatch(subscriptionId, newBatchId, activeSlot)
       } catch {
-        setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, batchId: oldBatchId } : s))
+        setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, [batchField]: oldBatchId } : s))
         showToast("error", "Could not move subscriber. Try again.")
       }
     })
@@ -345,12 +401,29 @@ export default function BatchesClient({
       <div className="w-72 flex-shrink-0 border-r border-[#e2e8d5] flex flex-col bg-white overflow-y-auto">
         <div className="px-5 py-5 border-b border-[#e2e8d5]">
           <h1 className="text-lg font-bold text-[#1A1A1A]">Batches</h1>
-          <p className="text-xs text-gray-400 mt-0.5">{batches.length} delivery routes</p>
+          <p className="text-xs text-gray-400 mt-0.5">{slotBatches.length} {activeSlot} routes · {batches.length} total</p>
+          <div className="flex rounded-lg border border-[#e2e8d5] overflow-hidden mt-3">
+            {(["lunch", "dinner"] as const).map(s => {
+              const Icon = SLOT_ICONS[s]
+              return (
+                <button
+                  key={s}
+                  onClick={() => setActiveSlot(s)}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium transition-colors",
+                    activeSlot === s ? "bg-[#1B5E20] text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5" />{SLOT_LABEL[s]}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div className="flex-1 p-3 space-y-1.5 overflow-y-auto">
-          {batches.map(batch => {
-            const subCount = subs.filter(s => s.batchId === batch.id).length
+          {slotBatches.map(batch => {
+            const subCount = subs.filter(s => s[batchField] === batch.id).length
             const TimeIcon = TIME_ICONS[batch.time_window]
             return (
               <div key={batch.id} className="bg-[#F9FBF7] rounded-xl border border-[#e2e8d5] p-3">
@@ -377,6 +450,9 @@ export default function BatchesClient({
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  <span className={cn("inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium", SLOT_COLORS[batch.meal_slot])}>
+                    {SLOT_LABEL[batch.meal_slot]}
+                  </span>
                   <span className={cn("inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border capitalize", TIME_COLORS[batch.time_window])}>
                     <TimeIcon className="w-3 h-3" />{batch.time_window}
                   </span>
@@ -403,8 +479,8 @@ export default function BatchesClient({
             )
           })}
 
-          {batches.length === 0 && (
-            <p className="text-sm text-gray-400 text-center py-8">No batches yet.</p>
+          {slotBatches.length === 0 && (
+            <p className="text-sm text-gray-400 text-center py-8">No {activeSlot} batches yet.</p>
           )}
         </div>
 
@@ -420,6 +496,7 @@ export default function BatchesClient({
           )}
           {formMode === "create" && (
             <BatchForm
+              defaultSlot={activeSlot}
               allPartners={allPartners}
               onSave={handleCreate}
               onCancel={() => setFormMode("none")}
@@ -429,6 +506,7 @@ export default function BatchesClient({
           {formMode === "edit" && editingBatch && (
             <BatchForm
               initial={editingBatch}
+              defaultSlot={activeSlot}
               allPartners={allPartners}
               onSave={handleUpdate}
               onCancel={() => { setFormMode("none"); setEditingBatch(null) }}
@@ -442,9 +520,10 @@ export default function BatchesClient({
       <div className="flex-1 overflow-x-auto bg-[#F9FBF7] p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-base font-semibold text-[#1A1A1A]">Subscriber Assignment</h2>
+            <h2 className="text-base font-semibold text-[#1A1A1A]">Subscriber Assignment — {SLOT_LABEL[activeSlot]}</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              Drag subscribers between batches · {subs.length} total · {subs.filter(s => !s.batchId).length} unassigned
+              Drag subscribers between {activeSlot} batches · {subs.length} total · {subs.filter(s => !s[batchField]).length} unassigned
+              — every subscriber is shown here regardless of whether {activeSlot} is on their base plan, so one can be added ahead of time.
             </p>
           </div>
         </div>
@@ -455,18 +534,18 @@ export default function BatchesClient({
             <KanbanColumn
               id="unassigned"
               title="Unassigned"
-              subscribers={subs.filter(s => !s.batchId)}
+              subscribers={subs.filter(s => !s[batchField])}
               isUnassigned
             />
 
-            {/* One column per batch */}
-            {batches.map(batch => (
+            {/* One column per batch, this slot only */}
+            {slotBatches.map(batch => (
               <KanbanColumn
                 key={batch.id}
                 id={batch.id}
                 title={batch.name}
                 subtitle={batch.area ?? undefined}
-                subscribers={subs.filter(s => s.batchId === batch.id)}
+                subscribers={subs.filter(s => s[batchField] === batch.id)}
               />
             ))}
           </div>

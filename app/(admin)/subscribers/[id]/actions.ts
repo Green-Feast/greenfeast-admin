@@ -76,10 +76,11 @@ export async function markCodPaid(subId: string) {
   revalidatePath(`/subscribers/${subId}`)
 }
 
-export async function changeBatch(subId: string, batchId: string | null) {
+export async function changeBatch(subId: string, batchId: string | null, slot: "lunch" | "dinner") {
+  const column = slot === "lunch" ? "batch_id_lunch" : "batch_id_dinner"
   await supabaseAdmin.from("subscriptions")
-    .update({ batch_id: batchId || null })
+    .update({ [column]: batchId || null })
     .eq("id", subId)
-  await syncFutureOrdersBatch(subId, batchId || null)
+  await syncFutureOrdersBatch(subId, batchId || null, slot)
   revalidatePath(`/subscribers/${subId}`)
 }

@@ -12,15 +12,22 @@ import { istToday } from "./ist";
 // tagged with the old batch_id).
 //
 // Called by both places a subscription's batch can change: the subscriber
-// profile's single-subscriber picker and the Batches page's drag-and-drop.
-// Only touches orders that haven't happened yet — past/settled orders keep
-// the batch they were actually delivered under, which is correct for
-// historical reporting.
-export async function syncFutureOrdersBatch(subscriptionId: string, batchId: string | null) {
+// profile's per-slot picker and the Batches page's drag-and-drop. Batches are
+// now slot-specific (a batch is either lunch or dinner), so only the orders
+// in the matching slot are touched — a subscriber's lunch and dinner routes
+// move independently. Only touches orders that haven't happened yet —
+// past/settled orders keep the batch they were actually delivered under,
+// which is correct for historical reporting.
+export async function syncFutureOrdersBatch(
+  subscriptionId: string,
+  batchId: string | null,
+  slot: "lunch" | "dinner"
+) {
   const { error } = await supabaseAdmin
     .from("orders")
     .update({ batch_id: batchId })
     .eq("subscription_id", subscriptionId)
+    .eq("meal_slot", slot)
     .gte("delivery_date", istToday())
     .not("status", "in", "(delivered,cancelled,skipped)");
   if (error) console.error("syncFutureOrdersBatch failed:", error.message);

@@ -11,7 +11,8 @@ export default async function NotificationsPage() {
       .select(`
         user_id, status, plan_name, plan_id,
         users ( name, phone ),
-        batches ( name )
+        batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
+        batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name )
       `)
       .in("status", ["active", "paused", "pending"])
       .order("created_at", { ascending: false }),
@@ -30,12 +31,14 @@ export default async function NotificationsPage() {
     if (seen.has(s.user_id)) continue;
     seen.add(s.user_id);
     const user = Array.isArray(s.users) ? s.users[0] : s.users;
-    const batch = Array.isArray(s.batches) ? s.batches[0] : s.batches;
+    const batchLunch = Array.isArray((s as any).batchLunch) ? (s as any).batchLunch[0] : (s as any).batchLunch;
+    const batchDinner = Array.isArray((s as any).batchDinner) ? (s as any).batchDinner[0] : (s as any).batchDinner;
     audience.push({
       userId: s.user_id,
       name: (user as any)?.name ?? "Unknown",
       phone: (user as any)?.phone ?? null,
-      batch: (batch as any)?.name ?? "Unassigned",
+      batchLunch: (batchLunch as any)?.name ?? "Unassigned",
+      batchDinner: (batchDinner as any)?.name ?? "Unassigned",
       plan: s.plan_name ?? s.plan_id ?? "—",
       status: s.status,
     });

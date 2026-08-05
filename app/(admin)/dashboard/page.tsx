@@ -26,9 +26,15 @@ async function getDashboardData() {
       .select("*", { count: "exact", head: true })
       .eq("status", "created"),
 
+    // Batches are slot-specific now, so an active subscriber can contribute
+    // to two different batch tallies (their lunch route and their dinner
+    // route) — both are counted below.
     supabaseAdmin
       .from("subscriptions")
-      .select("batches(name)")
+      .select(`
+        batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
+        batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name )
+      `)
       .eq("status", "active"),
 
     supabaseAdmin
@@ -45,7 +51,7 @@ async function getDashboardData() {
 
     supabaseAdmin
       .from("orders")
-      .select("status, subscriptions!inner ( batches ( id, name ) )")
+      .select("status, batches ( id, name )")
       .eq("delivery_date", today)
       .not("status", "in", "(cancelled,skipped)"),
 
@@ -56,12 +62,17 @@ async function getDashboardData() {
       .limit(1),
   ]);
 
-  // Group active subs by batch
+  // Group active subs by batch — each active subscriber can contribute to
+  // up to two batches (their lunch route and their dinner route). Only
+  // actually-assigned slots are counted; an unassigned lunch or dinner slot
+  // isn't tallied here since the two slots' "unassigned" would otherwise be
+  // conflated into one meaningless bucket.
   const batchMap: Record<string, number> = {};
-  for (const row of batchRows ?? []) {
-    const b = Array.isArray(row.batches) ? row.batches[0] : row.batches;
-    const name = (b as any)?.name ?? "Unassigned";
-    batchMap[name] = (batchMap[name] ?? 0) + 1;
+  for (const row of (batchRows ?? []) as any[]) {
+    const bl = Array.isArray(row.batchLunch) ? row.batchLunch[0] : row.batchLunch;
+    const bd = Array.isArray(row.batchDinner) ? row.batchDinner[0] : row.batchDinner;
+    if (bl?.name) batchMap[bl.name] = (batchMap[bl.name] ?? 0) + 1;
+    if (bd?.name) batchMap[bd.name] = (batchMap[bd.name] ?? 0) + 1;
   }
   const batches = Object.entries(batchMap)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -73,8 +84,7 @@ async function getDashboardData() {
   type BatchStatus = { name: string; scheduled: number; preparing: number; out: number; delivered: number; total: number };
   const todayBatchMap: Record<string, BatchStatus> = {};
   for (const o of (todayOrders ?? []) as any[]) {
-    const sub = Array.isArray(o.subscriptions) ? o.subscriptions[0] : o.subscriptions;
-    const batch = Array.isArray(sub?.batches) ? sub?.batches[0] : sub?.batches;
+    const batch = Array.isArray(o.batches) ? o.batches[0] : o.batches;
     const name: string = (batch as any)?.name ?? "Unassigned";
     if (!todayBatchMap[name]) todayBatchMap[name] = { name, scheduled: 0, preparing: 0, out: 0, delivered: 0, total: 0 };
     const entry = todayBatchMap[name];

@@ -19,9 +19,10 @@ export default async function SubscriberProfilePage({
     .select(`
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, menu_type, meals_lunch, meals_dinner,
-      special_notes, meals_per_day, delivery_mode, batch_id, created_at,
+      special_notes, meals_per_day, delivery_mode, batch_id_lunch, batch_id_dinner, created_at,
       users ( id, name, phone, created_at ),
-      batches ( id, name )
+      batchLunch:batches!subscriptions_batch_id_lunch_fkey ( id, name ),
+      batchDinner:batches!subscriptions_batch_id_dinner_fkey ( id, name )
     `)
     .eq("id", id)
     .maybeSingle()
@@ -31,8 +32,9 @@ export default async function SubscriberProfilePage({
   if (error) throw new Error(`Failed to load subscriber ${id}: ${error.message}`)
   if (!sub) notFound()
 
-  const user   = Array.isArray(sub.users)   ? sub.users[0]   : sub.users
-  const batch  = Array.isArray(sub.batches) ? sub.batches[0] : sub.batches
+  const user        = Array.isArray(sub.users)       ? sub.users[0]       : sub.users
+  const batchLunch  = Array.isArray((sub as any).batchLunch)  ? (sub as any).batchLunch[0]  : (sub as any).batchLunch
+  const batchDinner = Array.isArray((sub as any).batchDinner) ? (sub as any).batchDinner[0] : (sub as any).batchDinner
   const userId = (user as any).id as string
 
   const [
@@ -54,7 +56,7 @@ export default async function SubscriberProfilePage({
       .eq("subscription_id", id)
       .order("created_at", { ascending: false })
       .limit(10),
-    supabaseAdmin.from("batches").select("id, name").order("name"),
+    supabaseAdmin.from("batches").select("id, name, meal_slot").order("name"),
     supabaseAdmin.from("wallets").select("balance").eq("user_id", userId).maybeSingle(),
   ])
 
@@ -86,8 +88,10 @@ export default async function SubscriberProfilePage({
           pauseUntil: sub.pause_until,
           specialNotes: sub.special_notes ?? "",
           createdAt: sub.created_at,
-          batchId: sub.batch_id,
-          batchName: (batch as any)?.name ?? "Unassigned",
+          batchIdLunch: (sub as any).batch_id_lunch,
+          batchIdDinner: (sub as any).batch_id_dinner,
+          batchNameLunch: (batchLunch as any)?.name ?? "Unassigned",
+          batchNameDinner: (batchDinner as any)?.name ?? "Unassigned",
           deliveryMode: sub.delivery_mode,
           menuType: (sub as any).menu_type ?? "M1",
           mealsLunch: (sub as any).meals_lunch ?? 1,
@@ -101,7 +105,7 @@ export default async function SubscriberProfilePage({
         dietary={dietary}
         addresses={(addresses ?? []) as any[]}
         payments={(payments ?? []) as any[]}
-        allBatches={(allBatches ?? []) as { id: string; name: string }[]}
+        allBatches={(allBatches ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}
         addons={((subAddons as any[]) ?? []).map((sa: any) => sa.addons).filter(Boolean)}
         walletBalance={wallet?.balance ?? null}
       />

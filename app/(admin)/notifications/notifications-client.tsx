@@ -9,7 +9,8 @@ export type Audience = {
   userId: string;
   name: string;
   phone: string | null;
-  batch: string;
+  batchLunch: string;
+  batchDinner: string;
   plan: string;
   status: string;
 };
@@ -66,14 +67,14 @@ export function NotificationsClient({
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const batches = useMemo(() => ["All", ...Array.from(new Set(audience.map((a) => a.batch)))], [audience]);
+  const batches = useMemo(() => ["All", ...Array.from(new Set(audience.flatMap((a) => [a.batchLunch, a.batchDinner])))], [audience]);
   const plans = useMemo(() => ["All", ...Array.from(new Set(audience.map((a) => a.plan)))], [audience]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return audience.filter((a) => {
       if (statusFilter !== "All" && a.status !== statusFilter) return false;
-      if (batchFilter !== "All" && a.batch !== batchFilter) return false;
+      if (batchFilter !== "All" && a.batchLunch !== batchFilter && a.batchDinner !== batchFilter) return false;
       if (planFilter !== "All" && a.plan !== planFilter) return false;
       if (q && !a.name.toLowerCase().includes(q) && !(a.phone ?? "").includes(q)) return false;
       return true;
@@ -286,7 +287,7 @@ export function NotificationsClient({
                 />
                 <span className="font-medium text-[#1A1A1A]">{a.name}</span>
                 <span className="text-neutral-400">{a.phone ?? "no phone"}</span>
-                <span className="ml-auto text-xs text-neutral-500">{a.batch} · {a.plan}</span>
+                <span className="ml-auto text-xs text-neutral-500">L: {a.batchLunch} · D: {a.batchDinner} · {a.plan}</span>
               </label>
             ))}
           </div>

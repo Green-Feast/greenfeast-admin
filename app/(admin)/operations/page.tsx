@@ -18,11 +18,11 @@ export default async function OperationsPage({
       id,
       status,
       meal_slot,
+      batches ( id, name ),
       subscriptions!inner (
         id,
         user_id,
         special_notes,
-        batches ( id, name ),
         users!inner ( name, phone )
       ),
       meal_templates ( name ),
@@ -56,7 +56,10 @@ export default async function OperationsPage({
   const subscribers: OperationsSubscriber[] = (data ?? []).map((o, i) => {
     const sub = Array.isArray(o.subscriptions) ? o.subscriptions[0] : o.subscriptions;
     const user = Array.isArray((sub as any)?.users) ? (sub as any).users[0] : (sub as any)?.users;
-    const batch = Array.isArray((sub as any)?.batches) ? (sub as any).batches[0] : (sub as any)?.batches;
+    // Batch comes from the order's own batch_id (a per-slot snapshot), not
+    // the subscription's — a subscriber can ride a different batch for lunch
+    // than for dinner, so the order is the source of truth for which one.
+    const batch = Array.isArray(o.batches) ? o.batches[0] : o.batches;
     const meal = Array.isArray(o.meal_templates) ? o.meal_templates[0] : o.meal_templates;
     const addr = Array.isArray(o.addresses) ? o.addresses[0] : o.addresses;
     const addons = (o.order_addons ?? []) as { kind: string; addons: { name: string } | { name: string }[] | null }[];

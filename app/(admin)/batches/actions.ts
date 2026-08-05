@@ -4,10 +4,13 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
+export type MealSlot = "lunch" | "dinner"
+
 export async function createBatch(data: {
   name: string
   area?: string
   time_window: "morning" | "noon" | "evening"
+  meal_slot: MealSlot
   primary_partner_id?: string
   secondary_partner_id?: string
 }) {
@@ -24,6 +27,7 @@ export async function updateBatch(id: string, data: {
   name: string
   area?: string
   time_window: "morning" | "noon" | "evening"
+  meal_slot: MealSlot
   primary_partner_id?: string
   secondary_partner_id?: string
 }) {
@@ -40,7 +44,7 @@ export async function deleteBatch(id: string) {
   const { count } = await supabaseAdmin
     .from("subscriptions")
     .select("*", { count: "exact", head: true })
-    .eq("batch_id", id)
+    .or(`batch_id_lunch.eq.${id},batch_id_dinner.eq.${id}`)
     .in("status", ["active", "paused", "pending"])
   if ((count ?? 0) > 0) throw new Error("Batch has active subscribers. Reassign them first.")
   const { error } = await supabaseAdmin.from("batches").delete().eq("id", id)
@@ -48,12 +52,13 @@ export async function deleteBatch(id: string) {
   revalidatePath("/batches")
 }
 
-export async function moveSubscriberToBatch(subscriptionId: string, batchId: string | null) {
+export async function moveSubscriberToBatch(subscriptionId: string, batchId: string | null, slot: MealSlot) {
+  const column = slot === "lunch" ? "batch_id_lunch" : "batch_id_dinner"
   const { error } = await supabaseAdmin
     .from("subscriptions")
-    .update({ batch_id: batchId })
+    .update({ [column]: batchId })
     .eq("id", subscriptionId)
   if (error) throw error
-  await syncFutureOrdersBatch(subscriptionId, batchId)
+  await syncFutureOrdersBatch(subscriptionId, batchId, slot)
   revalidatePath("/batches")
 }

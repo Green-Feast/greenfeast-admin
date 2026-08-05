@@ -23,7 +23,8 @@ export default async function SubscribersPage() {
       special_notes,
       created_at,
       users ( name, phone, created_at ),
-      batches ( name ),
+      batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
+      batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name ),
       plans ( meals_total )
     `)
     .in("status", ["active", "pending", "paused"])
@@ -77,7 +78,8 @@ export default async function SubscribersPage() {
 
   const subscribers: Subscriber[] = rows.map((s) => {
     const user = Array.isArray(s.users) ? s.users[0] : s.users;
-    const batch = Array.isArray(s.batches) ? s.batches[0] : s.batches;
+    const batchLunch = Array.isArray((s as any).batchLunch) ? (s as any).batchLunch[0] : (s as any).batchLunch;
+    const batchDinner = Array.isArray((s as any).batchDinner) ? (s as any).batchDinner[0] : (s as any).batchDinner;
     const plan = Array.isArray(s.plans) ? s.plans[0] : s.plans;
     const expiry = s.end_date
       ? new Date(s.end_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
@@ -103,7 +105,8 @@ export default async function SubscribersPage() {
       id: s.id,
       userId: s.user_id,
       code: `APP/${s.id.slice(0, 6).toUpperCase()}`,
-      batch: (batch as any)?.name ?? "Unassigned",
+      batchLunch: (batchLunch as any)?.name ?? "Unassigned",
+      batchDinner: (batchDinner as any)?.name ?? "Unassigned",
       rc: "C" as const,
       name: (user as any)?.name ?? "Unknown",
       phone: (user as any)?.phone ?? "",

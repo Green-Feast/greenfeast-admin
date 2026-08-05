@@ -34,8 +34,10 @@ type Subscription = {
   pauseUntil: string | null
   specialNotes: string
   createdAt: string
-  batchId: string | null
-  batchName: string
+  batchIdLunch: string | null
+  batchIdDinner: string | null
+  batchNameLunch: string
+  batchNameDinner: string
   deliveryMode: string
   menuType: string
   mealsLunch: number
@@ -101,7 +103,7 @@ export function ProfileClient({
   dietary: any
   addresses: any[]
   payments: Payment[]
-  allBatches: { id: string; name: string }[]
+  allBatches: { id: string; name: string; meal_slot: "lunch" | "dinner" }[]
   addons: { id: string; name: string; price_per_meal: number }[]
   walletBalance: number | null
 }) {
@@ -116,7 +118,12 @@ export function ProfileClient({
   const [pauseUntil, setPauseUntil] = useState("")
   const [extendMeals, setExtendMeals] = useState(15)
   const [notes, setNotes] = useState(subscription.specialNotes)
-  const [selectedBatch, setSelectedBatch] = useState(subscription.batchId ?? "")
+  // Batches are meal-specific, so lunch and dinner are picked (and saved)
+  // independently — a subscriber can ride different routes for each.
+  const [selectedBatchLunch, setSelectedBatchLunch] = useState(subscription.batchIdLunch ?? "")
+  const [selectedBatchDinner, setSelectedBatchDinner] = useState(subscription.batchIdDinner ?? "")
+  const lunchBatches = allBatches.filter(b => b.meal_slot === "lunch")
+  const dinnerBatches = allBatches.filter(b => b.meal_slot === "dinner")
 
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
 
@@ -301,7 +308,8 @@ export function ProfileClient({
                 <InfoRow label="Start date"     value={fmtDate(subscription.startDate)} />
                 <InfoRow label="End date"       value={fmtDate(subscription.endDate)} />
                 <InfoRow label="Delivery mode"  value={subscription.deliveryMode === "opt-in" ? "Opt-in" : "Opt-out"} />
-                <InfoRow label="Batch"          value={subscription.batchName} />
+                <InfoRow label="Lunch batch"    value={subscription.batchNameLunch} />
+                <InfoRow label="Dinner batch"   value={subscription.batchNameDinner} />
                 <InfoRow
                   label="Wallet balance"
                   value={walletBalance !== null ? fmtRupees(walletBalance) : "—"}
@@ -317,32 +325,62 @@ export function ProfileClient({
                 )}
               </div>
 
-              {/* Batch selector */}
-              <div className="pt-1 border-t border-[#e2e8d5]">
-                <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">
-                  Reassign batch
-                </label>
-                <div className="flex gap-2">
-                  <select
-                    value={selectedBatch}
-                    onChange={(e) => setSelectedBatch(e.target.value)}
-                    className="flex-1 h-9 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
-                  >
-                    <option value="">Unassigned</option>
-                    {allBatches.map((b) => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => run(
-                      () => changeBatch(subscriptionId, selectedBatch || null),
-                      "Batch updated."
-                    )}
-                    disabled={isPending || selectedBatch === (subscription.batchId ?? "")}
-                    className="h-9 px-4 text-sm font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
-                  >
-                    Save
-                  </button>
+              {/* Batch selectors — lunch and dinner are reassigned independently,
+                  since a subscriber can ride a different route for each. */}
+              <div className="pt-1 border-t border-[#e2e8d5] space-y-3">
+                <div>
+                  <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">
+                    Reassign lunch batch
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedBatchLunch}
+                      onChange={(e) => setSelectedBatchLunch(e.target.value)}
+                      className="flex-1 h-9 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
+                    >
+                      <option value="">Unassigned</option>
+                      {lunchBatches.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => run(
+                        () => changeBatch(subscriptionId, selectedBatchLunch || null, "lunch"),
+                        "Lunch batch updated."
+                      )}
+                      disabled={isPending || selectedBatchLunch === (subscription.batchIdLunch ?? "")}
+                      className="h-9 px-4 text-sm font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">
+                    Reassign dinner batch
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={selectedBatchDinner}
+                      onChange={(e) => setSelectedBatchDinner(e.target.value)}
+                      className="flex-1 h-9 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
+                    >
+                      <option value="">Unassigned</option>
+                      {dinnerBatches.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => run(
+                        () => changeBatch(subscriptionId, selectedBatchDinner || null, "dinner"),
+                        "Dinner batch updated."
+                      )}
+                      disabled={isPending || selectedBatchDinner === (subscription.batchIdDinner ?? "")}
+                      className="h-9 px-4 text-sm font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

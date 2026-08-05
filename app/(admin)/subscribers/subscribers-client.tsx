@@ -16,7 +16,8 @@ export type Subscriber = {
   code: string;
   name: string;
   phone: string;
-  batch: string;
+  batchLunch: string;
+  batchDinner: string;
   plan: string;
   status: "Active" | "Paused" | "Expired" | "Pending";
   meal: string;
@@ -189,9 +190,14 @@ function DetailPanel({
             <Row label="Plan">
               <span className="font-medium">{displayed.plan}</span>
             </Row>
-            <Row label="Batch">
-              <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[displayed.batch])}>
-                {displayed.batch}
+            <Row label="Lunch Batch">
+              <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[displayed.batchLunch])}>
+                {displayed.batchLunch}
+              </span>
+            </Row>
+            <Row label="Dinner Batch">
+              <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[displayed.batchDinner])}>
+                {displayed.batchDinner}
               </span>
             </Row>
             <Row icon={<Calendar className="w-3.5 h-3.5" />} label="Expiry">
@@ -358,7 +364,7 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
 
   const batches = useMemo(() => {
     const seen = new Set<string>();
-    initialSubscribers.forEach((s) => seen.add(s.batch));
+    initialSubscribers.forEach((s) => { seen.add(s.batchLunch); seen.add(s.batchDinner); });
     return ["All", ...Array.from(seen).sort()];
   }, [initialSubscribers]);
 
@@ -371,7 +377,7 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
     const q = search.toLowerCase();
     return initialSubscribers.filter((s) => {
       if (q && !s.name.toLowerCase().includes(q) && !s.phone.includes(q)) return false;
-      if (batchFilter !== "All" && s.batch !== batchFilter) return false;
+      if (batchFilter !== "All" && s.batchLunch !== batchFilter && s.batchDinner !== batchFilter) return false;
       if (statusFilter !== "All" && s.status !== statusFilter) return false;
       if (planFilter !== "All" && s.plan !== planFilter) return false;
       return true;
@@ -400,7 +406,8 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
     { header: "Menu Type", get: (s) => s.meal },
     { header: "Lunch Qty", get: (s) => String(s.mealsLunch) },
     { header: "Dinner Qty", get: (s) => String(s.mealsDinner) },
-    { header: "Batch", get: (s) => s.batch },
+    { header: "Batch (Lunch)", get: (s) => s.batchLunch },
+    { header: "Batch (Dinner)", get: (s) => s.batchDinner },
     { header: "Delivery Mode", get: (s) => s.deliveryMode },
     { header: "Address", get: (s) => s.address },
     { header: "Dietary / Allergens", get: (s) => s.constraints },
@@ -530,7 +537,7 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
-                {["Code", "Name", "Phone", "Batch", "Plan", "Status", "Meal", "Constraints", "Expiry", "Actions"].map((h) => (
+                {["Code", "Name", "Phone", "Lunch Batch", "Dinner Batch", "Plan", "Status", "Meal", "Constraints", "Expiry", "Actions"].map((h) => (
                   <th
                     key={h}
                     className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap"
@@ -543,7 +550,7 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-gray-400 text-sm">
+                  <td colSpan={11} className="text-center py-12 text-gray-400 text-sm">
                     No subscribers match your filters.
                   </td>
                 </tr>
@@ -563,8 +570,13 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
                       <td className="px-4 py-3 font-medium text-[#1A1A1A] whitespace-nowrap">{s.name}</td>
                       <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{s.phone}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[s.batch])}>
-                          {s.batch}
+                        <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[s.batchLunch])}>
+                          {s.batchLunch}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", batchColor[s.batchDinner])}>
+                          {s.batchDinner}
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{s.plan}</td>
