@@ -23,7 +23,7 @@ function isAuthorized(req: NextRequest) {
 // legacy long-form JWT-style key, but Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 // *inside* an Edge Function resolves to Supabase's newer short-form secret
 // key, which is a different string. Other edge functions calling
-// instantiate-orders (manage-subscription, razorpay-webhook) read that same
+// instantiate-orders (manage-subscription, cashfree-webhook) read that same
 // reserved var on their own side, so they match each other fine — but any
 // caller outside Supabase's edge runtime never could. INTERNAL_FN_SECRET is
 // a dedicated shared secret for exactly this (external → edge function)

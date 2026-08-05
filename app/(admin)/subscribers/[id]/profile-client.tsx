@@ -430,7 +430,7 @@ export function ProfileClient({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[#e2e8d5]">
-                      {["Date", "Amount", "Status", "Razorpay ID"].map((h) => (
+                      {["Date", "Amount", "Status", "Cashfree ID"].map((h) => (
                         <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">
                           {h}
                         </th>
