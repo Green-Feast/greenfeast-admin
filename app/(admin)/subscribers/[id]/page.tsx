@@ -46,6 +46,8 @@ export default async function SubscriberProfilePage({
     { data: allBatches },
     { data: wallet },
     { data: schedule },
+    { data: weeklyMenu },
+    { data: walletTx },
   ] = await Promise.all([
     supabaseAdmin.from("plans").select("name, meals_total, days_per_week, base_price").eq("id", sub.plan_id).maybeSingle(),
     supabaseAdmin.from("subscription_addons").select("addons ( id, name, price_per_meal )").eq("subscription_id", id),
@@ -63,6 +65,19 @@ export default async function SubscriberProfilePage({
     // opt-out subscribers have none here (they get every day and skip
     // individually from the app instead) — see instantiate-orders' hasScheduleDays.
     supabaseAdmin.from("subscription_schedule").select("day_of_week").eq("subscription_id", id),
+    // The weekly rotation this subscriber is on. weekly_menu.day_of_week is
+    // Mon=0..Sun=6 (the Kitchen admin's convention, mirrored by
+    // instantiate-orders) — NOT JS's Sun=0.
+    supabaseAdmin
+      .from("weekly_menu")
+      .select("day_of_week, meal_slot, meal_templates ( name, kcal, protein )")
+      .eq("menu_type", (sub as any).menu_type ?? "M1"),
+    supabaseAdmin
+      .from("wallet_transactions")
+      .select("id, type, amount, reason, reference_id, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(100),
   ])
 
   const userName = (user as any).name ?? "Unknown"
@@ -114,6 +129,17 @@ export default async function SubscriberProfilePage({
         allBatches={(allBatches ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}
         addons={((subAddons as any[]) ?? []).map((sa: any) => sa.addons).filter(Boolean)}
         walletBalance={wallet?.balance ?? null}
+        weeklyMenu={((weeklyMenu as any[]) ?? []).map((w: any) => {
+          const m = Array.isArray(w.meal_templates) ? w.meal_templates[0] : w.meal_templates
+          return {
+            dayOfWeek: w.day_of_week as number,
+            slot: w.meal_slot as "lunch" | "dinner",
+            mealName: m?.name ?? null,
+            kcal: m?.kcal ?? null,
+            protein: m?.protein ?? null,
+          }
+        })}
+        walletTransactions={((walletTx as any[]) ?? []) as any}
       />
     </div>
   )

@@ -16,6 +16,7 @@ import {
   ChefHat,
   LogOut,
   Bell,
+  IndianRupee,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/kitchen", label: "Kitchen", icon: ChefHat },
   { href: "/batches", label: "Batches", icon: Package },
   { href: "/delivery-partners", label: "Partners", icon: Bike },
+  { href: "/money", label: "Money", icon: IndianRupee },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 

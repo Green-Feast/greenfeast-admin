@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import {
   Phone, Calendar, MapPin, Utensils, StickyNote,
   Pause, Play, X, Plus, CheckCircle, AlertCircle,
-  Truck, Clock, Banknote,
+  Truck, Clock, Banknote, Wallet,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -91,6 +91,23 @@ const PAY_STATUS_STYLES: Record<string, string> = {
   refunded: "bg-blue-100 text-blue-700",
 }
 
+export type WeeklyMenuEntry = {
+  dayOfWeek: number   // Mon=0 .. Sun=6 (weekly_menu's convention, not JS's)
+  slot: "lunch" | "dinner"
+  mealName: string | null
+  kcal: number | null
+  protein: number | null
+}
+
+export type WalletTx = {
+  id: string
+  type: "credit" | "debit"
+  amount: number
+  reason: string | null
+  reference_id: string | null
+  created_at: string
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function ProfileClient({
@@ -103,6 +120,8 @@ export function ProfileClient({
   allBatches,
   addons,
   walletBalance,
+  weeklyMenu,
+  walletTransactions,
 }: {
   subscriptionId: string
   subscription: Subscription
@@ -113,6 +132,8 @@ export function ProfileClient({
   allBatches: { id: string; name: string; meal_slot: "lunch" | "dinner" }[]
   addons: { id: string; name: string; price_per_meal: number }[]
   walletBalance: number | null
+  weeklyMenu: WeeklyMenuEntry[]
+  walletTransactions: WalletTx[]
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -165,6 +186,27 @@ export function ProfileClient({
     : 0
   const addonTotalPerSlot = addons.reduce((s, a) => s + a.price_per_meal, 0)
   const perDayCost = (baseMealRate + addonTotalPerSlot) * Math.max(slotsPerDay, 1)
+
+  // Weekly rotation, indexed by weekly_menu's Mon=0..Sun=6 convention so it
+  // lines up with DOW_ORDER without any remapping.
+  const menuByDay = new Map<number, { lunch?: WeeklyMenuEntry; dinner?: WeeklyMenuEntry }>()
+  for (const e of weeklyMenu) {
+    const day = menuByDay.get(e.dayOfWeek) ?? {}
+    day[e.slot] = e
+    menuByDay.set(e.dayOfWeek, day)
+  }
+  // Which days this subscriber actually receives on is governed by
+  // subscription_schedule alone — instantiate-orders skips any weekday absent
+  // from it whenever it has rows at all, regardless of delivery_mode.
+  // delivery_mode only decides *skip behaviour* (opt-out = auto-deliver and
+  // skip individually; opt-in = only pre-chosen days), NOT which days exist.
+  // Verified against production: an opt-out subscriber with a Mon-Sat schedule
+  // has zero Sunday orders, so treating opt-out as "all 7 days" was wrong.
+  const takesEveryDay = subscription.deliveryDays.length === 0
+  const takesDelivery = (dayIdx: number) => takesEveryDay || subscription.deliveryDays.includes(DOW_ORDER[dayIdx])
+
+  const walletCredited = walletTransactions.filter(t => t.type === "credit").reduce((s, t) => s + t.amount, 0)
+  const walletDebited = walletTransactions.filter(t => t.type === "debit").reduce((s, t) => s + t.amount, 0)
 
   return (
     <div className="space-y-6">
@@ -311,13 +353,17 @@ export function ProfileClient({
                 ))}
               </div>
 
-              {/* Delivery schedule — opt-out subscribers get every day and
-                  skip individually from the app; opt-in subscribers only
-                  get delivered on the days they picked at signup. */}
+              {/* Which weekdays this subscriber receives on — driven by
+                  subscription_schedule, which instantiate-orders honours
+                  regardless of delivery_mode. delivery_mode only changes how
+                  skipping works on those days. */}
               <div className="pt-1">
                 <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">Delivery Days</label>
-                {subscription.deliveryMode === "opt-out" ? (
-                  <span className="text-sm text-[#1A1A1A]">All days <span className="text-xs text-gray-400">(subscriber skips individually)</span></span>
+                {takesEveryDay ? (
+                  <span className="text-sm text-[#1A1A1A]">
+                    All days{" "}
+                    <span className="text-xs text-gray-400">(no fixed schedule set)</span>
+                  </span>
                 ) : (
                   <div className="flex gap-1.5">
                     {DOW_ORDER.map((d) => {
@@ -336,6 +382,11 @@ export function ProfileClient({
                     })}
                   </div>
                 )}
+                <p className="text-xs text-gray-400 mt-1.5">
+                  {subscription.deliveryMode === "opt-out"
+                    ? "Opt-out — delivered automatically on these days unless the subscriber skips."
+                    : "Opt-in — only delivered on the days chosen at signup."}
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">
@@ -418,6 +469,142 @@ export function ProfileClient({
                 </div>
               </div>
             </div>
+          </Card>
+
+          {/* Weekly meal plan — what this subscriber actually eats each day,
+              from the weekly rotation their menu type is on. */}
+          <Card>
+            <CardHeader
+              title={`Weekly Plan — Menu ${subscription.menuType}`}
+              icon={<Utensils className="w-3.5 h-3.5" />}
+            />
+            <div className="px-5 pb-5">
+              {weeklyMenu.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No weekly menu set for Menu {subscription.menuType} yet — set it on the Kitchen page.
+                </p>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-[#e2e8d5]">
+                          {["Day", "Lunch", "Dinner"].map((h) => (
+                            <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide py-2.5 pr-4 whitespace-nowrap">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {DOW_ORDER.map((dow, idx) => {
+                          const day = menuByDay.get(idx) ?? {}
+                          const active = takesDelivery(idx)
+                          const cell = (entry: WeeklyMenuEntry | undefined, qty: number) => {
+                            if (qty <= 0) return <span className="text-xs text-gray-300">Not on plan</span>
+                            if (!entry?.mealName) return <span className="text-xs text-gray-300">—</span>
+                            return (
+                              <div>
+                                <span className="text-[#1A1A1A]">{entry.mealName}</span>
+                                {qty > 1 && (
+                                  <span className="ml-1.5 text-xs font-semibold text-[#1B5E20]">×{qty}</span>
+                                )}
+                                {(entry.kcal || entry.protein) && (
+                                  <p className="text-xs text-gray-400">
+                                    {entry.kcal ? `${entry.kcal} kcal` : ""}
+                                    {entry.kcal && entry.protein ? " · " : ""}
+                                    {entry.protein ? `${entry.protein}g protein` : ""}
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          }
+                          return (
+                            <tr key={dow} className={cn("border-b border-[#e2e8d5] last:border-0", !active && "opacity-40")}>
+                              <td className="py-2.5 pr-4 whitespace-nowrap align-top">
+                                <span className="font-medium text-[#1A1A1A]">{dow}</span>
+                                {!active && <p className="text-xs text-gray-400">No delivery</p>}
+                              </td>
+                              <td className="py-2.5 pr-4 align-top">{cell(day.lunch, subscription.mealsLunch)}</td>
+                              <td className="py-2.5 pr-4 align-top">{cell(day.dinner, subscription.mealsDinner)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-3 leading-relaxed">
+                    This is the standing weekly rotation. Individual days can differ if the subscriber
+                    swapped a meal, added a dish, or skipped — check Operations for a given date to see
+                    what's actually going out.
+                  </p>
+                </>
+              )}
+            </div>
+          </Card>
+
+          {/* Wallet ledger — every credit and debit for this customer */}
+          <Card>
+            <CardHeader title="Wallet History" icon={<Wallet className="w-3.5 h-3.5" />} />
+            <div className="px-5 pb-3 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
+              <div>
+                <span className="text-gray-400">Balance </span>
+                <span className="font-semibold text-[#1A1A1A]">
+                  {walletBalance !== null ? fmtRupees(walletBalance) : "—"}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-400">Credited </span>
+                <span className="font-semibold text-green-700">{fmtRupees(walletCredited)}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Spent </span>
+                <span className="font-semibold text-[#1A1A1A]">{fmtRupees(walletDebited)}</span>
+              </div>
+            </div>
+            {walletTransactions.length === 0 ? (
+              <p className="px-5 pb-5 text-sm text-gray-400">No wallet activity yet.</p>
+            ) : (
+              <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-white">
+                    <tr className="border-b border-[#e2e8d5]">
+                      {["Date", "Type", "Amount", "Reason"].map((h) => (
+                        <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {walletTransactions.map((t, i) => (
+                      <tr key={t.id} className={cn("border-b border-[#e2e8d5] last:border-0", i % 2 === 1 && "bg-[#fafcf8]")}>
+                        <td className="px-5 py-3 whitespace-nowrap text-gray-500">
+                          {new Date(t.created_at).toLocaleString("en-IN", {
+                            day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit",
+                          })}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-full text-xs font-medium capitalize",
+                            t.type === "credit" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
+                          )}>
+                            {t.type}
+                          </span>
+                        </td>
+                        <td className={cn(
+                          "px-5 py-3 font-semibold whitespace-nowrap",
+                          t.type === "credit" ? "text-green-700" : "text-[#1A1A1A]"
+                        )}>
+                          {t.type === "credit" ? "+" : "−"}{fmtRupees(t.amount)}
+                        </td>
+                        <td className="px-5 py-3 text-gray-600">{t.reason || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Card>
 
           {/* Payment History */}
