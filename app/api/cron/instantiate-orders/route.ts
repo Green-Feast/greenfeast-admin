@@ -19,8 +19,8 @@ function isAuthorized(req: NextRequest) {
 // route is that caller.
 //
 // Auth note: instantiate-orders does NOT accept this app's
-// SUPABASE_SERVICE_ROLE_KEY as a bearer token — that env var holds the
-// legacy long-form JWT-style key, but Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+// SUPABASE_SECRET_KEY as a bearer token — that env var holds this app's
+// own secret key, but Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 // *inside* an Edge Function resolves to Supabase's newer short-form secret
 // key, which is a different string. Other edge functions calling
 // instantiate-orders (manage-subscription, cashfree-webhook) read that same

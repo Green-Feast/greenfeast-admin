@@ -32,7 +32,7 @@ async function wipeUserData(userId: string) {
 
 async function instantiateOrders(subscriptionId: string) {
   // Reuse the tested edge function (ingredient snapshot, addon copy, pause skip).
-  // INTERNAL_FN_SECRET (not SUPABASE_SERVICE_ROLE_KEY — see
+  // INTERNAL_FN_SECRET (not SUPABASE_SECRET_KEY — see
   // app/api/cron/instantiate-orders/route.ts for why that doesn't work from
   // outside Supabase's own edge runtime) unlocks any subscription_id.
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
