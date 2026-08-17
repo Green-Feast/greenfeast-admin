@@ -2,10 +2,14 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
 import type { WeeklyMenuRow } from "./kitchen-client"
 
 export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
+  // Server actions are independently-callable POST endpoints — the
+  // (admin)/layout.tsx gate only protects page navigation, not these.
+  await requireAdmin()
   for (const row of rows) {
     // Skip temp rows (not yet saved)
     if (row.id.startsWith("temp-")) {
@@ -40,6 +44,7 @@ export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
 }
 
 export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
+  await requireAdmin()
   const today = istToday()
   let frozen = 0
 
@@ -126,6 +131,7 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
 }
 
 export async function swapMealForOrder(orderId: string, mealTemplateId: string) {
+  await requireAdmin()
   const { error } = await supabaseAdmin
     .from("orders")
     .update({ meal_template_id: mealTemplateId, is_customized: true })

@@ -1,26 +1,23 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { istToday, addDaysISO } from "@/lib/ist"
 import { KitchenClient, type WeeklyMenuRow, type NextMealItem, type WeeklyOverviewRow } from "./kitchen-client"
 
 export const dynamic = "force-dynamic"
 
-function getWeekBounds(): { weekStart: string; weekEnd: string } {
-  const now = new Date()
-  const dow = now.getUTCDay() // 0=Sun
-  const diffToMon = dow === 0 ? -6 : 1 - dow
-  const monday = new Date(now)
-  monday.setUTCDate(now.getUTCDate() + diffToMon)
-  monday.setUTCHours(0, 0, 0, 0)
-  const sunday = new Date(monday)
-  sunday.setUTCDate(monday.getUTCDate() + 6)
-  return {
-    weekStart: monday.toISOString().split("T")[0],
-    weekEnd: sunday.toISOString().split("T")[0],
-  }
+function getWeekBounds(today: string): { weekStart: string; weekEnd: string } {
+  // day_of_week elsewhere in this file is Mon=0..Sun=6 (see dowNum below), so
+  // derive the same way rather than re-deriving from getUTCDay/getDay, which
+  // would reintroduce a Sun=0 vs Mon=0 mismatch.
+  const d = new Date(today + "T00:00:00Z")
+  const dowMon0 = (d.getUTCDay() + 6) % 7
+  const weekStart = addDaysISO(today, -dowMon0)
+  const weekEnd = addDaysISO(weekStart, 6)
+  return { weekStart, weekEnd }
 }
 
 export default async function KitchenPage() {
-  const today = new Date().toISOString().split("T")[0]
-  const { weekStart, weekEnd } = getWeekBounds()
+  const today = istToday()
+  const { weekStart, weekEnd } = getWeekBounds(today)
 
   const [
     { data: weeklyMenuRows, error },
