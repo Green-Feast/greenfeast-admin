@@ -141,3 +141,71 @@ export async function swapMealForOrder(orderId: string, mealTemplateId: string) 
   revalidatePath("/kitchen")
 }
 
+// Per-date availability only hides an item from subscribers choosing NEW
+// meals/add-ons for that date — it never touches orders already scheduled
+// with that item. Row absent (or is_available=true) means available, so
+// this is a plain upsert of whatever the admin actually touched; anything
+// left untouched simply keeps reading as available via absence.
+export async function saveDailyAvailability(
+  forDate: string,
+  meals: Record<string, boolean>,
+  addons: Record<string, boolean>
+) {
+  await requireAdmin()
+  if (forDate < istToday()) throw new Error("Cannot edit availability for a past date")
+
+  const now = new Date().toISOString()
+
+  const mealRows = Object.entries(meals).map(([meal_template_id, is_available]) => ({
+    for_date: forDate,
+    meal_template_id,
+    is_available,
+    updated_at: now,
+  }))
+  if (mealRows.length > 0) {
+    const { error } = await supabaseAdmin
+      .from("meal_availability")
+      .upsert(mealRows, { onConflict: "for_date,meal_template_id" })
+    if (error) throw error
+  }
+
+  const addonRows = Object.entries(addons).map(([addon_id, is_available]) => ({
+    for_date: forDate,
+    addon_id,
+    is_available,
+    updated_at: now,
+  }))
+  if (addonRows.length > 0) {
+    const { error } = await supabaseAdmin
+      .from("addon_availability")
+      .upsert(addonRows, { onConflict: "for_date,addon_id" })
+    if (error) throw error
+  }
+
+  revalidatePath("/kitchen")
+}
+
+// Delete-then-insert for the date — handles clearing a special back to null,
+// and is race-free enough for a single-admin tool.
+export async function saveDailySpecials(forDate: string, mealTemplateIds: (string | null)[]) {
+  await requireAdmin()
+  if (forDate < istToday()) throw new Error("Cannot edit specials for a past date")
+
+  const { error: deleteError } = await supabaseAdmin
+    .from("daily_specials")
+    .delete()
+    .eq("for_date", forDate)
+  if (deleteError) throw deleteError
+
+  const rows = mealTemplateIds
+    .map((id, i) => (id ? { for_date: forDate, sort_order: i + 1, meal_template_id: id } : null))
+    .filter((r): r is { for_date: string; sort_order: number; meal_template_id: string } => r !== null)
+
+  if (rows.length > 0) {
+    const { error } = await supabaseAdmin.from("daily_specials").insert(rows)
+    if (error) throw error
+  }
+
+  revalidatePath("/kitchen")
+}
+

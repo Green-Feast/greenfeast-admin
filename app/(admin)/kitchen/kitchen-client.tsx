@@ -3,7 +3,14 @@
 import { useEffect, useState } from "react"
 import { Loader2, ChevronDown, X, ArrowRight } from "lucide-react"
 import { supabase } from "@/lib/supabase"
-import { updateWeeklyMenu, propagateMenuChanges, swapMealForOrder } from "./actions"
+import { istToday } from "@/lib/ist"
+import {
+  updateWeeklyMenu,
+  propagateMenuChanges,
+  swapMealForOrder,
+  saveDailyAvailability,
+  saveDailySpecials,
+} from "./actions"
 
 export type WeeklyMenuRow = {
   id: string
@@ -47,6 +54,11 @@ type MealTemplate = {
   category: string
 }
 
+type AddonTemplate = {
+  id: string
+  name: string
+}
+
 // day_of_week convention: 0=Mon, 1=Tue, ..., 6=Sun (matches propagateMenuChanges + instantiate-orders)
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -76,12 +88,21 @@ export function KitchenClient({
   const [rows, setRows] = useState(initialRows)
   const [nextMeals, setNextMeals] = useState(initialNextMeals)
   const [meals, setMeals] = useState<MealTemplate[]>([])
+  const [addons, setAddons] = useState<AddonTemplate[]>([])
   const [saving, setSaving] = useState(false)
   const [openPicker, setOpenPicker] = useState<string | null>(null)
   const [swappingOrder, setSwappingOrder] = useState<string | null>(null)
   const [swapping, setSwapping] = useState(false)
   const [toast, setToast] = useState("")
   const [currentDow] = useState(todayDow)
+
+  // "Today's kitchen" — per-date availability + specials
+  const [availDate, setAvailDate] = useState(istToday)
+  const [mealAvail, setMealAvail] = useState<Record<string, boolean>>({})
+  const [addonAvail, setAddonAvail] = useState<Record<string, boolean>>({})
+  const [specials, setSpecials] = useState<(string | null)[]>([null, null])
+  const [availLoading, setAvailLoading] = useState(true)
+  const [availSaving, setAvailSaving] = useState(false)
 
   useEffect(() => {
     supabase
@@ -90,7 +111,54 @@ export function KitchenClient({
       .eq("is_active", true)
       .order("category")
       .then(({ data }) => setMeals((data as MealTemplate[]) ?? []))
+
+    supabase
+      .from("addons")
+      .select("id, name")
+      .eq("is_active", true)
+      .order("name")
+      .then(({ data }) => setAddons((data as AddonTemplate[]) ?? []))
   }, [])
+
+  // Refetch whenever the admin picks a different date. Public-read policies
+  // on all three tables (038_daily_availability.sql) mean the anon client
+  // can read them directly, same as the meal_templates/addons catalogue
+  // fetches above.
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      setAvailLoading(true)
+      const [mealRes, addonRes, specialRes] = await Promise.all([
+        supabase.from("meal_availability").select("meal_template_id, is_available").eq("for_date", availDate),
+        supabase.from("addon_availability").select("addon_id, is_available").eq("for_date", availDate),
+        supabase.from("daily_specials").select("sort_order, meal_template_id").eq("for_date", availDate).order("sort_order"),
+      ])
+      if (cancelled) return
+
+      const mealMap: Record<string, boolean> = {}
+      for (const r of (mealRes.data ?? []) as { meal_template_id: string; is_available: boolean }[]) {
+        mealMap[r.meal_template_id] = r.is_available
+      }
+      setMealAvail(mealMap)
+
+      const addonMap: Record<string, boolean> = {}
+      for (const r of (addonRes.data ?? []) as { addon_id: string; is_available: boolean }[]) {
+        addonMap[r.addon_id] = r.is_available
+      }
+      setAddonAvail(addonMap)
+
+      const specialRows = (specialRes.data ?? []) as { sort_order: number; meal_template_id: string }[]
+      setSpecials([
+        specialRows.find((r) => r.sort_order === 1)?.meal_template_id ?? null,
+        specialRows.find((r) => r.sort_order === 2)?.meal_template_id ?? null,
+      ])
+      setAvailLoading(false)
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [availDate])
 
   // Close picker on outside click
   useEffect(() => {
@@ -167,6 +235,51 @@ export function KitchenClient({
       console.error(e)
     } finally {
       setSwapping(false)
+    }
+  }
+
+  // Absence of an entry in the map means available — mirrors the DB's
+  // "row absent OR is_available=true" rule exactly.
+  function isMealAvail(id: string) {
+    return mealAvail[id] !== false
+  }
+  function isAddonAvail(id: string) {
+    return addonAvail[id] !== false
+  }
+  function toggleMealAvail(id: string) {
+    setMealAvail({ ...mealAvail, [id]: !isMealAvail(id) })
+  }
+  function toggleAddonAvail(id: string) {
+    setAddonAvail({ ...addonAvail, [id]: !isAddonAvail(id) })
+  }
+
+  function handleSelectSpecial(index: 0 | 1, mealId: string) {
+    setOpenPicker(null)
+    setSpecials((prev) => {
+      const next = [...prev]
+      next[index] = mealId
+      return next
+    })
+  }
+  function handleClearSpecial(index: 0 | 1) {
+    setSpecials((prev) => {
+      const next = [...prev]
+      next[index] = null
+      return next
+    })
+  }
+
+  async function handleSaveAvailability() {
+    setAvailSaving(true)
+    try {
+      await saveDailyAvailability(availDate, mealAvail, addonAvail)
+      await saveDailySpecials(availDate, specials)
+      showToast("Today's kitchen saved")
+    } catch (e: any) {
+      showToast("Save failed. Try again.")
+      console.error(e)
+    } finally {
+      setAvailSaving(false)
     }
   }
 
@@ -269,6 +382,159 @@ export function KitchenClient({
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           Save menu
         </button>
+      </div>
+
+      {/* Today's kitchen — per-date availability + specials. Separate from
+          the weekly Save above on purpose: that one runs propagateMenuChanges
+          across every subscription and fires instantiate-orders — coupling a
+          2-second toggle to that would be slow and risky. */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-8">
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Today's kitchen</h2>
+            <p className="text-sm text-gray-500 mt-0.5 max-w-md">
+              Existing orders keep their meal — this only hides items from subscribers choosing for this date.
+            </p>
+          </div>
+          <input
+            type="date"
+            value={availDate}
+            min={istToday()}
+            onChange={(e) => setAvailDate(e.target.value)}
+            className="h-9 px-3 rounded-lg border border-gray-300 text-sm text-gray-900"
+          />
+        </div>
+
+        {availLoading ? (
+          <div className="flex items-center justify-center gap-2 text-gray-400 text-sm py-10">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Today's Special */}
+            <div>
+              <h3 className="text-sm font-bold text-gray-700 mb-3">Today's Special (pick 2)</h3>
+              <div className="space-y-1.5">
+                {([0, 1] as const).map((i) => {
+                  const mealId = specials[i]
+                  const meal = meals.find((m) => m.id === mealId)
+                  const pickerKey = `special-${i}`
+                  const isOpen = openPicker === pickerKey
+                  return (
+                    <div
+                      key={i}
+                      className="relative flex items-center gap-2 p-2.5 rounded-lg border border-gray-100 bg-gray-50"
+                    >
+                      <span className="w-4 shrink-0 text-xs font-semibold text-gray-400">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        {meal ? (
+                          <span className="text-sm font-medium text-gray-900 truncate block">{meal.name}</span>
+                        ) : (
+                          <span className="text-sm text-gray-400">— not set —</span>
+                        )}
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
+                          className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
+                        >
+                          <ChevronDown size={13} />
+                        </button>
+                        {meal && (
+                          <button
+                            onClick={() => handleClearSpecial(i)}
+                            className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+
+                      {isOpen && (
+                        <div
+                          className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {meals.map((m) => (
+                            <button
+                              key={m.id}
+                              onClick={() => handleSelectSpecial(i, m.id)}
+                              className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-green-50 border-b border-gray-100 last:border-0"
+                            >
+                              {m.name} <span className="text-gray-400 text-xs">({m.category})</span>
+                            </button>
+                          ))}
+                          {meals.length === 0 && (
+                            <div className="px-3 py-2 text-sm text-gray-400">No meal templates found</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Meals available */}
+            <div>
+              <h3 className="text-sm font-bold text-gray-700 mb-3">Meals available</h3>
+              <div className="space-y-0.5 max-h-72 overflow-y-auto rounded-lg border border-gray-100">
+                {meals.map((meal) => (
+                  <label
+                    key={meal.id}
+                    className="flex items-center gap-2.5 px-2.5 py-1.5 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-50 last:border-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isMealAvail(meal.id)}
+                      onChange={() => toggleMealAvail(meal.id)}
+                      className="accent-[#1B5E20]"
+                    />
+                    <span className={isMealAvail(meal.id) ? "text-gray-900" : "text-gray-400 line-through"}>
+                      {meal.name}
+                    </span>
+                  </label>
+                ))}
+                {meals.length === 0 && <div className="px-3 py-2 text-sm text-gray-400">No meal templates found</div>}
+              </div>
+            </div>
+
+            {/* Add-ons available */}
+            <div>
+              <h3 className="text-sm font-bold text-gray-700 mb-3">Add-ons available</h3>
+              <div className="space-y-0.5 max-h-72 overflow-y-auto rounded-lg border border-gray-100">
+                {addons.map((addon) => (
+                  <label
+                    key={addon.id}
+                    className="flex items-center gap-2.5 px-2.5 py-1.5 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-50 last:border-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isAddonAvail(addon.id)}
+                      onChange={() => toggleAddonAvail(addon.id)}
+                      className="accent-[#1B5E20]"
+                    />
+                    <span className={isAddonAvail(addon.id) ? "text-gray-900" : "text-gray-400 line-through"}>
+                      {addon.name}
+                    </span>
+                  </label>
+                ))}
+                {addons.length === 0 && <div className="px-3 py-2 text-sm text-gray-400">No add-ons found</div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5">
+          <button
+            onClick={handleSaveAvailability}
+            disabled={availSaving || availLoading}
+            className="px-6 py-2 rounded-lg bg-[#1B5E20] text-white font-medium hover:bg-[#0D3F12] disabled:opacity-50 flex items-center gap-2"
+          >
+            {availSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+            Save today's kitchen
+          </button>
+        </div>
       </div>
 
       {/* Next meal per user */}
