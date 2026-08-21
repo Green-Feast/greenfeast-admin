@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
-import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText } from "lucide-react";
+import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText, Trash2, ArrowLeft } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { Button } from "@/components/ui/button";
@@ -38,6 +38,28 @@ export type Subscriber = {
   walletBalance: number;
   joinedDate: string;
   renewalDue: boolean;
+};
+
+export type DeletedAccount = {
+  id: string;
+  originalUserId: string;
+  name: string;
+  phone: string;
+  email: string;
+  deletedAt: string;
+  // Shape written by supabase/functions/delete-user-data — see that file for
+  // the exact query. Loosely typed here since it's a JSONB archive, not a
+  // live queryable table.
+  snapshot: {
+    profile?: { name?: string; phone?: string; created_at?: string } | null;
+    dietary_profile?: { dietary_preference?: string; allergens?: string[]; health_goal?: string } | null;
+    addresses?: { line1?: string; landmark?: string; pincode?: string; label?: string }[];
+    subscriptions?: { status?: string; plan_name?: string; deliveries_remaining?: number; plans?: { name?: string } }[];
+    orders?: { delivery_date?: string; meal_slot?: string; status?: string; meal_templates?: { name?: string } }[];
+    wallet_balance?: number;
+    wallet_transactions?: { type?: string; amount?: number; reason?: string; created_at?: string }[];
+    payments?: { amount?: number; status?: string; created_at?: string }[];
+  };
 };
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
@@ -349,11 +371,116 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
   );
 }
 
+/* ─── Deleted accounts ──────────────────────────────────────────────────────── */
+
+function money(paise: number | undefined) {
+  return `₹${((paise ?? 0) / 100).toFixed(0)}`;
+}
+
+function DeletedAccountsPanel({ accounts, onBack }: { accounts: DeletedAccount[]; onBack: () => void }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  return (
+    <div className="p-6 max-w-[1400px] mx-auto">
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={onBack}
+          className="p-2 rounded-lg text-gray-400 hover:text-[#1B5E20] hover:bg-green-50 transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-[#1A1A1A] tracking-tight">Deleted accounts</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {accounts.length} account{accounts.length === 1 ? "" : "s"} deleted by users. Data is a snapshot from the moment of deletion — the account itself no longer exists and cannot sign in again.
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-[#e2e8d5] shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
+                {["Name", "Phone", "Email", "Wallet at deletion", "Deleted on", ""].map((h) => (
+                  <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-center py-12 text-gray-400 text-sm">
+                    No accounts have been deleted.
+                  </td>
+                </tr>
+              ) : (
+                accounts.map((a) => (
+                  <Fragment key={a.id}>
+                    <tr className="border-b border-[#e2e8d5] last:border-0 hover:bg-[#F9FBF7] transition-colors">
+                      <td className="px-4 py-3 font-medium text-[#1A1A1A] whitespace-nowrap">{a.name}</td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{a.phone}</td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{a.email}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{money(a.snapshot.wallet_balance)}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{a.deletedAt}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <button
+                          onClick={() => setExpanded(expanded === a.id ? null : a.id)}
+                          className="text-xs font-medium text-[#1B5E20] hover:text-white hover:bg-[#1B5E20] border border-[#1B5E20]/30 hover:border-[#1B5E20] px-3 py-1.5 rounded-lg transition-all duration-150"
+                        >
+                          {expanded === a.id ? "Hide" : "View"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded === a.id && (
+                      <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
+                        <td colSpan={6} className="px-4 py-4">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                            <div>
+                              <p className="font-semibold text-gray-400 uppercase tracking-wide mb-1">Dietary</p>
+                              <p className="text-gray-700">{a.snapshot.dietary_profile?.dietary_preference ?? "—"}</p>
+                              <p className="text-gray-500">{a.snapshot.dietary_profile?.allergens?.join(", ") || "No allergens"}</p>
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-400 uppercase tracking-wide mb-1">Addresses ({a.snapshot.addresses?.length ?? 0})</p>
+                              {(a.snapshot.addresses ?? []).slice(0, 2).map((addr, i) => (
+                                <p key={i} className="text-gray-700 truncate">{addr.line1}{addr.landmark ? `, ${addr.landmark}` : ""}</p>
+                              ))}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-400 uppercase tracking-wide mb-1">Subscriptions ({a.snapshot.subscriptions?.length ?? 0})</p>
+                              {(a.snapshot.subscriptions ?? []).slice(0, 3).map((s, i) => (
+                                <p key={i} className="text-gray-700">{s.plans?.name ?? s.plan_name ?? "—"} · {s.status}</p>
+                              ))}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-400 uppercase tracking-wide mb-1">Orders / Payments</p>
+                              <p className="text-gray-700">{a.snapshot.orders?.length ?? 0} total orders</p>
+                              <p className="text-gray-700">{a.snapshot.payments?.length ?? 0} payments made</p>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Main Page ─────────────────────────────────────────────────────────────── */
 
 const PAGE_SIZE = 15;
 
-export function SubscribersClient({ initialSubscribers }: { initialSubscribers: Subscriber[] }) {
+export function SubscribersClient({ initialSubscribers, deletedAccounts }: { initialSubscribers: Subscriber[]; deletedAccounts: DeletedAccount[] }) {
+  const [showDeleted, setShowDeleted] = useState(false);
   const [search, setSearch] = useState("");
   const [batchFilter, setBatchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -455,6 +582,10 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
     doc.save(`GreenFeast-CRM-List-${new Date().toISOString().slice(0, 10)}.pdf`);
   }
 
+  if (showDeleted) {
+    return <DeletedAccountsPanel accounts={deletedAccounts} onBack={() => setShowDeleted(false)} />;
+  }
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
 
@@ -487,6 +618,14 @@ export function SubscribersClient({ initialSubscribers }: { initialSubscribers: 
           >
             <Plus className="w-4 h-4" />
             Add Subscriber
+          </Button>
+          <Button
+            onClick={() => setShowDeleted(true)}
+            variant="outline"
+            className="h-9 px-4 gap-1.5 border-red-200 text-red-600 hover:bg-red-50"
+          >
+            <Trash2 className="w-4 h-4" />
+            Deleted accounts{deletedAccounts.length > 0 ? ` (${deletedAccounts.length})` : ""}
           </Button>
         </div>
       </div>

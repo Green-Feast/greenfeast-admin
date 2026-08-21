@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { SubscribersClient, type Subscriber } from "./subscribers-client";
+import { SubscribersClient, type Subscriber, type DeletedAccount } from "./subscribers-client";
 
 export const dynamic = "force-dynamic";
 
@@ -133,5 +133,20 @@ export default async function SubscribersPage() {
     };
   });
 
-  return <SubscribersClient initialSubscribers={subscribers} />;
+  const { data: deletedRows } = await supabaseAdmin
+    .from("deleted_accounts")
+    .select("id, original_user_id, name, phone, email, snapshot, deleted_at")
+    .order("deleted_at", { ascending: false });
+
+  const deletedAccounts: DeletedAccount[] = (deletedRows ?? []).map((d) => ({
+    id: d.id,
+    originalUserId: d.original_user_id,
+    name: d.name ?? "Unknown",
+    phone: d.phone ?? "—",
+    email: d.email ?? "—",
+    deletedAt: new Date(d.deleted_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
+    snapshot: d.snapshot,
+  }));
+
+  return <SubscribersClient initialSubscribers={subscribers} deletedAccounts={deletedAccounts} />;
 }
