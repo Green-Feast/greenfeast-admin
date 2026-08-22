@@ -52,6 +52,7 @@ type MealTemplate = {
   id: string
   name: string
   category: string
+  subscriptionValid: boolean
 }
 
 type AddonTemplate = {
@@ -105,12 +106,22 @@ export function KitchenClient({
   const [availSaving, setAvailSaving] = useState(false)
 
   useEffect(() => {
+    // Unfiltered on subscription_valid — this same list also powers the
+    // "Meals available" per-date checklist below, which must still cover
+    // menu-visible-but-takeaway-only dishes too (meal_availability also
+    // drives their greying in the app's Menu tab). Filtered separately at
+    // each subscription-only picker (weekly menu, specials) instead.
     supabase
       .from("meal_templates")
-      .select("id, name, category")
+      .select("id, name, category, subscription_valid")
       .eq("is_active", true)
       .order("category")
-      .then(({ data }) => setMeals((data as MealTemplate[]) ?? []))
+      .then(({ data }) =>
+        setMeals(
+          ((data ?? []) as { id: string; name: string; category: string; subscription_valid: boolean }[])
+            .map((m) => ({ id: m.id, name: m.name, category: m.category, subscriptionValid: m.subscription_valid }))
+        )
+      )
 
     supabase
       .from("addons")
@@ -350,7 +361,7 @@ export function KitchenClient({
                         className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {meals.map((meal) => (
+                        {meals.filter((m) => m.subscriptionValid).map((meal) => (
                           <button
                             key={meal.id}
                             onClick={() => handleSelectMeal(menuType, dayOfWeek, slot, meal.id, meal.name)}
@@ -455,7 +466,7 @@ export function KitchenClient({
                           className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {meals.map((m) => (
+                          {meals.filter((m) => m.subscriptionValid).map((m) => (
                             <button
                               key={m.id}
                               onClick={() => handleSelectSpecial(i, m.id)}
@@ -682,7 +693,7 @@ export function KitchenClient({
             </div>
 
             <div className="overflow-y-auto space-y-1">
-              {meals.map((meal) => (
+              {meals.filter((m) => m.subscriptionValid).map((meal) => (
                 <button
                   key={meal.id}
                   onClick={() => handleSwapMeal(swappingOrder, meal.id, meal.name)}
