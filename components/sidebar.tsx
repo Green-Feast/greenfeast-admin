@@ -17,6 +17,7 @@ import {
   LogOut,
   Bell,
   IndianRupee,
+  UtensilsCrossed,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 
@@ -25,6 +26,7 @@ const navItems = [
   { href: "/users", label: "Users", icon: UserCog },
   { href: "/subscribers", label: "Subscribers", icon: Users },
   { href: "/operations", label: "Operations", icon: Truck },
+  { href: "/menu", label: "Menu", icon: UtensilsCrossed },
   { href: "/kitchen", label: "Kitchen", icon: ChefHat },
   { href: "/batches", label: "Batches", icon: Package },
   { href: "/delivery-partners", label: "Partners", icon: Bike },
