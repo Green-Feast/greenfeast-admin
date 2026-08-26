@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
 export type MealSlot = "lunch" | "dinner"
@@ -14,6 +15,7 @@ export async function createBatch(data: {
   primary_partner_id?: string
   secondary_partner_id?: string
 }) {
+  await requireAdmin()
   const { error } = await supabaseAdmin.from("batches").insert({
     ...data,
     primary_partner_id: data.primary_partner_id || null,
@@ -31,6 +33,7 @@ export async function updateBatch(id: string, data: {
   primary_partner_id?: string
   secondary_partner_id?: string
 }) {
+  await requireAdmin()
   const { error } = await supabaseAdmin.from("batches").update({
     ...data,
     primary_partner_id: data.primary_partner_id || null,
@@ -41,6 +44,7 @@ export async function updateBatch(id: string, data: {
 }
 
 export async function deleteBatch(id: string) {
+  await requireAdmin()
   const { count } = await supabaseAdmin
     .from("subscriptions")
     .select("*", { count: "exact", head: true })
@@ -53,6 +57,7 @@ export async function deleteBatch(id: string) {
 }
 
 export async function moveSubscriberToBatch(subscriptionId: string, batchId: string | null, slot: MealSlot) {
+  await requireAdmin()
   const column = slot === "lunch" ? "batch_id_lunch" : "batch_id_dinner"
   const { error } = await supabaseAdmin
     .from("subscriptions")

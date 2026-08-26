@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import type { CreateSubInput } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ async function instantiateOrders(subscriptionId: string) {
 export async function createSubscription(
   input: CreateSubInput
 ): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin()
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, deliveryMode, activation, address,
@@ -177,6 +179,7 @@ export async function createSubscription(
 
 /** Wipe app data but keep the login, so onboarding can be re-tested fresh. */
 export async function resetUserData(userId: string): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin()
   try {
     await wipeUserData(userId)
     await supabaseAdmin.from("users").update({ onboarded: false }).eq("id", userId)
@@ -189,6 +192,7 @@ export async function resetUserData(userId: string): Promise<{ ok: boolean; erro
 
 /** Remove the user entirely — app data first, then the auth + public.users rows. */
 export async function deleteUser(userId: string): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin()
   try {
     await wipeUserData(userId)
     await supabaseAdmin.from("users").delete().eq("id", userId)
@@ -206,6 +210,7 @@ export async function editUserProfile(
   name: string,
   phone: string
 ): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin()
   const { data: existing } = await supabaseAdmin
     .from("users")
     .select("id")
@@ -230,6 +235,7 @@ export async function editUserProfile(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function pauseSub(subId: string, from: string, until: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions")
     .update({ status: "paused", pause_from: from, pause_until: until })
     .eq("id", subId)
@@ -242,6 +248,7 @@ export async function pauseSub(subId: string, from: string, until: string) {
 }
 
 export async function resumeSub(subId: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions")
     .update({ status: "active", pause_from: null, pause_until: null })
     .eq("id", subId)
@@ -249,6 +256,7 @@ export async function resumeSub(subId: string) {
 }
 
 export async function cancelSub(subId: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions").update({ status: "cancelled" }).eq("id", subId)
   await supabaseAdmin.from("orders").update({ status: "cancelled" })
     .eq("subscription_id", subId)
@@ -257,6 +265,7 @@ export async function cancelSub(subId: string) {
 }
 
 export async function extendSub(subId: string, meals: number) {
+  await requireAdmin()
   const { data } = await supabaseAdmin
     .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
   if (!data) return

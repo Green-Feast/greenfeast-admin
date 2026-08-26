@@ -2,14 +2,17 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
 export async function saveNotes(subId: string, notes: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions").update({ special_notes: notes }).eq("id", subId)
   revalidatePath(`/subscribers/${subId}`)
 }
 
 export async function pauseSubscription(subId: string, from: string, until: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions")
     .update({ status: "paused", pause_from: from, pause_until: until })
     .eq("id", subId)
@@ -22,6 +25,7 @@ export async function pauseSubscription(subId: string, from: string, until: stri
 }
 
 export async function resumeSubscription(subId: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions")
     .update({ status: "active", pause_from: null, pause_until: null })
     .eq("id", subId)
@@ -29,6 +33,7 @@ export async function resumeSubscription(subId: string) {
 }
 
 export async function cancelSubscription(subId: string) {
+  await requireAdmin()
   await supabaseAdmin.from("subscriptions").update({ status: "cancelled" }).eq("id", subId)
   await supabaseAdmin.from("orders").update({ status: "cancelled" })
     .eq("subscription_id", subId)
@@ -37,6 +42,7 @@ export async function cancelSubscription(subId: string) {
 }
 
 export async function extendSubscription(subId: string, meals: number) {
+  await requireAdmin()
   const { data } = await supabaseAdmin
     .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
   if (!data) return
@@ -47,6 +53,7 @@ export async function extendSubscription(subId: string, meals: number) {
 }
 
 export async function markCodPaid(subId: string) {
+  await requireAdmin()
   // Called when the delivery partner has collected the cash on first delivery.
   // Activates the CoD subscription, sets its delivery allowance, and logs a
   // paid payment row for the history.
@@ -77,6 +84,7 @@ export async function markCodPaid(subId: string) {
 }
 
 export async function changeBatch(subId: string, batchId: string | null, slot: "lunch" | "dinner") {
+  await requireAdmin()
   const column = slot === "lunch" ? "batch_id_lunch" : "batch_id_dinner"
   await supabaseAdmin.from("subscriptions")
     .update({ [column]: batchId || null })

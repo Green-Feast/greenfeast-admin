@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { notifyUsers, logBroadcast } from "@/lib/notifications"
 
 export type DeliveryStatus = "preparing" | "out_for_delivery" | "delivered"
@@ -41,6 +42,7 @@ export async function advanceBatchStatus(
   newStatus: DeliveryStatus,
   slot: MealSlot
 ) {
+  await requireAdmin()
   let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
 
   if (newStatus === "delivered") {
@@ -79,6 +81,7 @@ export async function advanceBatchStatus(
  * logic exactly so the two paths can never diverge.
  */
 export async function advanceOrderStatus(orderId: string, newStatus: DeliveryStatus, slot: MealSlot) {
+  await requireAdmin()
   let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
 
   if (newStatus === "delivered") {

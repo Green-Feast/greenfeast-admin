@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 
 export async function upsertPartner(data: {
   id?: string
@@ -15,6 +16,7 @@ export async function upsertPartner(data: {
   notes?: string
   status: "active" | "inactive"
 }) {
+  await requireAdmin()
   const { id, ...rest } = data
   if (id) {
     const { error } = await supabaseAdmin.from("delivery_partners").update(rest).eq("id", id)
@@ -27,6 +29,7 @@ export async function upsertPartner(data: {
 }
 
 export async function createSignedUploadUrl(partnerId: string, docType: string, fileName: string) {
+  await requireAdmin()
   const ext = fileName.split(".").pop() ?? "pdf"
   const path = `${partnerId}/${docType}.${ext}`
   const { data, error } = await supabaseAdmin.storage
@@ -37,6 +40,7 @@ export async function createSignedUploadUrl(partnerId: string, docType: string, 
 }
 
 export async function saveDocUrl(partnerId: string, docType: string, path: string) {
+  await requireAdmin()
   const field = `${docType}_doc_url`
   const { error } = await supabaseAdmin.from("delivery_partners")
     .update({ [field]: path })
@@ -46,6 +50,7 @@ export async function saveDocUrl(partnerId: string, docType: string, path: strin
 }
 
 export async function getSignedViewUrl(path: string) {
+  await requireAdmin()
   const { data } = await supabaseAdmin.storage
     .from("partner-docs")
     .createSignedUrl(path, 60)
