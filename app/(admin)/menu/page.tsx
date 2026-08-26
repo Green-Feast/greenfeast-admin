@@ -10,7 +10,7 @@ export default async function MenuPage() {
   const [{ data: dishRows }, { data: categoryRows }] = await Promise.all([
     supabaseAdmin
       .from("meal_templates")
-      .select("id, name, category, short_description, description, price, kcal, protein, carbs, fat, tags, image_url, thumb_url, blur_data_url, is_active, menu_visible, subscription_valid")
+      .select("id, name, category, short_description, description, price, kcal, protein, carbs, fat, fibre, tags, image_url, thumb_url, blur_data_url, is_active, menu_visible, subscription_valid")
       .order("category")
       .order("name"),
     supabaseAdmin
@@ -30,6 +30,7 @@ export default async function MenuPage() {
     protein: d.protein,
     carbs: d.carbs,
     fat: d.fat,
+    fibre: d.fibre,
     tags: d.tags ?? [],
     imageUrl: d.image_url,
     thumbUrl: d.thumb_url,

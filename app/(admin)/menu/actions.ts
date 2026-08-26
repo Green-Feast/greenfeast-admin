@@ -35,6 +35,7 @@ export type DishInput = {
   protein: number | null
   carbs: number | null
   fat: number | null
+  fibre: number | null
   tags: string[]
   menu_visible: boolean
   subscription_valid: boolean
@@ -53,6 +54,7 @@ export async function upsertDish(input: DishInput) {
     protein: input.protein,
     carbs: input.carbs,
     fat: input.fat,
+    fibre: input.fibre,
     tags: input.tags,
     menu_visible: input.menu_visible,
     subscription_valid: input.subscription_valid,

@@ -27,6 +27,7 @@ export type Dish = {
   protein: number | null
   carbs: number | null
   fat: number | null
+  fibre: number | null
   tags: string[]
   imageUrl: string | null
   thumbUrl: string | null
@@ -167,7 +168,7 @@ function Toggle({ checked, onChange, label, sublabel }: {
 
 const EMPTY_DISH: DishInput = {
   name: "", category: "", short_description: "", description: "",
-  price_rupees: 0, kcal: null, protein: null, carbs: null, fat: null,
+  price_rupees: 0, kcal: null, protein: null, carbs: null, fat: null, fibre: null,
   tags: [], menu_visible: true, subscription_valid: true,
 }
 
@@ -211,7 +212,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
     setForm({
       id: d.id, name: d.name, category: d.category,
       short_description: d.shortDescription, description: d.description,
-      price_rupees: d.priceRupees, kcal: d.kcal, protein: d.protein, carbs: d.carbs, fat: d.fat,
+      price_rupees: d.priceRupees, kcal: d.kcal, protein: d.protein, carbs: d.carbs, fat: d.fat, fibre: d.fibre,
       tags: d.tags, menu_visible: d.menuVisible, subscription_valid: d.subscriptionValid,
     })
     setPanelOpen(true)
@@ -533,6 +534,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
               <Field label="Protein (g)"><Input type="number" value={form.protein?.toString() ?? ""} onChange={(v) => setForm((f) => ({ ...f, protein: v ? Number(v) : null }))} /></Field>
               <Field label="Carbs (g)"><Input type="number" value={form.carbs?.toString() ?? ""} onChange={(v) => setForm((f) => ({ ...f, carbs: v ? Number(v) : null }))} /></Field>
               <Field label="Fat (g)"><Input type="number" value={form.fat?.toString() ?? ""} onChange={(v) => setForm((f) => ({ ...f, fat: v ? Number(v) : null }))} /></Field>
+              <Field label="Fibre (g)"><Input type="number" value={form.fibre?.toString() ?? ""} onChange={(v) => setForm((f) => ({ ...f, fibre: v ? Number(v) : null }))} /></Field>
             </div>
           </Section>
 
@@ -674,7 +676,7 @@ function mapDishRow(row: any): Dish {
   return {
     id: row.id, name: row.name, category: row.category,
     shortDescription: row.short_description, description: row.description,
-    priceRupees: row.price / 100, kcal: row.kcal, protein: row.protein, carbs: row.carbs, fat: row.fat,
+    priceRupees: row.price / 100, kcal: row.kcal, protein: row.protein, carbs: row.carbs, fat: row.fat, fibre: row.fibre,
     tags: row.tags ?? [], imageUrl: row.image_url, thumbUrl: row.thumb_url, blurDataUrl: row.blur_data_url,
     isActive: row.is_active, menuVisible: row.menu_visible, subscriptionValid: row.subscription_valid,
   }
