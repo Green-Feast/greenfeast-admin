@@ -10,37 +10,48 @@ export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
   // Server actions are independently-callable POST endpoints — the
   // (admin)/layout.tsx gate only protects page navigation, not these.
   await requireAdmin()
-  for (const row of rows) {
-    // Skip temp rows (not yet saved)
-    if (row.id.startsWith("temp-")) {
-      const { error } = await supabaseAdmin
-        .from("weekly_menu")
-        .insert({
-          menu_type: row.menuType,
-          day_of_week: row.dayOfWeek,
-          meal_slot: row.mealSlot,
-          meal_template_id: row.mealTemplateId,
-        })
-      if (error) throw error
-    } else if (row.mealTemplateId) {
-      // Update existing
-      const { error } = await supabaseAdmin
-        .from("weekly_menu")
-        .update({
-          meal_template_id: row.mealTemplateId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", row.id)
-      if (error) throw error
-    } else {
-      // Delete if meal was cleared
-      const { error } = await supabaseAdmin
-        .from("weekly_menu")
-        .delete()
-        .eq("id", row.id)
-      if (error) throw error
-    }
-  }
+  // Independent rows, so run them concurrently rather than one round trip each.
+  await Promise.all(
+    rows.map(async (row) => {
+      if (row.id.startsWith("temp-")) {
+        // Not yet saved
+        const { error } = await supabaseAdmin
+          .from("weekly_menu")
+          .insert({
+            menu_type: row.menuType,
+            day_of_week: row.dayOfWeek,
+            meal_slot: row.mealSlot,
+            meal_template_id: row.mealTemplateId,
+          })
+        if (error) throw error
+      } else if (row.mealTemplateId) {
+        // Update existing
+        const { error } = await supabaseAdmin
+          .from("weekly_menu")
+          .update({
+            meal_template_id: row.mealTemplateId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", row.id)
+        if (error) throw error
+      } else {
+        // Delete if meal was cleared
+        const { error } = await supabaseAdmin
+          .from("weekly_menu")
+          .delete()
+          .eq("id", row.id)
+        if (error) throw error
+      }
+    })
+  )
+}
+
+const ID_CHUNK = 200
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
 }
 
 export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
@@ -48,66 +59,81 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
   const today = istToday()
   let frozen = 0
 
-  // Build a map of (menu_type, day_of_week, meal_slot) → meal_template_id for quick lookup
-  const menuMap: Record<string, string | null> = {}
-  for (const row of rows) {
-    const key = `${row.menuType}-${row.dayOfWeek}-${row.mealSlot}`
-    menuMap[key] = row.mealTemplateId
+  const menuRows = rows.filter((r) => r.mealTemplateId) // Skip cleared entries
+
+  // Subscriptions per menu type — one query each, not one per menu row.
+  // NULL menu_type defaults to M1, so M1 includes IS NULL.
+  const subIdsByType: Record<"M1" | "M2", string[]> = { M1: [], M2: [] }
+  for (const type of ["M1", "M2"] as const) {
+    if (!menuRows.some((r) => r.menuType === type)) continue
+    const { data } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id")
+      .in("status", ["active", "paused"])
+      .or(type === "M1" ? "menu_type.eq.M1,menu_type.is.null" : "menu_type.eq.M2")
+    subIdsByType[type] = (data ?? []).map((s: { id: string }) => s.id)
   }
 
-  // For each modified entry, find future un-swapped orders that match and update them
-  for (const row of rows) {
-    if (!row.mealTemplateId) continue // Skip cleared entries
+  // Future un-swapped orders per (menu type, slot), fetched once and then
+  // matched to each menu row by weekday in memory.
+  type Order = { id: string; delivery_date: string }
+  const ordersByGroup = new Map<string, Order[]>()
+  const groups = new Set(menuRows.map((r) => `${r.menuType}|${r.mealSlot}`))
+  await Promise.all(
+    [...groups].map(async (g) => {
+      const [type, slot] = g.split("|") as ["M1" | "M2", "lunch" | "dinner"]
+      const batches = await Promise.all(
+        chunk(subIdsByType[type], ID_CHUNK).map(async (ids) => {
+          const { data } = await supabaseAdmin
+            .from("orders")
+            .select("id, delivery_date")
+            .in("subscription_id", ids)
+            .eq("meal_slot", slot)
+            .eq("is_customized", false)
+            .gte("delivery_date", today)
+            .in("status", ["scheduled", "confirmed"])
+          return (data ?? []) as Order[]
+        })
+      )
+      ordersByGroup.set(g, batches.flat())
+    })
+  )
 
-    // Fetch all active/paused subscriptions with this menu_type.
-    // NULL menu_type defaults to M1, so include IS NULL when propagating M1 changes.
-    const menuTypeFilter =
-      row.menuType === "M1"
-        ? "menu_type.eq.M1,menu_type.is.null"
-        : "menu_type.eq.M2"
-    const { data: subs } = await supabaseAdmin
-      .from("subscriptions")
-      .select("id, user_id")
-      .in("status", ["active", "paused"])
-      .or(menuTypeFilter)
-
+  // Group the order ids to rewrite by target meal so each meal is one update.
+  const idsByTemplate = new Map<string, string[]>()
+  for (const row of menuRows) {
     // Today's cutoff for this slot may already be behind us (same check the
     // mobile app and is_slot_locked enforce for subscriber edits) — if so,
     // today's already-printed/committed orders for this slot must not be
     // silently rewritten out from under the kitchen. Every other future date
     // is unaffected; only "today, this slot, past its cutoff" is frozen.
     const todayFrozen = isSlotLocked(today, row.mealSlot)
+    for (const order of ordersByGroup.get(`${row.menuType}|${row.mealSlot}`) ?? []) {
+      const deliveryDate = new Date(order.delivery_date + "T00:00:00Z")
+      const orderDow = (deliveryDate.getUTCDay() + 6) % 7 // Convert Sunday=0 to Mon=0
+      if (orderDow !== row.dayOfWeek) continue
 
-    for (const sub of (subs ?? [])) {
-      // Find future un-swapped orders for this subscription matching the day_of_week and meal_slot
-      const { data: orders } = await supabaseAdmin
-        .from("orders")
-        .select("id, delivery_date")
-        .eq("subscription_id", sub.id)
-        .eq("meal_slot", row.mealSlot)
-        .eq("is_customized", false)
-        .gte("delivery_date", today)
-        .in("status", ["scheduled", "confirmed"])
-
-      // For each order, check if its delivery_date matches the menu day_of_week
-      for (const order of (orders ?? []) as Array<{ id: string; delivery_date: string }>) {
-        const deliveryDate = new Date(order.delivery_date + "T00:00:00")
-        const orderDow = (deliveryDate.getUTCDay() + 6) % 7 // Convert Sunday=0 to Mon=0
-        if (orderDow !== row.dayOfWeek) continue
-
-        if (order.delivery_date === today && todayFrozen) {
-          frozen++
-          continue
-        }
-
-        // This order matches; update it
-        await supabaseAdmin
-          .from("orders")
-          .update({ meal_template_id: row.mealTemplateId })
-          .eq("id", order.id)
+      if (order.delivery_date === today && todayFrozen) {
+        frozen++
+        continue
       }
+      const list = idsByTemplate.get(row.mealTemplateId!) ?? []
+      list.push(order.id)
+      idsByTemplate.set(row.mealTemplateId!, list)
     }
   }
+
+  await Promise.all(
+    [...idsByTemplate].flatMap(([templateId, ids]) =>
+      chunk(ids, ID_CHUNK).map(async (part) => {
+        const { error } = await supabaseAdmin
+          .from("orders")
+          .update({ meal_template_id: templateId })
+          .in("id", part)
+        if (error) throw error
+      })
+    )
+  )
 
   // Kick off order creation for any active subscriptions that have no future
   // orders yet (e.g. menu was empty when they signed up). Fire-and-forget so
