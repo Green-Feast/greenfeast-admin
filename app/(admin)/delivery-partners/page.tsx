@@ -1,9 +1,12 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { PartnersClient } from "./partners-client"
 
 export const dynamic = "force-dynamic"
 
 export default async function DeliveryPartnersPage() {
+  await requireAdmin()
+
   const { data: partners, error } = await supabaseAdmin
     .from("delivery_partners")
     .select(

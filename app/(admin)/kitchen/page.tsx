@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { istToday, addDaysISO } from "@/lib/ist"
 import { KitchenClient, type WeeklyMenuRow, type NextMealItem, type WeeklyOverviewRow } from "./kitchen-client"
 
@@ -16,6 +17,8 @@ function getWeekBounds(today: string): { weekStart: string; weekEnd: string } {
 }
 
 export default async function KitchenPage() {
+  await requireAdmin()
+
   const today = istToday()
   const { weekStart, weekEnd } = getWeekBounds(today)
 

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { requireAdmin } from "@/lib/auth"
 import { SubscribersClient, type Subscriber, type DeletedAccount } from "./subscribers-client";
 
 export const dynamic = "force-dynamic";
@@ -6,6 +7,8 @@ export const dynamic = "force-dynamic";
 const STATUS_RANK: Record<string, number> = { active: 0, paused: 1, pending: 2 };
 
 export default async function SubscribersPage() {
+  await requireAdmin()
+
   const { data } = await supabaseAdmin
     .from("subscriptions")
     .select(`

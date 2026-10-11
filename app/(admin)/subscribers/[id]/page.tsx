@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation"
+import { requireAdmin } from "@/lib/auth"
 import Link from "next/link"
 import { ChevronRight } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -9,6 +10,8 @@ export default async function SubscriberProfilePage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  await requireAdmin()
+
   const { id } = await params
 
   // Core row + the two embeds proven to work elsewhere (users, batches).

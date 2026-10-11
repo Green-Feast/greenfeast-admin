@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { UsersClient, type UserRow, type Plan } from "./users-client"
 
 export const dynamic = "force-dynamic"
@@ -15,6 +16,8 @@ type SubRow = {
 }
 
 export default async function UsersPage() {
+  await requireAdmin()
+
   // 1. Auth accounts (the superset — everyone who has ever signed in).
   const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.listUsers({
     page: 1,

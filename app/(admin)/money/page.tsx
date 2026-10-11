@@ -1,10 +1,13 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { requireAdmin } from "@/lib/auth"
 import { istToday } from "@/lib/ist";
 import { MoneyClient, type PaymentRow, type TxRow, type BalanceRow } from "./money-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function MoneyPage() {
+  await requireAdmin()
+
   const today = istToday();
   const monthStart = today.slice(0, 8) + "01";
 

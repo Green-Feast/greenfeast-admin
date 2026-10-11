@@ -185,6 +185,8 @@ export function ProfileClient({
     ? Math.round(subscription.basePrice / Math.max(subscription.mealsTotal, 1))
     : 0
   const addonTotalPerSlot = addons.reduce((s, a) => s + a.price_per_meal, 0)
+  // What a CoD customer owes — same formula markCodPaid charges.
+  const codAmountDue = subscription.basePrice + addonTotalPerSlot * subscription.mealsTotal
   const perDayCost = (baseMealRate + addonTotalPerSlot) * Math.max(slotsPerDay, 1)
 
   // Weekly rotation, indexed by weekly_menu's Mon=0..Sun=6 convention so it
@@ -243,10 +245,13 @@ export function ProfileClient({
               // CoD sub awaiting cash on first delivery — only payment + cancel apply
               <ActionBtn
                 icon={<Banknote className="w-3.5 h-3.5" />}
-                label="Mark payment received"
+                label={`Mark cash received · ${fmtRupees(codAmountDue)}`}
                 color="green"
                 disabled={isPending}
-                onClick={() => run(() => markCodPaid(subscriptionId), "Payment confirmed — plan activated.")}
+                onClick={() => {
+                  if (!window.confirm(`Confirm ${fmtRupees(codAmountDue)} cash was collected? This credits the customer's wallet and activates the plan.`)) return
+                  run(() => markCodPaid(subscriptionId), "Cash recorded — wallet credited and plan activated.")
+                }}
               />
             ) : (
               <>
@@ -307,7 +312,7 @@ export function ProfileClient({
                   {isCodPending && (
                     <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-2 py-1 mt-2 inline-flex items-center gap-1.5">
                       <Banknote className="w-3.5 h-3.5" />
-                      Cash on delivery — awaiting payment on first delivery
+                      Cash on delivery — collect {fmtRupees(codAmountDue)} on first delivery
                     </p>
                   )}
                 </div>

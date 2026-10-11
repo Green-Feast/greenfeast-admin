@@ -1,10 +1,13 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { requireAdmin } from "@/lib/auth"
 import { isWhatsAppConfigured } from "@/lib/notifications";
 import { NotificationsClient, type Audience, type Broadcast } from "./notifications-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function NotificationsPage() {
+  await requireAdmin()
+
   const [{ data: subs }, { data: broadcasts }] = await Promise.all([
     supabaseAdmin
       .from("subscriptions")

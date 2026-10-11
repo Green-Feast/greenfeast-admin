@@ -1,9 +1,12 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { requireAdmin } from "@/lib/auth"
 import { MenuClient, type Dish, type Category } from "./menu-client"
 
 export const dynamic = "force-dynamic"
 
 export default async function MenuPage() {
+  await requireAdmin()
+
   // supabaseAdmin (service role), not the anon client — this page needs
   // archived (is_active=false) rows too, and the anon key has no write
   // policy on meal_templates/categories at all (002_rls.sql / 041).

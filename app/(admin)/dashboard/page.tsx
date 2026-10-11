@@ -1,4 +1,5 @@
 import { Users, Truck, Clock, CreditCard, TrendingUp, ArrowUpRight, ArrowDownLeft } from "lucide-react";
+import { requireAdmin } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { istToday } from "@/lib/ist";
 
@@ -134,6 +135,8 @@ function fmtActivityLabel(reason: string | null): string {
 }
 
 export default async function DashboardPage() {
+  await requireAdmin()
+
   const data = await getDashboardData();
 
   const today = new Date().toLocaleDateString("en-IN", {

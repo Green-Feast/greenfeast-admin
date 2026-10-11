@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { requireAdmin } from "@/lib/auth"
 import { istToday } from "@/lib/ist";
 import { OperationsClient, type OperationsSubscriber } from "./operations-client";
 
@@ -9,6 +10,8 @@ export default async function OperationsPage({
 }: {
   searchParams: Promise<{ date?: string }>;
 }) {
+  await requireAdmin()
+
   const params = await searchParams;
   const date = params.date ?? istToday();
 
