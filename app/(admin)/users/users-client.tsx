@@ -20,6 +20,7 @@ export type UserRow = {
   id: string
   email: string | null
   name: string | null
+  customerCode: string | null
   phone: string | null
   provider: string
   joinedAt: string | null
@@ -160,7 +161,8 @@ export function UsersClient({
       return (
         (u.name ?? "").toLowerCase().includes(q) ||
         (u.email ?? "").toLowerCase().includes(q) ||
-        (u.phone ?? "").includes(q)
+        (u.phone ?? "").includes(q) ||
+        (u.customerCode ?? "").toLowerCase().includes(q)
       )
     })
   }, [initialUsers, search, filter])
@@ -195,7 +197,7 @@ export function UsersClient({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           <input
             type="text"
-            placeholder="Search name, email, or phone..."
+            placeholder="Search name, email, phone or GF-code..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full h-9 pl-9 pr-3 rounded-lg border border-[#e2e8d5] bg-white text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20] transition-colors placeholder:text-gray-400"
@@ -250,7 +252,10 @@ export function UsersClient({
                       )}
                       onClick={() => setSelected(u)}
                     >
-                      <td className="px-4 py-3 font-medium text-[#1A1A1A] whitespace-nowrap">{u.name ?? "—"}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <p className="font-medium text-[#1A1A1A]">{u.name ?? "—"}</p>
+                        {u.customerCode && <p className="font-mono text-xs text-gray-400">{u.customerCode}</p>}
+                      </td>
                       <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
                         {u.email ?? (u.phone ? `+91 ${u.phone}` : "—")}
                       </td>

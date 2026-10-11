@@ -4,7 +4,7 @@ import { UsersClient, type UserRow, type Plan } from "./users-client"
 
 export const dynamic = "force-dynamic"
 
-type PublicUser = { id: string; name: string | null; phone: string | null; onboarded: boolean; created_at: string }
+type PublicUser = { id: string; name: string | null; phone: string | null; onboarded: boolean; created_at: string; customer_code: string | null }
 type SubRow = {
   id: string
   user_id: string
@@ -26,7 +26,7 @@ export default async function UsersPage() {
 
   // 2. App-side profile + subscription data + plan catalogue (for create form).
   const [{ data: publicUsers }, { data: subs }, { data: plans }] = await Promise.all([
-    supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at"),
+    supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code"),
     supabaseAdmin
       .from("subscriptions")
       .select("id, user_id, status, plan_name, deliveries_remaining, payment_method, created_at")
@@ -57,6 +57,7 @@ export default async function UsersPage() {
       id: au.id,
       email: au.email ?? null,
       name: pub?.name ?? metaName ?? null,
+      customerCode: pub?.customer_code ?? null,
       phone: pub?.phone ?? au.phone ?? null,
       provider: (au.app_metadata?.provider as string) ?? "email",
       joinedAt: au.created_at ?? null,

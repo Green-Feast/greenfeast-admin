@@ -23,7 +23,7 @@ export default async function SubscriberProfilePage({
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, menu_type, meals_lunch, meals_dinner,
       special_notes, meals_per_day, delivery_mode, batch_id_lunch, batch_id_dinner, created_at,
-      users ( id, name, phone, created_at ),
+      users ( id, name, phone, created_at, customer_code ),
       batchLunch:batches!subscriptions_batch_id_lunch_fkey ( id, name ),
       batchDinner:batches!subscriptions_batch_id_dinner_fkey ( id, name )
     `)
@@ -123,6 +123,7 @@ export default async function SubscriberProfilePage({
         }}
         user={{
           name: userName,
+          code: (user as any).customer_code ?? "",
           phone: (user as any).phone ?? "",
           createdAt: (user as any).created_at,
         }}

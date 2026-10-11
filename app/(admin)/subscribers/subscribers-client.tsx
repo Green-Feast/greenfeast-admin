@@ -503,7 +503,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return initialSubscribers.filter((s) => {
-      if (q && !s.name.toLowerCase().includes(q) && !s.phone.includes(q)) return false;
+      if (q && !s.name.toLowerCase().includes(q) && !s.phone.includes(q) && !s.code.toLowerCase().includes(q)) return false;
       if (batchFilter !== "All" && s.batchLunch !== batchFilter && s.batchDinner !== batchFilter) return false;
       if (statusFilter !== "All" && s.status !== statusFilter) return false;
       if (planFilter !== "All" && s.plan !== planFilter) return false;
@@ -636,7 +636,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           <input
             type="text"
-            placeholder="Search by name or phone..."
+            placeholder="Search by name, phone or GF-code..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full h-9 pl-9 pr-3 rounded-lg border border-[#e2e8d5] bg-white text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20] transition-colors placeholder:text-gray-400"

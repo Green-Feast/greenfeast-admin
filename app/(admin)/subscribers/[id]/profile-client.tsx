@@ -48,7 +48,7 @@ type Subscription = {
   deliveryDays: string[]
 }
 
-type User = { name: string; phone: string; createdAt: string }
+type User = { name: string; code: string; phone: string; createdAt: string }
 
 type Payment = {
   id: string
@@ -217,6 +217,7 @@ export function ProfileClient({
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
             <h1 className="text-2xl font-bold text-[#1A1A1A]">{user.name}</h1>
+            {user.code && <span className="font-mono text-sm text-gray-400">{user.code}</span>}
             <span className={cn(
               "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize",
               STATUS_STYLES[subscription.status] ?? "bg-gray-100 text-gray-600 border-gray-200"

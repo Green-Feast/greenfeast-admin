@@ -25,7 +25,7 @@ export default async function SubscribersPage() {
       delivery_mode,
       special_notes,
       created_at,
-      users ( name, phone, created_at ),
+      users ( name, phone, created_at, customer_code ),
       batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
       batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name ),
       plans ( meals_total )
@@ -107,7 +107,7 @@ export default async function SubscribersPage() {
     return {
       id: s.id,
       userId: s.user_id,
-      code: `APP/${s.id.slice(0, 6).toUpperCase()}`,
+      code: (user as any)?.customer_code ?? `APP/${s.id.slice(0, 6).toUpperCase()}`,
       batchLunch: (batchLunch as any)?.name ?? "Unassigned",
       batchDinner: (batchDinner as any)?.name ?? "Unassigned",
       rc: "C" as const,
