@@ -160,6 +160,17 @@ export async function markCodPaid(subId: string) {
     .eq("id", subId)
     .eq("status", "pending")
 
+  // A new plan after the old one ran out: close the finished plan and take
+  // over its delivery batches (the new plan's orders were created at signup,
+  // before it had any, so sync them too).
+  const { data: retired } = await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
+  if ((retired ?? 0) > 0) {
+    const { data: now } = await supabaseAdmin
+      .from("subscriptions").select("batch_id_lunch, batch_id_dinner").eq("id", subId).single()
+    if (now?.batch_id_lunch) await syncFutureOrdersBatch(subId, now.batch_id_lunch, "lunch")
+    if (now?.batch_id_dinner) await syncFutureOrdersBatch(subId, now.batch_id_dinner, "dinner")
+  }
+
   await supabaseAdmin.from("notifications").insert({
     user_id: userId,
     title: "Payment received",
