@@ -9,6 +9,19 @@ export const dynamic = "force-dynamic";
 export default async function MoneyPage() {
   await requireAdmin()
 
+  // Settle pending bank refunds by asking Cashfree (refund events aren't
+  // available on our webhook settings). Best-effort, capped at a few seconds.
+  await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/admin-refund`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
+      apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ action: "sync" }),
+    signal: AbortSignal.timeout(6000),
+  }).catch(() => {});
+
   const today = istToday();
   const monthStart = today.slice(0, 8) + "01";
 

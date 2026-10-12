@@ -155,15 +155,18 @@ export async function markCodPaid(subId: string) {
     .eq("status", "delivered")
   const used = ((delivered as { quantity: number | null }[]) ?? []).reduce((s, o) => s + (o.quantity ?? 1), 0)
 
+  // A new plan after the old one ran out: close the finished plan first (one
+  // live plan per customer, migration 049) and take over its delivery batches
+  // (this plan's orders were created at signup, before it had any, so they're
+  // synced below).
+  const { data: retired } = await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
+
   await supabaseAdmin.from("subscriptions")
     .update({ status: "active", deliveries_remaining: Math.max(plan.meals_total - used, 0) })
     .eq("id", subId)
     .eq("status", "pending")
 
-  // A new plan after the old one ran out: close the finished plan and take
-  // over its delivery batches (the new plan's orders were created at signup,
-  // before it had any, so sync them too).
-  const { data: retired } = await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
+  // (batches inherited from a retired plan — see above)
   if ((retired ?? 0) > 0) {
     const { data: now } = await supabaseAdmin
       .from("subscriptions").select("batch_id_lunch, batch_id_dinner").eq("id", subId).single()
