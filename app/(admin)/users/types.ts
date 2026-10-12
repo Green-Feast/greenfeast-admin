@@ -13,6 +13,13 @@ export type CreateSubInput = {
   mealsDinner: number
   deliveryMode: "opt-in" | "opt-out"
   activation: "active" | "cod"
+  // "active" = already paid outside the app (e.g. an existing customer moving
+  // over from the spreadsheet): how many meals they still have and how much
+  // to put in their wallet to pay for them.
+  startDate?: string // YYYY-MM-DD, first delivery; default tomorrow
+  mealsLeft?: number
+  walletCredit?: number // paise
+  addonIds?: string[]
   address?: {
     label: string
     type: string

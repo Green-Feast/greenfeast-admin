@@ -34,6 +34,8 @@ export type UserRow = {
   paymentMethod: string | null
 }
 
+export type AddonOption = { id: string; name: string; price_per_meal: number }
+
 export type Plan = {
   id: string
   name: string
@@ -94,10 +96,11 @@ function matchesFilter(u: UserRow, filter: string) {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function UsersClient({
-  initialUsers, plans, loadError,
+  initialUsers, plans, addons, loadError,
 }: {
   initialUsers: UserRow[]
   plans: Plan[]
+  addons: AddonOption[]
   loadError: boolean
 }) {
   const router = useRouter()
@@ -322,6 +325,7 @@ export function UsersClient({
         <CreateSubModal
           user={selected}
           plans={plans}
+          addons={addons}
           isPending={isPending}
           onClose={() => setCreateOpen(false)}
           onSubmit={(input) => run(() => createSubscription(input), "Subscription created.", { closePanel: true })}
@@ -479,10 +483,11 @@ function DetailPanel({
 // ─── Create subscription modal ─────────────────────────────────────────────────
 
 function CreateSubModal({
-  user, plans, isPending, onClose, onSubmit,
+  user, plans, addons, isPending, onClose, onSubmit,
 }: {
   user: UserRow
   plans: Plan[]
+  addons: AddonOption[]
   isPending: boolean
   onClose: () => void
   onSubmit: (input: CreateSubInput) => void
@@ -493,6 +498,23 @@ function CreateSubModal({
   const [mealsDinner, setMealsDinner] = useState(0)
   const [deliveryMode, setDeliveryMode] = useState<"opt-in" | "opt-out">("opt-out")
   const [activation, setActivation] = useState<"active" | "cod">("active")
+  // First delivery: tomorrow (IST) by default, so a customer moved over today
+  // isn't delivered twice by the old process and the app.
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date(Date.now() + 5.5 * 3600 * 1000 + 24 * 3600 * 1000)
+    return d.toISOString().slice(0, 10)
+  })
+  const plan = plans.find((p) => p.id === planId)
+  const [mealsLeft, setMealsLeft] = useState(plans[0]?.meals_total ?? 1)
+  const [addonIds, setAddonIds] = useState<string[]>([])
+  const [credit, setCredit] = useState("") // ₹, empty = suggested
+  // Billing is per delivered meal: plan price ÷ meals, plus add-ons per meal.
+  const perMeal = plan
+    ? Math.round(plan.base_price / Math.max(plan.meals_total, 1))
+      + addonIds.reduce((s, id) => s + (addons.find((a) => a.id === id)?.price_per_meal ?? 0), 0)
+    : 0
+  const suggestedCredit = perMeal * mealsLeft
+  const creditPaise = credit.trim() ? Math.round((parseFloat(credit) || 0) * 100) : suggestedCredit
 
   const [name, setName] = useState(user.name ?? "")
   const [phone, setPhone] = useState(user.phone ?? "")
@@ -507,6 +529,7 @@ function CreateSubModal({
 
   const needsProfile = !user.hasPublicRow
   const valid = planId && days.length > 0 && mealsLunch + mealsDinner >= 1 && (!needsProfile || phone.trim())
+    && (activation === "cod" || (mealsLeft >= 1 && creditPaise >= 0))
 
   function submit() {
     onSubmit({
@@ -521,6 +544,10 @@ function CreateSubModal({
       deliveryMode,
       activation,
       address: line1.trim() ? { label: "Home", type: "home", line1, pincode, landmark } : undefined,
+      startDate,
+      mealsLeft: activation === "active" ? mealsLeft : undefined,
+      walletCredit: activation === "active" ? creditPaise : undefined,
+      addonIds,
     })
   }
 
@@ -544,7 +571,14 @@ function CreateSubModal({
         )}
 
         <Field label="Plan">
-          <select value={planId} onChange={(e) => setPlanId(e.target.value)} className={inputCls}>
+          <select
+            value={planId}
+            onChange={(e) => {
+              setPlanId(e.target.value)
+              setMealsLeft(plans.find((p) => p.id === e.target.value)?.meals_total ?? 1)
+            }}
+            className={inputCls}
+          >
             {plans.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name} · {fmtRupees(p.base_price)} · {p.meals_total} meals
@@ -579,6 +613,10 @@ function CreateSubModal({
           <Field label="Dinners / day"><Stepper value={mealsDinner} setValue={setMealsDinner} /></Field>
         </div>
 
+        <Field label="First delivery date">
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputCls} />
+        </Field>
+
         <Field label="Delivery mode">
           <div className="flex gap-2">
             <RadioPill on={deliveryMode === "opt-out"} onClick={() => setDeliveryMode("opt-out")} label="Opt-out (skip anytime)" />
@@ -594,12 +632,68 @@ function CreateSubModal({
           </div>
         </Field>
 
-        <Field label="Activation">
+        {addons.length > 0 && (
+          <Field label="Add-ons (every meal)">
+            <div className="flex flex-wrap gap-2">
+              {addons.map((a) => {
+                const on = addonIds.includes(a.id)
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setAddonIds((prev) => (on ? prev.filter((x) => x !== a.id) : [...prev, a.id]))}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                      on ? "bg-[#1B5E20] text-white border-[#1B5E20]" : "bg-white text-gray-600 border-[#e2e8d5] hover:bg-gray-50"
+                    )}
+                  >
+                    {a.name} +{fmtRupees(a.price_per_meal)}
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+        )}
+
+        <Field label="Payment">
           <div className="flex gap-2">
-            <RadioPill on={activation === "active"} onClick={() => setActivation("active")} label="Activate now (mark paid)" />
+            <RadioPill on={activation === "active"} onClick={() => setActivation("active")} label="Already paid (existing customer)" />
             <RadioPill on={activation === "cod"} onClick={() => setActivation("cod")} label="Cash on delivery" />
           </div>
         </Field>
+
+        {activation === "active" && (
+          <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-[#F9FBF7] border border-[#e2e8d5]">
+            <Field label="Meals left">
+              <input
+                type="number"
+                min={1}
+                value={mealsLeft}
+                onChange={(e) => setMealsLeft(Math.max(0, parseInt(e.target.value || "0", 10)))}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Wallet credit (₹)">
+              <input
+                inputMode="decimal"
+                value={credit}
+                onChange={(e) => setCredit(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder={(suggestedCredit / 100).toFixed(2)}
+                className={inputCls}
+              />
+            </Field>
+            <p className="col-span-2 text-xs text-gray-500">
+              Meals are paid from the wallet when delivered: {fmtRupees(perMeal)} per meal here, so {mealsLeft} meals need{" "}
+              <span className="font-medium text-[#1A1A1A]">{fmtRupees(suggestedCredit)}</span>. Leave it blank to use that.
+              {creditPaise < suggestedCredit && (
+                <span className="block mt-1 text-amber-700">
+                  Less than that covers only about {perMeal > 0 ? Math.floor(creditPaise / perMeal) : 0} meals — the rest would be skipped
+                  for low balance. If they got a discount, still credit the full {fmtRupees(suggestedCredit)}.
+                </span>
+              )}
+            </p>
+          </div>
+        )}
       </div>
 
       <ModalFooter>

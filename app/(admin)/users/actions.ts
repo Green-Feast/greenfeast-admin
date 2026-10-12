@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
+import { notifyUsers } from "@/lib/notifications"
 import type { CreateSubInput } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,11 +68,22 @@ export async function createSubscription(
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, deliveryMode, activation, address,
+    mealsLeft, walletCredit, addonIds, startDate,
   } = input
 
   if (!planId) return { ok: false, error: "Pick a plan." }
   if (!days || days.length === 0) return { ok: false, error: "Select at least one delivery day." }
   if (mealsLunch + mealsDinner < 1) return { ok: false, error: "Set at least one meal per day." }
+  if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return { ok: false, error: "Pick a valid first delivery date." }
+  const isCod = activation === "cod"
+  if (!isCod) {
+    if (!Number.isInteger(mealsLeft) || (mealsLeft as number) < 1 || (mealsLeft as number) > 500) {
+      return { ok: false, error: "Meals left must be between 1 and 500." }
+    }
+    if (!Number.isInteger(walletCredit) || (walletCredit as number) < 0 || (walletCredit as number) > 20_000_000) {
+      return { ok: false, error: "Wallet credit must be between ₹0 and ₹2,00,000." }
+    }
+  }
 
   // 1. Ensure a public.users row exists (phone is NOT NULL UNIQUE).
   if (!hasPublicRow) {
@@ -107,8 +119,6 @@ export async function createSubscription(
     if (addrErr) return { ok: false, error: `Address: ${addrErr.message}` }
   }
 
-  const isCod = activation === "cod"
-
   // 4. Create the subscription row.
   const { data: sub, error: subErr } = await supabaseAdmin
     .from("subscriptions")
@@ -122,17 +132,32 @@ export async function createSubscription(
       meals_per_day: mealsLunch + mealsDinner,
       meals_lunch: mealsLunch,
       meals_dinner: mealsDinner,
-      deliveries_remaining: isCod ? 0 : plan.meals_total,
+      deliveries_remaining: isCod ? 0 : (mealsLeft as number),
+      // Orders start from here (instantiate-orders) — lets the app take over
+      // from a chosen day without doubling up with the old process.
+      start_date: startDate || null,
     })
     .select("id")
     .single()
-  if (subErr || !sub) return { ok: false, error: subErr?.message ?? "Could not create subscription." }
+  if (subErr || !sub) {
+    // subscriptions_one_live_plan_per_user (migration 049)
+    if (subErr?.code === "23505") return { ok: false, error: "This customer already has an active or paused plan." }
+    return { ok: false, error: subErr?.message ?? "Could not create subscription." }
+  }
+
+  if (addonIds && addonIds.length > 0) {
+    const { error: addonErr } = await supabaseAdmin.from("subscription_addons").insert(
+      addonIds.map((id) => ({ subscription_id: sub.id, addon_id: id }))
+    )
+    if (addonErr) return { ok: false, error: `Plan created, but add-ons failed: ${addonErr.message}` }
+  }
 
   // 5. Schedule — assign a starter meal to each selected day.
   const { data: starter } = await supabaseAdmin
     .from("meal_templates")
     .select("id")
     .eq("is_active", true)
+    .eq("subscription_valid", true)
     .order("category")
     .limit(1)
     .single()
@@ -153,17 +178,38 @@ export async function createSubscription(
   )
   await supabaseAdmin.from("users").update({ onboarded: true }).eq("id", userId)
 
-  // 7. Activated-now subs log a paid payment for history.
-  if (!isCod) {
+  // 7. Already paid outside the app: record it and put the money in the wallet.
+  //    Meals are billed from the wallet at delivery and the 8 AM / 1 PM check
+  //    skips meals it can't cover, so without this credit every meal of a
+  //    customer moved over from the spreadsheet would be skipped.
+  if (!isCod && (walletCredit as number) > 0) {
     const { error: payErr } = await supabaseAdmin.from("payments").insert({
       user_id: userId,
       subscription_id: sub.id,
-      amount: plan.base_price,
+      amount: walletCredit,
       status: "paid",
     })
-    // Non-fatal (the subscription is already created and usable) but must not
-    // be silent — this row is the revenue record.
     if (payErr) console.error("createSubscription: payment record failed:", payErr.message)
+
+    const { error: creditErr } = await supabaseAdmin.rpc("wallet_credit", {
+      p_user: userId,
+      p_amount: walletCredit,
+      p_reason: "Opening balance — moved from previous records",
+      p_reference_id: sub.id,
+    })
+    if (creditErr) return { ok: false, error: `Plan created, but the wallet credit failed: ${creditErr.message}` }
+  }
+
+  if (!isCod) {
+    const { data: who } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
+    const rupees = `₹${((walletCredit as number) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+    await notifyUsers(
+      [{ user_id: userId, name: who?.name ?? "Customer", phone: who?.phone ?? null }],
+      "Your GreenFeast plan is ready",
+      `${mealsLeft} meals are set up in the app${(walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : ""}. Manage meals, skips and deliveries from My Plan.`,
+      "custom",
+      ["push"]
+    )
   }
 
   // 8. Generate the next 14 days of orders (active + CoD-pending are eligible).

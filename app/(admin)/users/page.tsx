@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
-import { UsersClient, type UserRow, type Plan } from "./users-client"
+import { UsersClient, type UserRow, type Plan, type AddonOption } from "./users-client"
 
 export const dynamic = "force-dynamic"
 
@@ -25,7 +25,7 @@ export default async function UsersPage() {
   })
 
   // 2. App-side profile + subscription data + plan catalogue (for create form).
-  const [{ data: publicUsers }, { data: subs }, { data: plans }] = await Promise.all([
+  const [{ data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }] = await Promise.all([
     supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code"),
     supabaseAdmin
       .from("subscriptions")
@@ -36,6 +36,7 @@ export default async function UsersPage() {
       .select("id, name, meals_total, days_per_week, base_price")
       .eq("is_active", true)
       .order("base_price"),
+    supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
   ])
 
   const publicById = new Map<string, PublicUser>()
@@ -77,5 +78,12 @@ export default async function UsersPage() {
 
   const planList = (plans ?? []) as Plan[]
 
-  return <UsersClient initialUsers={rows} plans={planList} loadError={!!authErr} />
+  return (
+    <UsersClient
+      initialUsers={rows}
+      plans={planList}
+      addons={(addonRows ?? []) as AddonOption[]}
+      loadError={!!authErr}
+    />
+  )
 }
