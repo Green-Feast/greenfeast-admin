@@ -16,9 +16,12 @@ export type CreateSubInput = {
   // "active" = already paid outside the app (e.g. an existing customer moving
   // over from the spreadsheet): how many meals they still have and how much
   // to put in their wallet to pay for them.
+  // "cod" = cash on delivery: walletCredit is what they paid upfront (can be
+  // 0) and cashDue what's still to collect; meals run on credit until then.
   startDate?: string // YYYY-MM-DD, first delivery; default tomorrow
   mealsLeft?: number
   walletCredit?: number // paise
+  cashDue?: number // paise, cash on delivery only
   addonIds?: string[]
   address?: {
     label: string

@@ -1,51 +1,45 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Loader2, ChevronDown, X, ArrowRight } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Loader2, ChevronDown, X, ChevronLeft, ChevronRight, Pin, Plus } from "lucide-react"
 import { supabase } from "@/lib/supabase"
-import { istToday } from "@/lib/ist"
+import { istToday, addDaysISO } from "@/lib/ist"
+import { cn } from "@/lib/utils"
+import { OrderEditor, type EditorTarget } from "@/components/order-editor"
 import {
   updateWeeklyMenu,
   propagateMenuChanges,
-  swapMealForOrder,
   saveDailyAvailability,
   saveDailySpecials,
 } from "./actions"
 
+// One weekly menu for everyone (the M1/M2 tracks merged in migration 052).
 export type WeeklyMenuRow = {
   id: string
-  menuType: "M1" | "M2"
   dayOfWeek: number
   mealSlot: "lunch" | "dinner"
   mealTemplateId: string | null
   mealName: string | null
 }
 
-export type NextMealItem = {
-  orderId: string
-  subscriptionId: string
-  menuType: "M1" | "M2"
-  userName: string
+export type CellItem = {
   mealName: string
-  deliveryDate: string
-  mealSlot: "lunch" | "dinner"
-}
-
-export type WeeklyOverviewCell = {
-  mealName: string
-  slot: string
-  dow: string
-  dowNum: number
   quantity: number
-  isCustomized: boolean
+  status: string
+  skipReason: string | null
+  extra: boolean
+  customized: boolean
   addons: string[]
 }
 
 export type WeeklyOverviewRow = {
   subscriptionId: string
+  userId: string
   userName: string
-  menuType: string
-  days: Record<string, WeeklyOverviewCell>
+  fixed: string[]
+  // "YYYY-MM-DD|lunch" → every order in that slot (base, extras, skipped…)
+  cells: Record<string, CellItem[]>
 }
 
 type MealTemplate = {
@@ -63,39 +57,34 @@ type AddonTemplate = {
 // day_of_week convention: 0=Mon, 1=Tue, ..., 6=Sun (matches propagateMenuChanges + instantiate-orders)
 const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-// Today's day-of-week in Mon=0 convention (used to grey out past days)
-function todayDow(): number {
-  return (new Date().getDay() + 6) % 7
-}
-
 const GRIDS = [
-  { menuType: "M1" as const, slot: "lunch" as const, label: "M1 — Lunch" },
-  { menuType: "M1" as const, slot: "dinner" as const, label: "M1 — Dinner" },
-  { menuType: "M2" as const, slot: "lunch" as const, label: "M2 — Lunch" },
-  { menuType: "M2" as const, slot: "dinner" as const, label: "M2 — Dinner" },
+  { slot: "lunch" as const, label: "Lunch" },
+  { slot: "dinner" as const, label: "Dinner" },
 ]
+
+function shortDate(iso: string) {
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" })
+}
 
 export function KitchenClient({
   initialRows,
-  initialNextMeals,
   weeklyOverview,
-  weekDates,
+  week,
+  catalogue,
 }: {
   initialRows: WeeklyMenuRow[]
-  initialNextMeals: NextMealItem[]
   weeklyOverview: WeeklyOverviewRow[]
-  weekDates: { weekStart: string; weekEnd: string }
+  week: { start: string; end: string; today: string }
+  catalogue: { meals: { id: string; name: string; category: string }[]; addons: { id: string; name: string; price_per_meal: number }[] }
 }) {
+  const router = useRouter()
   const [rows, setRows] = useState(initialRows)
-  const [nextMeals, setNextMeals] = useState(initialNextMeals)
   const [meals, setMeals] = useState<MealTemplate[]>([])
   const [addons, setAddons] = useState<AddonTemplate[]>([])
   const [saving, setSaving] = useState(false)
   const [openPicker, setOpenPicker] = useState<string | null>(null)
-  const [swappingOrder, setSwappingOrder] = useState<string | null>(null)
-  const [swapping, setSwapping] = useState(false)
   const [toast, setToast] = useState("")
-  const [currentDow] = useState(todayDow)
+  const [editing, setEditing] = useState<EditorTarget | null>(null)
 
   // "Today's kitchen" — per-date availability + specials
   const [availDate, setAvailDate] = useState(istToday)
@@ -184,36 +173,30 @@ export function KitchenClient({
     setTimeout(() => setToast(""), 3000)
   }
 
-  function rowKey(menuType: "M1" | "M2", dayOfWeek: number, slot: "lunch" | "dinner") {
-    return `${menuType}-${dayOfWeek}-${slot}`
+  function rowKey(dayOfWeek: number, slot: "lunch" | "dinner") {
+    return `${dayOfWeek}-${slot}`
   }
 
-  function getRow(menuType: "M1" | "M2", dayOfWeek: number, slot: "lunch" | "dinner") {
-    return rows.find(
-      (r) => r.menuType === menuType && r.dayOfWeek === dayOfWeek && r.mealSlot === slot
-    )
+  function getRow(dayOfWeek: number, slot: "lunch" | "dinner") {
+    return rows.find((r) => r.dayOfWeek === dayOfWeek && r.mealSlot === slot)
   }
 
-  function handleSelectMeal(
-    menuType: "M1" | "M2",
-    dayOfWeek: number,
-    slot: "lunch" | "dinner",
-    mealId: string,
-    mealName: string
-  ) {
-    const existing = getRow(menuType, dayOfWeek, slot)
+  function handleSelectMeal(dayOfWeek: number, slot: "lunch" | "dinner", mealId: string, mealName: string) {
+    const existing = getRow(dayOfWeek, slot)
     if (existing && existing.mealTemplateId === mealId) { setOpenPicker(null); return }
     setOpenPicker(null)
     const updated = existing
       ? rows.map((r) => r.id === existing.id ? { ...r, mealTemplateId: mealId, mealName } : r)
-      : [...rows, { id: `temp-${Date.now()}`, menuType, dayOfWeek, mealSlot: slot, mealTemplateId: mealId, mealName } as WeeklyMenuRow]
+      : [...rows, { id: `temp-${Date.now()}`, dayOfWeek, mealSlot: slot, mealTemplateId: mealId, mealName } as WeeklyMenuRow]
     setRows(updated)
   }
 
-  function handleClear(menuType: "M1" | "M2", dayOfWeek: number, slot: "lunch" | "dinner") {
-    const existing = getRow(menuType, dayOfWeek, slot)
+  // Kept in the list with no dish so Save deletes it (it used to vanish from
+  // state and never reach the server).
+  function handleClear(dayOfWeek: number, slot: "lunch" | "dinner") {
+    const existing = getRow(dayOfWeek, slot)
     if (!existing) return
-    setRows(rows.filter((r) => r.id !== existing.id))
+    setRows(rows.map((r) => r.id === existing.id ? { ...r, mealTemplateId: null, mealName: null } : r))
   }
 
   async function handleSave() {
@@ -221,6 +204,8 @@ export function KitchenClient({
     try {
       await updateWeeklyMenu(rows)
       const { frozen } = await propagateMenuChanges(rows)
+      setRows((prev) => prev.filter((r) => r.mealTemplateId))
+      router.refresh()
       showToast(
         frozen > 0
           ? `Menu saved. ${frozen} of today's orders already past cutoff — left unchanged.`
@@ -231,21 +216,6 @@ export function KitchenClient({
       console.error(e)
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function handleSwapMeal(orderId: string, mealId: string, mealName: string) {
-    setSwapping(true)
-    try {
-      await swapMealForOrder(orderId, mealId)
-      setNextMeals(nextMeals.map(m => m.orderId === orderId ? { ...m, mealName } : m))
-      setSwappingOrder(null)
-      showToast("Meal swapped")
-    } catch (e: any) {
-      showToast("Swap failed. Try again.")
-      console.error(e)
-    } finally {
-      setSwapping(false)
     }
   }
 
@@ -294,44 +264,32 @@ export function KitchenClient({
     }
   }
 
+  const days = DOW_NAMES.map((_, i) => addDaysISO(week.start, i))
+
   return (
     <>
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Kitchen Menu</h1>
-        <p className="text-gray-600">Set M1 and M2 menus for each day. Changes apply to future un-swapped orders.</p>
+        <p className="text-gray-600">One weekly menu for every subscriber. Changes apply to future meals nobody has changed.</p>
       </div>
 
-      {/* 4 grids: M1 Lunch, M1 Dinner, M2 Lunch, M2 Dinner */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
-        {GRIDS.map(({ menuType, slot, label }) => (
-          <div key={label} className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-xs font-bold">
-                {menuType}
-              </span>
-              <span className="capitalize text-gray-700">{slot}</span>
-            </h2>
+        {GRIDS.map(({ slot, label }) => (
+          <div key={slot} className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="text-base font-bold text-gray-900 mb-4">{label}</h2>
 
             <div className="space-y-1.5">
               {DOW_NAMES.map((dow, dayOfWeek) => {
-                const isPast = dayOfWeek < currentDow
-                const row = getRow(menuType, dayOfWeek, slot)
-                const pickerKey = rowKey(menuType, dayOfWeek, slot)
+                const row = getRow(dayOfWeek, slot)
+                const pickerKey = rowKey(dayOfWeek, slot)
                 const isOpen = openPicker === pickerKey
 
                 return (
-                  <div
-                    key={dow}
-                    className={`relative flex items-center gap-3 p-2.5 rounded-lg border ${
-                      isPast ? "border-gray-100 bg-gray-50/50 opacity-50" : "border-gray-100 bg-gray-50"
-                    }`}
-                  >
-                    <span className={`w-8 shrink-0 text-xs font-semibold ${isPast ? "text-gray-400" : "text-gray-600"}`}>
-                      {dow}
-                    </span>
+                  <div key={dow} className="relative flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 bg-gray-50">
+                    <span className="w-8 shrink-0 text-xs font-semibold text-gray-600">{dow}</span>
 
                     <div className="flex-1 min-w-0">
-                      {row ? (
+                      {row?.mealTemplateId ? (
                         <span className="text-sm font-medium text-gray-900 truncate block">{row.mealName}</span>
                       ) : (
                         <span className="text-sm text-gray-400">— not set —</span>
@@ -340,15 +298,14 @@ export function KitchenClient({
 
                     <div className="flex gap-1 shrink-0">
                       <button
-                        disabled={isPast}
                         onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
-                        className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition disabled:cursor-not-allowed"
+                        className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
                       >
                         <ChevronDown size={13} />
                       </button>
-                      {row && !isPast && (
+                      {row?.mealTemplateId && (
                         <button
-                          onClick={() => handleClear(menuType, dayOfWeek, slot)}
+                          onClick={() => handleClear(dayOfWeek, slot)}
                           className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
                         >
                           <X size={13} />
@@ -364,7 +321,7 @@ export function KitchenClient({
                         {meals.filter((m) => m.subscriptionValid).map((meal) => (
                           <button
                             key={meal.id}
-                            onClick={() => handleSelectMeal(menuType, dayOfWeek, slot, meal.id, meal.name)}
+                            onClick={() => handleSelectMeal(dayOfWeek, slot, meal.id, meal.name)}
                             className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-green-50 border-b border-gray-100 last:border-0"
                           >
                             {meal.name}{" "}
@@ -548,59 +505,37 @@ export function KitchenClient({
         </div>
       </div>
 
-      {/* Next meal per user */}
+      {/* Weekly calendar — every subscriber's meals, editable cell by cell */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Next meal per user</h2>
-
-        {nextMeals.length === 0 ? (
-          <p className="text-gray-500 text-sm">No upcoming orders</p>
-        ) : (
-          <div className="space-y-2">
-            {nextMeals.map((item) => {
-              const fmtDate = new Date(item.deliveryDate + "T00:00:00").toLocaleDateString("en-IN", {
-                weekday: "short", month: "short", day: "numeric",
-              })
-              return (
-                <div key={item.orderId} className="flex items-center justify-between p-3 border border-gray-100 rounded-lg bg-gray-50">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center justify-center w-7 h-7 rounded bg-[#E8F5E9] text-[#1B5E20] text-xs font-bold shrink-0">
-                        {item.menuType}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="font-medium text-gray-900 text-sm truncate">{item.userName}</div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {item.mealName} · <span className="capitalize">{item.mealSlot}</span> · {fmtDate}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setSwappingOrder(item.orderId)}
-                    className="ml-3 px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:border-[#1B5E20] hover:text-[#1B5E20] text-sm font-medium transition flex items-center gap-1 shrink-0"
-                  >
-                    Swap <ArrowRight size={14} />
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Weekly subscriber meal overview */}
-      <div className="mt-8 bg-white rounded-xl border border-gray-200 p-6">
         <div className="mb-5 flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">This week's orders</h2>
+            <h2 className="text-xl font-bold text-gray-900">Subscriber calendar</h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              {new Date(weekDates.weekStart + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-              {" – "}
-              {new Date(weekDates.weekEnd + "T00:00:00Z").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+              {shortDate(week.start)} – {shortDate(week.end)} · click any meal to change the dish, portions, add-ons,
+              address, skip it, or set a dish for every day.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push(`/kitchen?week=${addDaysISO(week.start, -7)}`)}
+              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+              title="Previous week"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => router.push("/kitchen")}
+              className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm hover:bg-gray-50"
+            >
+              This week
+            </button>
+            <button
+              onClick={() => router.push(`/kitchen?week=${addDaysISO(week.start, 7)}`)}
+              className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+              title="Next week"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#E8F5E9] text-[#1B5E20] text-sm font-semibold">
               {weeklyOverview.length} subscriber{weeklyOverview.length !== 1 ? "s" : ""}
             </span>
@@ -608,108 +543,63 @@ export function KitchenClient({
         </div>
 
         {weeklyOverview.length === 0 ? (
-          <p className="text-gray-500 text-sm">No orders found for this week.</p>
+          <p className="text-gray-500 text-sm">No subscribers this week.</p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-100">
-            <table className="w-full text-xs border-collapse min-w-[700px]">
+            <table className="w-full text-xs border-collapse min-w-[900px]">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-left font-semibold text-gray-600 py-2.5 px-3 whitespace-nowrap w-36">Subscriber</th>
-                  {DOW_NAMES.map((d) => (
-                    <th key={d} className="text-center font-semibold text-gray-600 py-2.5 px-1 w-[13%]">{d}</th>
+                  <th className="text-left font-semibold text-gray-600 py-2.5 px-3 whitespace-nowrap w-40">Subscriber</th>
+                  {days.map((d, i) => (
+                    <th key={d} className={cn("text-center font-semibold py-2.5 px-1 w-[12%]", d === week.today ? "text-[#1B5E20]" : "text-gray-600")}>
+                      {DOW_NAMES[i]} <span className="font-normal text-gray-400">{shortDate(d)}</span>
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {weeklyOverview.map((sub, idx) => (
-                  <tr key={sub.subscriptionId} className={`border-b border-gray-100 last:border-0 hover:bg-green-50/30 transition-colors ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                  <tr key={sub.subscriptionId} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 1 ? "bg-gray-50/40" : ""}`}>
                     <td className="py-2.5 px-3 align-top">
-                      <div className="font-semibold text-gray-900 truncate max-w-[8rem]">{sub.userName}</div>
-                      <span className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-[#E8F5E9] text-[#1B5E20] text-[10px] font-bold mt-1">
-                        {sub.menuType}
-                      </span>
+                      <div className="font-semibold text-gray-900 truncate max-w-[9rem]">{sub.userName}</div>
+                      {sub.fixed.map((f) => (
+                        <div key={f} className="mt-1 flex items-center gap-1 text-[10px] text-[#1B5E20]" title="Fixed dish">
+                          <Pin className="w-3 h-3 shrink-0" /><span className="truncate max-w-[8rem]">{f}</span>
+                        </div>
+                      ))}
                     </td>
-                    {DOW_NAMES.map((_, dowNum) => {
-                      const lunch = sub.days[`${dowNum}-lunch`]
-                      const dinner = sub.days[`${dowNum}-dinner`]
-                      return (
-                        <td key={dowNum} className="py-2.5 px-1.5 align-top">
-                          {lunch && (
-                            <div className={`mb-1 ${lunch.isCustomized ? "text-amber-700" : "text-gray-700"}`}>
-                              <span className="font-medium text-[10px] uppercase text-gray-400 block">L</span>
-                              <span className="block leading-tight">
-                                {lunch.mealName}
-                                {lunch.isCustomized && <span className="ml-1 text-amber-500" title="Switched">✦</span>}
-                                {lunch.quantity > 1 && <span className="ml-1 text-gray-400">×{lunch.quantity}</span>}
-                              </span>
-                              {lunch.addons.length > 0 && (
-                                <span className="block text-[10px] text-gray-400 leading-tight">{lunch.addons.join(", ")}</span>
-                              )}
-                            </div>
-                          )}
-                          {dinner && (
-                            <div className={dinner.isCustomized ? "text-amber-700" : "text-gray-700"}>
-                              <span className="font-medium text-[10px] uppercase text-gray-400 block">D</span>
-                              <span className="block leading-tight">
-                                {dinner.mealName}
-                                {dinner.isCustomized && <span className="ml-1 text-amber-500" title="Switched">✦</span>}
-                                {dinner.quantity > 1 && <span className="ml-1 text-gray-400">×{dinner.quantity}</span>}
-                              </span>
-                              {dinner.addons.length > 0 && (
-                                <span className="block text-[10px] text-gray-400 leading-tight">{dinner.addons.join(", ")}</span>
-                              )}
-                            </div>
-                          )}
-                          {!lunch && !dinner && (
-                            <span className="text-gray-300">—</span>
-                          )}
-                        </td>
-                      )
-                    })}
+                    {days.map((d) => (
+                      <td key={d} className="py-1.5 px-1 align-top">
+                        {(["lunch", "dinner"] as const).map((slot) => (
+                          <SlotCell
+                            key={slot}
+                            slot={slot}
+                            items={sub.cells[`${d}|${slot}`] ?? []}
+                            past={d < week.today}
+                            onOpen={() => setEditing({ subscriptionId: sub.subscriptionId, date: d, slot })}
+                          />
+                        ))}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="mt-3 text-[11px] text-gray-400">✦ = subscriber-switched meal</p>
+            <p className="mt-3 px-3 pb-3 text-[11px] text-gray-400">
+              ✦ changed from the menu · + extra dish · struck through = skipped · ✓ delivered · <Pin className="inline w-3 h-3" /> fixed dish
+            </p>
           </div>
         )}
       </div>
 
-      {/* Swap picker overlay */}
-      {swappingOrder && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={() => setSwappingOrder(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-xl p-5 w-80 max-h-[70vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center mb-3">
-              <div className="font-bold text-gray-900">Swap meal</div>
-              <button onClick={() => setSwappingOrder(null)} className="text-gray-400 hover:text-gray-600 p-1">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="overflow-y-auto space-y-1">
-              {meals.filter((m) => m.subscriptionValid).map((meal) => (
-                <button
-                  key={meal.id}
-                  onClick={() => handleSwapMeal(swappingOrder, meal.id, meal.name)}
-                  disabled={swapping}
-                  className="w-full text-left px-3 py-2 rounded text-sm text-gray-900 hover:bg-[#E8F5E9] border border-transparent hover:border-[#1B5E20]/20 transition disabled:opacity-50 flex items-center justify-between"
-                >
-                  <span>
-                    {meal.name} <span className="text-gray-400 text-xs">({meal.category})</span>
-                  </span>
-                  {swapping && <Loader2 className="w-3 h-3 animate-spin text-gray-400 shrink-0" />}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <OrderEditor
+        key={editing ? `${editing.subscriptionId}|${editing.date}|${editing.slot}` : "closed"}
+        target={editing}
+        meals={catalogue.meals}
+        addons={catalogue.addons}
+        onClose={() => setEditing(null)}
+        onChanged={() => router.refresh()}
+      />
 
       {toast && (
         <div className="fixed bottom-4 right-4 md:w-80 bg-[#E8F5E9] border border-[#1B5E20]/30 text-[#1B5E20] px-4 py-3 rounded-lg shadow-lg text-sm font-medium z-50">
@@ -717,5 +607,52 @@ export function KitchenClient({
         </div>
       )}
     </>
+  )
+}
+
+function SlotCell({
+  slot, items, past, onOpen,
+}: {
+  slot: "lunch" | "dinner"
+  items: CellItem[]
+  past: boolean
+  onOpen: () => void
+}) {
+  const label = slot === "lunch" ? "L" : "D"
+  if (items.length === 0) {
+    if (past) return null
+    return (
+      <button
+        onClick={onOpen}
+        className="w-full mb-1 flex items-center gap-1 px-1.5 py-1 rounded text-[10px] text-gray-300 hover:text-[#1B5E20] hover:bg-green-50"
+        title={`Add a ${slot}`}
+      >
+        <span className="font-medium uppercase">{label}</span><Plus className="w-3 h-3" />
+      </button>
+    )
+  }
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full mb-1 text-left px-1.5 py-1 rounded hover:bg-green-50 hover:ring-1 hover:ring-[#1B5E20]/20 transition"
+    >
+      <span className="font-medium text-[10px] uppercase text-gray-400 block">{label}</span>
+      {items.map((it, i) => {
+        const skipped = it.status === "skipped"
+        const delivered = it.status === "delivered"
+        return (
+          <span key={i} className={cn("block leading-tight", skipped ? "text-gray-400 line-through" : it.customized ? "text-amber-700" : "text-gray-700")}>
+            {it.extra && <span className="text-violet-600 font-bold">+ </span>}
+            {it.mealName}
+            {it.customized && !it.extra && <span className="ml-1 text-amber-500" title="Changed from the menu">✦</span>}
+            {it.quantity > 1 && <span className="ml-1 text-gray-400">×{it.quantity}</span>}
+            {delivered && <span className="ml-1 text-[#1B5E20]">✓</span>}
+            {it.addons.length > 0 && !skipped && (
+              <span className="block text-[10px] text-gray-400 leading-tight">{it.addons.join(", ")}</span>
+            )}
+          </span>
+        )
+      })}
+    </button>
   )
 }

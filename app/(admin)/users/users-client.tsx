@@ -659,6 +659,11 @@ function CreateSubModal({
     : 0
   const suggestedCredit = perMeal * mealsLeft
   const creditPaise = credit.trim() ? Math.round((parseFloat(credit) || 0) * 100) : suggestedCredit
+  // Cash on delivery: paid upfront (0 is fine) + cash still to collect.
+  const [upfront, setUpfront] = useState("")
+  const [cashDue, setCashDue] = useState("")
+  const upfrontPaise = Math.round((parseFloat(upfront) || 0) * 100)
+  const cashDuePaise = cashDue.trim() ? Math.round((parseFloat(cashDue) || 0) * 100) : Math.max(suggestedCredit - upfrontPaise, 0)
 
   const [name, setName] = useState(user.name ?? "")
   const [phone, setPhone] = useState(user.phone ?? "")
@@ -673,7 +678,7 @@ function CreateSubModal({
 
   const needsProfile = !user.hasPublicRow
   const valid = planId && days.length > 0 && mealsLunch + mealsDinner >= 1 && (!needsProfile || phone.trim())
-    && (activation === "cod" || (mealsLeft >= 1 && creditPaise >= 0))
+    && mealsLeft >= 1 && (activation === "cod" ? upfrontPaise >= 0 : creditPaise >= 0)
 
   function submit() {
     onSubmit({
@@ -689,8 +694,9 @@ function CreateSubModal({
       activation,
       address: line1.trim() ? { label: "Home", type: "home", line1, pincode, landmark } : undefined,
       startDate,
-      mealsLeft: activation === "active" ? mealsLeft : undefined,
-      walletCredit: activation === "active" ? creditPaise : undefined,
+      mealsLeft,
+      walletCredit: activation === "active" ? creditPaise : upfrontPaise,
+      cashDue: activation === "cod" ? cashDuePaise : undefined,
       addonIds,
     })
   }
@@ -805,6 +811,43 @@ function CreateSubModal({
             <RadioPill on={activation === "cod"} onClick={() => setActivation("cod")} label="Cash on delivery" />
           </div>
         </Field>
+
+        {activation === "cod" && (
+          <div className="grid grid-cols-3 gap-3 p-3 rounded-lg bg-[#F9FBF7] border border-[#e2e8d5]">
+            <Field label="Meals">
+              <input
+                type="number"
+                min={1}
+                value={mealsLeft}
+                onChange={(e) => setMealsLeft(Math.max(0, parseInt(e.target.value || "0", 10)))}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Paid upfront (₹)">
+              <input
+                inputMode="decimal"
+                value={upfront}
+                onChange={(e) => setUpfront(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder="0"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Cash to collect (₹)">
+              <input
+                inputMode="decimal"
+                value={cashDue}
+                onChange={(e) => setCashDue(e.target.value.replace(/[^\d.]/g, ""))}
+                placeholder={(Math.max(suggestedCredit - upfrontPaise, 0) / 100).toFixed(2)}
+                className={inputCls}
+              />
+            </Field>
+            <p className="col-span-3 text-xs text-gray-500">
+              {mealsLeft} meals at {fmtRupees(perMeal)} = <span className="font-medium text-[#1A1A1A]">{fmtRupees(suggestedCredit)}</span>.
+              Anything paid upfront goes into their wallet; meals then run on credit (the wallet can go negative) until you
+              record the cash on their profile or from Operations.
+            </p>
+          </div>
+        )}
 
         {activation === "active" && (
           <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-[#F9FBF7] border border-[#e2e8d5]">

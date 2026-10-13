@@ -530,7 +530,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
     { header: "Meals Total", get: (s) => String(s.mealsTotal) },
     { header: "Meals Left", get: (s) => (s.deliveriesRemaining ?? 0).toString() },
     { header: "Renewal Due", get: (s) => (s.renewalDue ? "Yes" : "No") },
-    { header: "Menu Type", get: (s) => s.meal },
+    { header: "Meals / day", get: (s) => s.meal },
     { header: "Lunch Qty", get: (s) => String(s.mealsLunch) },
     { header: "Dinner Qty", get: (s) => String(s.mealsDinner) },
     { header: "Batch (Lunch)", get: (s) => s.batchLunch },

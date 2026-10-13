@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
-import { notifyUsers, logBroadcast } from "@/lib/notifications"
+import { notifyEvent, logBroadcast } from "@/lib/notifications"
 import { isTestMode, modeUserIds } from "@/lib/mode"
 
 export type DeliveryStatus = "preparing" | "out_for_delivery" | "delivered"
@@ -18,17 +18,10 @@ const PRIOR: Record<Exclude<DeliveryStatus, "delivered">, string[]> = {
 
 // Only these two transitions are worth pinging a subscriber about — "preparing"
 // is a kitchen-internal state, not something a customer needs to know about.
-function notifyCopy(slot: MealSlot): Partial<Record<DeliveryStatus, { title: string; body: string }>> {
-  return {
-    out_for_delivery: {
-      title: "Your meal is on its way!",
-      body: `Today's ${slot} just left the kitchen — it'll be with you shortly.`,
-    },
-    delivered: {
-      title: "Delivered!",
-      body: `Today's ${slot} has been delivered. Enjoy!`,
-    },
-  }
+// The texts are templates (Notifications → Automated messages).
+const NOTIFY_EVENT: Partial<Record<DeliveryStatus, string>> = {
+  out_for_delivery: "out_for_delivery",
+  delivered: "delivered",
 }
 
 /**
@@ -49,6 +42,18 @@ export async function advanceBatchStatus(
   const isTest = await isTestMode()
   const userIds = await modeUserIds(isTest)
   let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
+
+  // Orders this click can move — so only they get a message, not customers
+  // whose order was already at this status (a re-click used to re-notify).
+  const { data: candidates } = await supabaseAdmin
+    .from("orders")
+    .select("id")
+    .eq("batch_id", batchId)
+    .eq("delivery_date", date)
+    .eq("meal_slot", slot)
+    .not("status", "in", `(delivered,cancelled,skipped,${newStatus})`)
+    .in("user_id", userIds)
+  const candidateIds = (candidates ?? []).map((o: { id: string }) => o.id)
 
   if (newStatus === "delivered") {
     const { data, error } = await supabaseAdmin.rpc("advance_batch_delivered", {
@@ -73,9 +78,9 @@ export async function advanceBatchStatus(
 
   revalidatePath("/operations")
 
-  const copy = notifyCopy(slot)[newStatus]
-  if (copy) {
-    await notifyAffectedSubscribers(batchId, date, slot, newStatus, copy.title, copy.body, userIds)
+  const event = NOTIFY_EVENT[newStatus]
+  if (event && candidateIds.length > 0) {
+    await notifyAffectedSubscribers(candidateIds, batchId, date, slot, newStatus, event)
   }
 
   return billingSummary
@@ -106,9 +111,9 @@ export async function advanceOrderStatus(orderId: string, newStatus: DeliverySta
 
   revalidatePath("/operations")
 
-  const copy = notifyCopy(slot)[newStatus]
-  if (copy && result !== "skipped_insufficient" && result !== "already_settled") {
-    await notifyOrderSubscriber(orderId, copy.title, copy.body, newStatus)
+  const event = NOTIFY_EVENT[newStatus]
+  if (event && result !== "skipped_insufficient" && result !== "already_settled") {
+    await notifyOrderSubscriber(orderId, slot, newStatus, event)
   }
 
   return result
@@ -116,7 +121,7 @@ export async function advanceOrderStatus(orderId: string, newStatus: DeliverySta
 
 // Same best-effort contract as notifyAffectedSubscribers — a notification
 // failure must never undo or block the status advance above.
-async function notifyOrderSubscriber(orderId: string, title: string, body: string, status: DeliveryStatus) {
+async function notifyOrderSubscriber(orderId: string, slot: MealSlot, status: DeliveryStatus, event: string) {
   try {
     const { data: order } = await supabaseAdmin
       .from("orders")
@@ -130,14 +135,15 @@ async function notifyOrderSubscriber(orderId: string, title: string, body: strin
     if (!(sub as any)?.user_id) return
 
     const recipients = [{ user_id: (sub as any).user_id, name: (user as any)?.name ?? "Unknown", phone: (user as any)?.phone ?? null }]
-    const results = await notifyUsers(recipients, title, body, "delivery_status", ["push"])
+    const sent = await notifyEvent(event, recipients, { slot }, "delivery_status")
+    if (!sent) return
     await logBroadcast({
       type: "delivery_status",
-      title,
-      body,
+      title: sent.title,
+      body: sent.body,
       channels: ["push"],
       audience: { description: `Order ${orderId}, status=${status}`, count: 1 },
-      results,
+      results: sent.results,
     })
   } catch {
     // best-effort — see comment above
@@ -147,23 +153,19 @@ async function notifyOrderSubscriber(orderId: string, title: string, body: strin
 // Best-effort — a notification failure should never undo or block the actual
 // status advance above, so this is deliberately swallowed on error.
 async function notifyAffectedSubscribers(
+  candidateIds: string[],
   batchId: string,
   date: string,
   slot: MealSlot,
   status: DeliveryStatus,
-  title: string,
-  body: string,
-  userIds: string[]
+  event: string
 ) {
   try {
     const { data: orders } = await supabaseAdmin
       .from("orders")
       .select("subscription_id")
-      .eq("batch_id", batchId)
-      .eq("delivery_date", date)
-      .eq("meal_slot", slot)
+      .in("id", candidateIds)
       .eq("status", status)
-      .in("user_id", userIds)
     const subIds = Array.from(new Set((orders ?? []).map((o) => o.subscription_id)))
     if (subIds.length === 0) return
 
@@ -178,14 +180,15 @@ async function notifyAffectedSubscribers(
     })
     if (recipients.length === 0) return
 
-    const results = await notifyUsers(recipients, title, body, "delivery_status", ["push"])
+    const sent = await notifyEvent(event, recipients, { slot }, "delivery_status")
+    if (!sent) return
     await logBroadcast({
       type: "delivery_status",
-      title,
-      body,
+      title: sent.title,
+      body: sent.body,
       channels: ["push"],
       audience: { description: `Batch ${batchId}, ${date} ${slot}, status=${status}`, count: recipients.length },
-      results,
+      results: sent.results,
     })
   } catch {
     // best-effort — see comment above

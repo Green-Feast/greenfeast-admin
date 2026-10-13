@@ -55,15 +55,14 @@ async function getDashboardData(isTest: boolean) {
     { data: refunds },
     { data: skips },
     { data: closures },
+    { data: noBatchOrders },
   ] = await Promise.all([
     // Every plan that matters right now, with what the attention list needs.
     supabaseAdmin
       .from("subscriptions")
       .select(`
         id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining, meals_lunch, meals_dinner,
-        batch_id_lunch, batch_id_dinner, created_at,
-        batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
-        batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name ),
+        created_at, cod_due_paise, cod_on_credit,
         users!inner ( name, customer_code, is_test, wallets ( balance ) )
       `)
       .in("status", ["active", "paused", "pending"])
@@ -122,6 +121,16 @@ async function getDashboardData(isTest: boolean) {
       .select("closed_on, meal_slot, reason, created_at")
       .gte("closed_on", today)
       .order("closed_on"),
+    // Upcoming meals going to an address with no batch for that slot (a new
+    // or changed address) — they'd be missing from every route.
+    supabaseAdmin
+      .from("orders")
+      .select("address_id, meal_slot, delivery_date, subscription_id, addresses ( label, type ), users!inner ( name, customer_code, is_test )")
+      .is("batch_id", null)
+      .gte("delivery_date", today)
+      .in("status", ["scheduled", "confirmed", "preparing"])
+      .eq("users.is_test", isTest)
+      .order("delivery_date"),
   ]);
 
   const subs = (liveSubs ?? []) as any[];
@@ -129,19 +138,32 @@ async function getDashboardData(isTest: boolean) {
 
   // ── Needs attention ────────────────────────────────────────────────────────
   const codPending: AttentionRow[] = subs
-    .filter((s) => s.status === "pending" && s.payment_method === "cod")
-    .map((s) => ({ who: person(s.users), detail: `${s.plan_name ?? s.plan_id} · signed up ${fmtRelative(s.created_at)}`, href: `/subscribers/${s.id}` }));
+    .filter((s) => (s.cod_due_paise ?? 0) > 0 && s.status !== "pending")
+    .map((s) => ({
+      who: person(s.users),
+      detail: `${rupees(s.cod_due_paise)} due${s.cod_on_credit ? " · on credit" : ""}`,
+      href: `/subscribers/${s.id}`,
+    }));
 
-  const noBatch: AttentionRow[] = subs
-    .filter((s) => s.status !== "pending" || s.payment_method === "cod")
-    .filter((s) => ((s.meals_lunch ?? 0) > 0 && !s.batch_id_lunch) || ((s.meals_dinner ?? 0) > 0 && !s.batch_id_dinner))
-    .map((s) => {
-      const missing = [
-        (s.meals_lunch ?? 0) > 0 && !s.batch_id_lunch ? "lunch" : null,
-        (s.meals_dinner ?? 0) > 0 && !s.batch_id_dinner ? "dinner" : null,
-      ].filter(Boolean).join(" + ");
-      return { who: person(s.users), detail: `No ${missing} batch`, href: "/batches" };
-    });
+  // Older app versions could still create an unpaid cash-on-delivery plan.
+  const notActivated: AttentionRow[] = subs
+    .filter((s) => s.status === "pending" && s.payment_method === "cod")
+    .map((s) => ({ who: person(s.users), detail: `${s.plan_name ?? s.plan_id} · not activated`, href: `/subscribers/${s.id}` }));
+
+  // One row per address + slot, with how many meals and from when.
+  const noBatchMap = new Map<string, { who: Person; label: string; slot: string; first: string; n: number; subId: string }>();
+  for (const o of (noBatchOrders ?? []) as any[]) {
+    const key = `${o.address_id ?? o.subscription_id}|${o.meal_slot}`;
+    const a = Array.isArray(o.addresses) ? o.addresses[0] : o.addresses;
+    const e = noBatchMap.get(key);
+    if (e) e.n++;
+    else noBatchMap.set(key, { who: person(o.users), label: a ? (a.label || a.type || "address") : "no address", slot: o.meal_slot, first: o.delivery_date, n: 1, subId: o.subscription_id });
+  }
+  const noBatch: AttentionRow[] = Array.from(noBatchMap.values()).map((e) => ({
+    who: e.who,
+    detail: `${e.label} · no ${e.slot} batch · ${e.n} meal${e.n === 1 ? "" : "s"} from ${fmtDay(e.first)}`,
+    href: `/subscribers/${e.subId}`,
+  }));
 
   const finishing: AttentionRow[] = active
     .filter((s) => (s.deliveries_remaining ?? 0) <= 2)
@@ -183,8 +205,9 @@ async function getDashboardData(isTest: boolean) {
     else if (s.status === "expired") activity.push({ at: s.updated_at, kind: "expired", who, text: `${plan} finished`, href });
     else if (s.status === "active" && s.created_at >= weekAgo) {
       activity.push({ at: s.created_at, kind: s.renewed_from ? "renewal" : "plan", who, text: s.renewed_from ? `Renewed — ${plan}` : `Started ${plan}`, href });
-    } else if (s.status === "pending" && s.payment_method === "cod" && s.created_at >= weekAgo) {
-      activity.push({ at: s.created_at, kind: "cod", who, text: `New cash-on-delivery plan — ${plan}, cash pending`, href });
+    }
+    if (s.status === "active" && s.payment_method === "cod" && s.created_at >= weekAgo) {
+      activity.push({ at: s.created_at, kind: "cod", who, text: `Cash-on-delivery plan — ${plan}`, href });
     }
   }
   for (const p of (payments ?? []) as any[]) {
@@ -209,11 +232,21 @@ async function getDashboardData(isTest: boolean) {
   }
   activity.sort((a, b) => b.at.localeCompare(a.at));
 
-  // ── Today + batches (as before) ────────────────────────────────────────────
+  // ── Today + batches ─────────────────────────────────────────────────────────
+  // Routes follow addresses now: count each active customer's default address.
+  const activeUserIds = active.map((s) => s.user_id as string);
+  const { data: defaultAddrs } = activeUserIds.length
+    ? await supabaseAdmin
+        .from("addresses")
+        .select("batch_id_lunch, batch_id_dinner, bl:batches!addresses_batch_id_lunch_fkey ( name ), bd:batches!addresses_batch_id_dinner_fkey ( name )")
+        .in("user_id", activeUserIds)
+        .eq("is_default", true)
+        .is("archived_at", null)
+    : { data: [] as any[] };
   const batchMap: Record<string, number> = {};
-  for (const s of active) {
-    const bl = Array.isArray(s.batchLunch) ? s.batchLunch[0] : s.batchLunch;
-    const bd = Array.isArray(s.batchDinner) ? s.batchDinner[0] : s.batchDinner;
+  for (const a of (defaultAddrs ?? []) as any[]) {
+    const bl = Array.isArray(a.bl) ? a.bl[0] : a.bl;
+    const bd = Array.isArray(a.bd) ? a.bd[0] : a.bd;
     if (bl?.name) batchMap[bl.name] = (batchMap[bl.name] ?? 0) + 1;
     if (bd?.name) batchMap[bd.name] = (batchMap[bd.name] ?? 0) + 1;
   }
@@ -244,7 +277,7 @@ async function getDashboardData(isTest: boolean) {
     todayBatches,
     batches,
     walletHeld,
-    attention: { codPending, noBatch, finishing, lowWallet, newWithoutPlan, pendingRefunds, stuck },
+    attention: { codPending, notActivated, noBatch, finishing, lowWallet, newWithoutPlan, pendingRefunds, stuck },
     closures: (closures ?? []) as any[],
     activity: activity.slice(0, 30),
   };
@@ -303,7 +336,7 @@ export default async function DashboardPage() {
   const data = await getDashboardData(isTest);
   const a = data.attention;
   const attentionCount =
-    a.codPending.length + a.noBatch.length + a.finishing.length + a.lowWallet.length + a.pendingRefunds + a.stuck;
+    a.codPending.length + a.notActivated.length + a.noBatch.length + a.finishing.length + a.lowWallet.length + a.pendingRefunds + a.stuck;
 
   const todayLabel = new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
@@ -359,8 +392,9 @@ export default async function DashboardPage() {
             <p className="text-xs text-gray-500 mt-0.5">Things to act on today</p>
           </div>
           <div className="p-5 space-y-5">
+            <AttentionGroup icon={Route} tone="text-red-600" title="Priority — addresses with meals but no batch" rows={a.noBatch} />
             <AttentionGroup icon={Banknote} tone="text-amber-600" title="Cash to collect (cash-on-delivery plans)" rows={a.codPending} />
-            <AttentionGroup icon={Route} tone="text-blue-600" title="Not on a delivery batch" rows={a.noBatch} />
+            <AttentionGroup icon={Banknote} tone="text-gray-500" title="Cash-on-delivery signups to activate" rows={a.notActivated} />
             <AttentionGroup icon={Hourglass} tone="text-orange-600" title="Plans finishing — follow up on renewal" rows={a.finishing} />
             <AttentionGroup icon={Wallet} tone="text-red-600" title="Low wallet" rows={a.lowWallet} />
             <AttentionGroup
@@ -452,7 +486,7 @@ export default async function DashboardPage() {
         <div className="bg-white rounded-xl border border-[#e2e8d5] shadow-sm">
           <div className="px-5 py-4 border-b border-[#e2e8d5]">
             <h2 className="font-semibold text-[#1A1A1A]">Subscribers by batch</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Active plans per route (lunch and dinner counted separately)</p>
+            <p className="text-xs text-gray-500 mt-0.5">Active customers per route, by their default address (lunch and dinner counted separately)</p>
           </div>
           <div className="p-5">
             {data.batches.length === 0 ? (

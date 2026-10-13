@@ -14,10 +14,11 @@ import { useDraggable, useDroppable } from "@dnd-kit/core"
 import { CSS } from "@dnd-kit/utilities"
 import {
   Plus, Pencil, Trash2, GripVertical, Sun, Moon, Sunset,
-  CheckCircle, AlertCircle, X, Package,
+  CheckCircle, AlertCircle, X, Package, MapPin,
 } from "lucide-react"
+import Link from "next/link"
 import { cn } from "@/lib/utils"
-import { createBatch, updateBatch, deleteBatch, moveSubscriberToBatch, type MealSlot } from "./actions"
+import { createBatch, updateBatch, deleteBatch, setAddressBatch, type MealSlot } from "./actions"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,16 +34,25 @@ type Batch = {
   secondaryPartnerName: string | null
 }
 
-type SubscriberCard = {
+// One card per saved address — batches belong to addresses (migration 052),
+// so a customer with a home and an office address can ride two routes.
+type AddressCard = {
+  addressId: string
   subscriptionId: string
   name: string
   phone: string
   plan: string
+  label: string
+  line1: string
+  isDefault: boolean
+  isNew: boolean
   batchIdLunch: string | null
   batchIdDinner: string | null
   mealsLunch: number
   mealsDinner: number
-  city: string
+  // Meals going here soon (or the default address, where new ones go)
+  usedLunch: boolean
+  usedDinner: boolean
 }
 
 type Partner = { id: string; name: string }
@@ -71,18 +81,19 @@ const SLOT_COLORS: Record<MealSlot, string> = {
 }
 const SLOT_LABEL: Record<MealSlot, string> = { lunch: "Lunch", dinner: "Dinner" }
 
-// ── Draggable subscriber card ───────────────────────────────────────────────
+// ── Draggable address card ─────────────────────────────────────────────────
 
-function DraggableCard({ sub, isDragOverlay = false }: { sub: SubscriberCard; isDragOverlay?: boolean }) {
+function DraggableCard({ card, slot, isDragOverlay = false }: { card: AddressCard; slot: MealSlot; isDragOverlay?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: sub.subscriptionId,
-    data: { sub },
+    id: card.addressId,
+    data: { card },
     disabled: isDragOverlay,
   })
 
   const style = transform
     ? { transform: CSS.Translate.toString(transform) }
     : undefined
+  const used = slot === "lunch" ? card.usedLunch : card.usedDinner
 
   return (
     <div
@@ -91,7 +102,8 @@ function DraggableCard({ sub, isDragOverlay = false }: { sub: SubscriberCard; is
       className={cn(
         "bg-white rounded-xl border border-[#e2e8d5] p-3 shadow-sm select-none group",
         isDragging ? "opacity-30" : "hover:border-[#1B5E20]/30 hover:shadow-md",
-        isDragOverlay && "rotate-1 shadow-xl border-[#1B5E20]/40"
+        isDragOverlay && "rotate-1 shadow-xl border-[#1B5E20]/40",
+        !used && !isDragOverlay && "opacity-60"
       )}
     >
       <div className="flex items-start gap-2">
@@ -103,21 +115,20 @@ function DraggableCard({ sub, isDragOverlay = false }: { sub: SubscriberCard; is
           <GripVertical className="w-4 h-4" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-[#1A1A1A] truncate">{sub.name}</p>
-          <p className="text-xs text-gray-400 mt-0.5">{sub.phone}</p>
+          <p className="text-sm font-medium text-[#1A1A1A] truncate">
+            {card.name} <span className="text-gray-400 font-normal">· {card.label}</span>
+          </p>
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2 flex gap-1"><MapPin className="w-3 h-3 shrink-0 mt-0.5" />{card.line1}</p>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            <span className="text-xs bg-[#1B5E20]/10 text-[#1B5E20] px-1.5 py-0.5 rounded-md font-medium">{sub.plan}</span>
-            {/* Which meal(s) this subscriber actually has on their plan — a
-                batch assignment can still exist for a meal they don't have
-                yet (e.g. pre-assigning a dinner route before they add it). */}
-            {sub.mealsLunch > 0 && sub.mealsDinner > 0 ? (
-              <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md">Lunch + Dinner</span>
-            ) : sub.mealsLunch > 0 ? (
-              <span className="text-xs bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-md">Lunch</span>
-            ) : sub.mealsDinner > 0 ? (
-              <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md">Dinner</span>
-            ) : null}
-            {sub.city && <span className="text-xs text-gray-400">{sub.city}</span>}
+            {card.isNew && <span className="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-md">NEW</span>}
+            {card.isDefault && <span className="text-[10px] bg-[#1B5E20]/10 text-[#1B5E20] px-1.5 py-0.5 rounded-md font-medium">Default</span>}
+            {!used && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-md">No {slot} going here</span>}
+            <span className="text-[10px] text-gray-400">{card.plan}</span>
+            {card.subscriptionId && (
+              <Link href={`/subscribers/${card.subscriptionId}`} className="text-[10px] text-[#1B5E20] hover:underline" onPointerDown={(e) => e.stopPropagation()}>
+                profile
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -127,37 +138,40 @@ function DraggableCard({ sub, isDragOverlay = false }: { sub: SubscriberCard; is
 
 // ── Droppable kanban column ────────────────────────────────────────────────
 
-function KanbanColumn({ id, title, subtitle, subscribers, isUnassigned = false }: {
+function KanbanColumn({ id, title, subtitle, cards, slot, isUnassigned = false }: {
   id: string
   title: string
   subtitle?: string
-  subscribers: SubscriberCard[]
+  cards: AddressCard[]
+  slot: MealSlot
   isUnassigned?: boolean
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
+  // Unassigned addresses with meals going to them are the urgent ones.
+  const urgent = isUnassigned && cards.some((c) => (slot === "lunch" ? c.usedLunch : c.usedDinner))
 
   return (
     <div
       ref={setNodeRef}
       className={cn(
         "flex flex-col rounded-xl border-2 transition-colors w-56 flex-shrink-0",
-        isOver ? "border-[#1B5E20] bg-[#1B5E20]/5" : isUnassigned ? "border-dashed border-gray-200 bg-gray-50" : "border-[#e2e8d5] bg-[#F9FBF7]"
+        isOver ? "border-[#1B5E20] bg-[#1B5E20]/5" : urgent ? "border-red-300 bg-red-50/60" : isUnassigned ? "border-dashed border-gray-200 bg-gray-50" : "border-[#e2e8d5] bg-[#F9FBF7]"
       )}
     >
       <div className={cn("px-3 py-2.5 border-b flex items-center justify-between", isOver ? "border-[#1B5E20]/20" : "border-[#e2e8d5]")}>
         <div>
-          <p className={cn("text-xs font-semibold", isUnassigned ? "text-gray-400" : "text-[#1A1A1A]")}>{title}</p>
+          <p className={cn("text-xs font-semibold", urgent ? "text-red-700" : isUnassigned ? "text-gray-400" : "text-[#1A1A1A]")}>{title}</p>
           {subtitle && <p className="text-xs text-gray-400">{subtitle}</p>}
         </div>
-        <span className={cn("text-xs font-bold px-1.5 py-0.5 rounded-md", isUnassigned ? "bg-gray-200 text-gray-500" : "bg-[#1B5E20]/10 text-[#1B5E20]")}>
-          {subscribers.length}
+        <span className={cn("text-xs font-bold px-1.5 py-0.5 rounded-md", urgent ? "bg-red-600 text-white" : isUnassigned ? "bg-gray-200 text-gray-500" : "bg-[#1B5E20]/10 text-[#1B5E20]")}>
+          {cards.length}
         </span>
       </div>
       <div className="flex-1 p-2 space-y-2 overflow-y-auto min-h-[160px] max-h-[520px]">
-        {subscribers.map(sub => (
-          <DraggableCard key={sub.subscriptionId} sub={sub} />
+        {cards.map(card => (
+          <DraggableCard key={card.addressId} card={card} slot={slot} />
         ))}
-        {subscribers.length === 0 && (
+        {cards.length === 0 && (
           <div className="flex items-center justify-center h-24 text-xs text-gray-300">
             {isOver ? "Drop here" : "Empty"}
           </div>
@@ -288,14 +302,14 @@ function BatchForm({
 export default function BatchesClient({
   initialBatches,
   allPartners,
-  initialSubscribers,
+  initialAddresses,
 }: {
   initialBatches: Batch[]
   allPartners: Partner[]
-  initialSubscribers: SubscriberCard[]
+  initialAddresses: AddressCard[]
 }) {
   const [batches, setBatches]       = useState(initialBatches)
-  const [subs, setSubs]             = useState(initialSubscribers)
+  const [subs, setSubs]             = useState(initialAddresses)
   const [isPending, startTransition] = useTransition()
 
   // Batches are meal-specific, so the whole page (left panel + kanban) views
@@ -328,20 +342,20 @@ export default function BatchesClient({
     setActiveId(null)
     if (!over) return
 
-    const subscriptionId = active.id as string
+    const addressId = active.id as string
     const newBatchId = over.id === "unassigned" ? null : (over.id as string)
-    const sub = subs.find(s => s.subscriptionId === subscriptionId)
-    if (!sub || sub[batchField] === newBatchId) return
+    const card = subs.find(s => s.addressId === addressId)
+    if (!card || card[batchField] === newBatchId) return
 
-    const oldBatchId = sub[batchField]
-    setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, [batchField]: newBatchId } : s))
+    const oldBatchId = card[batchField]
+    setSubs(prev => prev.map(s => s.addressId === addressId ? { ...s, [batchField]: newBatchId } : s))
 
     startTransition(async () => {
       try {
-        await moveSubscriberToBatch(subscriptionId, newBatchId, activeSlot)
-      } catch {
-        setSubs(prev => prev.map(s => s.subscriptionId === subscriptionId ? { ...s, [batchField]: oldBatchId } : s))
-        showToast("error", "Could not move subscriber. Try again.")
+        await setAddressBatch(addressId, activeSlot, newBatchId)
+      } catch (err: any) {
+        setSubs(prev => prev.map(s => s.addressId === addressId ? { ...s, [batchField]: oldBatchId } : s))
+        showToast("error", err?.message ?? "Could not move this address. Try again.")
       }
     })
   }
@@ -392,7 +406,9 @@ export default function BatchesClient({
     })
   }
 
-  const activeSub = activeId ? subs.find(s => s.subscriptionId === activeId) : null
+  const activeSub = activeId ? subs.find(s => s.addressId === activeId) : null
+  const usedHere = (c: AddressCard) => (activeSlot === "lunch" ? c.usedLunch : c.usedDinner)
+  const needBatch = subs.filter(s => !s[batchField] && usedHere(s)).length
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] md:h-screen overflow-hidden">
@@ -520,10 +536,11 @@ export default function BatchesClient({
       <div className="flex-1 overflow-x-auto bg-[#F9FBF7] p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-base font-semibold text-[#1A1A1A]">Subscriber Assignment — {SLOT_LABEL[activeSlot]}</h2>
+            <h2 className="text-base font-semibold text-[#1A1A1A]">Address Assignment — {SLOT_LABEL[activeSlot]}</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              Drag subscribers between {activeSlot} batches · {subs.length} total · {subs.filter(s => !s[batchField]).length} unassigned
-              — every subscriber is shown here regardless of whether {activeSlot} is on their base plan, so one can be added ahead of time.
+              Every saved address has its own {activeSlot} batch, and each meal goes out on the batch of the address it&apos;s going to.
+              Drag an address onto a batch · {subs.length} addresses
+              {needBatch > 0 && <span className="text-red-600 font-semibold"> · {needBatch} with meals going there need a batch</span>}
             </p>
           </div>
         </div>
@@ -533,8 +550,9 @@ export default function BatchesClient({
             {/* Unassigned column */}
             <KanbanColumn
               id="unassigned"
-              title="Unassigned"
-              subscribers={subs.filter(s => !s[batchField])}
+              title="Needs a batch"
+              cards={subs.filter(s => !s[batchField]).sort((a, b) => Number(usedHere(b)) - Number(usedHere(a)))}
+              slot={activeSlot}
               isUnassigned
             />
 
@@ -545,14 +563,15 @@ export default function BatchesClient({
                 id={batch.id}
                 title={batch.name}
                 subtitle={batch.area ?? undefined}
-                subscribers={subs.filter(s => s[batchField] === batch.id)}
+                cards={subs.filter(s => s[batchField] === batch.id)}
+                slot={activeSlot}
               />
             ))}
           </div>
 
           {/* Drag overlay — shows a floating card while dragging */}
           <DragOverlay dropAnimation={null}>
-            {activeSub ? <DraggableCard sub={activeSub} isDragOverlay /> : null}
+            {activeSub ? <DraggableCard card={activeSub} slot={activeSlot} isDragOverlay /> : null}
           </DragOverlay>
         </DndContext>
       </div>
@@ -567,7 +586,7 @@ export default function BatchesClient({
               <button onClick={() => setDeletingId(null)} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
             </div>
             <p className="text-sm text-gray-600">
-              Only possible if no subscribers are assigned. Subscribers must be moved to other batches first.
+              Only possible once no address is on it. Move its addresses to other batches first.
             </p>
             <div className="flex gap-3">
               <button onClick={() => setDeletingId(null)} className="flex-1 h-10 rounded-xl border border-[#e2e8d5] text-sm text-gray-600 hover:bg-gray-50 transition-colors">

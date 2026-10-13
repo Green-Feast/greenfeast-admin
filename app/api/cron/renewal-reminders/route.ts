@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { notifyUsers, logBroadcast } from "@/lib/notifications";
+import { notifyEvent, logBroadcast, type RecipientResult } from "@/lib/notifications";
 
 // Vercel Cron hits this daily (see vercel.json). Vercel automatically sends
 // `Authorization: Bearer $CRON_SECRET` on cron-triggered requests when that
@@ -46,10 +46,18 @@ export async function GET(req: NextRequest) {
     return { user_id: s.user_id, name: (user as any)?.name ?? "Unknown", phone: (user as any)?.phone ?? null };
   });
 
-  const title = "Your plan is running low";
-  const body = "You have only a couple of meals left on your plan — renew now to keep your deliveries going without a gap.";
-
-  const results = await notifyUsers(recipients, title, body, "renewal_reminder", ["push"]);
+  // Text: Notifications → Automated messages → "Plan running low". Each
+  // subscriber's own meals left goes into {meals_left}, so send one at a time.
+  const results: RecipientResult[] = [];
+  let title = "";
+  let body = "";
+  for (const [i, r] of recipients.entries()) {
+    const sent = await notifyEvent("renewal_reminder", [r], { meals_left: subs[i].deliveries_remaining ?? 0 }, "renewal_reminder");
+    if (!sent) return NextResponse.json({ ok: true, notified: 0, note: "renewal reminder is switched off" });
+    results.push(...sent.results);
+    title = sent.title;
+    body = sent.body;
+  }
 
   await supabaseAdmin
     .from("subscriptions")

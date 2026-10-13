@@ -33,16 +33,20 @@ export default async function OperationsPage({
       id,
       status,
       meal_slot,
+      quantity,
+      extra_dish,
+      address_id,
       batches ( id, name ),
       subscriptions!inner (
         id,
         user_id,
         special_notes,
+        cod_due_paise,
         users!inner ( name, phone, is_test )
       ),
       meal_templates ( name ),
-      addresses ( line1, landmark, city, time_window ),
-      order_addons ( kind, addons ( name ) )
+      addresses ( label, type, line1, landmark, city, time_window ),
+      order_addons ( kind, quantity, unit_price, addons ( name ) )
     `)
     .eq("delivery_date", date)
     .not("status", "in", "(cancelled,skipped)")
@@ -66,11 +70,22 @@ export default async function OperationsPage({
     return (sub as any)?.user_id as string | undefined;
   }).filter(Boolean)));
 
-  const { data: dietaryRows } = userIds.length
-    ? await supabaseAdmin.from("dietary_profiles").select("user_id, dietary_preference, allergens").in("user_id", userIds)
-    : { data: [] as { user_id: string; dietary_preference: string | null; allergens: string[] | null }[] };
+  type DietRow = {
+    user_id: string; dietary_preference: string | null; allergens: string[] | null
+    base_avoidance: string[] | null; veggie_avoidance: string[] | null; spice_preference: string | null
+    dressing_preference: string | null; free_text: string | null
+  };
+  const [{ data: dietaryRows }, { data: batchRows }] = await Promise.all([
+    userIds.length
+      ? supabaseAdmin
+          .from("dietary_profiles")
+          .select("user_id, dietary_preference, allergens, base_avoidance, veggie_avoidance, spice_preference, dressing_preference, free_text")
+          .in("user_id", userIds)
+      : Promise.resolve({ data: [] as DietRow[] }),
+    supabaseAdmin.from("batches").select("id, name, meal_slot").order("name"),
+  ]);
 
-  const dietaryByUser = new Map((dietaryRows ?? []).map((r) => [r.user_id, r]));
+  const dietaryByUser = new Map(((dietaryRows ?? []) as DietRow[]).map((r) => [r.user_id, r]));
 
   const subscribers: OperationsSubscriber[] = (data ?? []).map((o, i) => {
     const sub = Array.isArray(o.subscriptions) ? o.subscriptions[0] : o.subscriptions;
@@ -81,26 +96,44 @@ export default async function OperationsPage({
     const batch = Array.isArray(o.batches) ? o.batches[0] : o.batches;
     const meal = Array.isArray(o.meal_templates) ? o.meal_templates[0] : o.meal_templates;
     const addr = Array.isArray(o.addresses) ? o.addresses[0] : o.addresses;
-    const addons = (o.order_addons ?? []) as { kind: string; addons: { name: string } | { name: string }[] | null }[];
+    const addons = (o.order_addons ?? []) as { kind: string; quantity: number | null; unit_price: number | null; addons: { name: string } | { name: string }[] | null }[];
+    const qty = ((o as any).quantity ?? 1) as number;
 
     const batchName: string = (batch as any)?.name ?? "Unassigned";
     const address = addr
       ? [(addr as any).line1, (addr as any).landmark, (addr as any).city].filter(Boolean).join(", ")
       : "—";
 
+    // Everything the customer told us (app or admin → Food preferences).
     const dietary = dietaryByUser.get((sub as any)?.user_id);
+    const avoid = [...(dietary?.base_avoidance ?? []), ...(dietary?.veggie_avoidance ?? [])];
     const constraintParts = [
-      dietary?.dietary_preference,
+      dietary?.dietary_preference && dietary.dietary_preference !== "none" ? dietary.dietary_preference : null,
       ...(dietary?.allergens?.length ? [`Allergens: ${dietary.allergens.join(", ")}`] : []),
+      ...(avoid.length ? [`No ${avoid.join(", ")}`] : []),
+      dietary?.spice_preference ? `${dietary.spice_preference} spice` : null,
+      dietary?.dressing_preference === "on-the-side" ? "Dressing on the side" : null,
+      dietary?.free_text ? dietary.free_text : null,
     ].filter(Boolean);
 
+    // A plan add-on is included once per portion; others carry their own count.
     const addonNames = addons
       .filter((a) => a.kind === "addon")
-      .map((a) => (Array.isArray(a.addons) ? a.addons[0]?.name : a.addons?.name))
+      .map((a) => {
+        const name = Array.isArray(a.addons) ? a.addons[0]?.name : a.addons?.name;
+        if (!name) return null;
+        const n = (a.quantity ?? 1) * (a.unit_price == null && !(o as any).extra_dish ? qty : 1);
+        return n > 1 ? `${name} ×${n}` : name;
+      })
       .filter(Boolean);
 
     return {
       orderId: o.id as string,
+      subscriptionId: (sub as any)?.id as string,
+      addressId: ((o as any).address_id ?? null) as string | null,
+      addressLabel: addr ? ((addr as any).label || (addr as any).type || "Address") : "No address",
+      quantity: qty,
+      codDue: ((sub as any)?.cod_due_paise ?? 0) as number,
       batchId: ((batch as any)?.id ?? null) as string | null,
       status: (o.status as string) ?? "scheduled",
       mealSlot: (o.meal_slot as "lunch" | "dinner") ?? "lunch",
@@ -123,6 +156,7 @@ export default async function OperationsPage({
       initialSubscribers={subscribers}
       serverDate={date}
       closures={(closureRows ?? []) as KitchenClosure[]}
+      batches={(batchRows ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}
     />
   );
 }

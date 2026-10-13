@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
-import { notifyUsers } from "@/lib/notifications"
+import { notifyEvent } from "@/lib/notifications"
 
 export type RefundResult = { ok: true; message: string } | { ok: false; error: string }
 
@@ -45,13 +45,7 @@ export async function refundToWallet(userId: string, amountPaise: number, reason
     return { ok: false, error: `Wallet credit failed: ${creditErr.message}` }
   }
 
-  await notifyUsers(
-    [await recipient(userId)],
-    "Refund added to your wallet",
-    `${rupees(amountPaise)} has been added to your GreenFeast wallet. Reason: ${reason.trim()}`,
-    "custom",
-    ["push"]
-  )
+  await notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() })
 
   revalidatePath("/money")
   return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
@@ -80,13 +74,7 @@ export async function refundToBank(paymentId: string, amountPaise: number, reaso
     return { ok: false, error: body?.error ?? `Refund failed (${res.status}).` }
   }
 
-  await notifyUsers(
-    [await recipient(body.user_id)],
-    "Refund started",
-    `${rupees(amountPaise)} is being refunded to your original payment method. Banks usually take 5–7 working days.`,
-    "custom",
-    ["push"]
-  )
+  await notifyEvent("refund_bank_started", [await recipient(body.user_id)], { amount: rupees(amountPaise) })
 
   revalidatePath("/money")
   return {

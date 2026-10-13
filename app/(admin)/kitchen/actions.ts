@@ -14,11 +14,12 @@ export async function updateWeeklyMenu(rows: WeeklyMenuRow[]) {
   await Promise.all(
     rows.map(async (row) => {
       if (row.id.startsWith("temp-")) {
-        // Not yet saved
+        // Not yet saved (and set then cleared again before saving: nothing to do)
+        if (!row.mealTemplateId) return
         const { error } = await supabaseAdmin
           .from("weekly_menu")
           .insert({
-            menu_type: row.menuType,
+            menu_type: "M1", // one menu for everyone since migration 052
             day_of_week: row.dayOfWeek,
             meal_slot: row.mealSlot,
             meal_template_id: row.mealTemplateId,
@@ -61,41 +62,35 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
 
   const menuRows = rows.filter((r) => r.mealTemplateId) // Skip cleared entries
 
-  // Subscriptions per menu type — one query each, not one per menu row.
-  // NULL menu_type defaults to M1, so M1 includes IS NULL.
-  const subIdsByType: Record<"M1" | "M2", string[]> = { M1: [], M2: [] }
-  for (const type of ["M1", "M2"] as const) {
-    if (!menuRows.some((r) => r.menuType === type)) continue
-    const { data } = await supabaseAdmin
-      .from("subscriptions")
-      .select("id")
-      .in("status", ["active", "paused"])
-      .or(type === "M1" ? "menu_type.eq.M1,menu_type.is.null" : "menu_type.eq.M2")
-    subIdsByType[type] = (data ?? []).map((s: { id: string }) => s.id)
-  }
+  // Every live plan is on the one menu (migration 052).
+  const { data: subs } = await supabaseAdmin
+    .from("subscriptions")
+    .select("id")
+    .in("status", ["active", "paused"])
+  const subIds = (subs ?? []).map((s: { id: string }) => s.id)
 
-  // Future un-swapped orders per (menu type, slot), fetched once and then
-  // matched to each menu row by weekday in memory.
-  type Order = { id: string; delivery_date: string }
-  const ordersByGroup = new Map<string, Order[]>()
-  const groups = new Set(menuRows.map((r) => `${r.menuType}|${r.mealSlot}`))
+  // Future un-swapped orders per slot, fetched once and then matched to each
+  // menu row by weekday in memory.
+  type Order = { id: string; delivery_date: string; meal_template_id: string }
+  const ordersBySlot = new Map<string, Order[]>()
+  const slots = new Set(menuRows.map((r) => r.mealSlot))
   await Promise.all(
-    [...groups].map(async (g) => {
-      const [type, slot] = g.split("|") as ["M1" | "M2", "lunch" | "dinner"]
+    [...slots].map(async (slot) => {
       const batches = await Promise.all(
-        chunk(subIdsByType[type], ID_CHUNK).map(async (ids) => {
+        chunk(subIds, ID_CHUNK).map(async (ids) => {
           const { data } = await supabaseAdmin
             .from("orders")
-            .select("id, delivery_date")
+            .select("id, delivery_date, meal_template_id")
             .in("subscription_id", ids)
             .eq("meal_slot", slot)
             .eq("is_customized", false)
+            .eq("extra_dish", false)
             .gte("delivery_date", today)
             .in("status", ["scheduled", "confirmed"])
           return (data ?? []) as Order[]
         })
       )
-      ordersByGroup.set(g, batches.flat())
+      ordersBySlot.set(slot, batches.flat())
     })
   )
 
@@ -108,10 +103,11 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
     // silently rewritten out from under the kitchen. Every other future date
     // is unaffected; only "today, this slot, past its cutoff" is frozen.
     const todayFrozen = isSlotLocked(today, row.mealSlot)
-    for (const order of ordersByGroup.get(`${row.menuType}|${row.mealSlot}`) ?? []) {
+    for (const order of ordersBySlot.get(row.mealSlot) ?? []) {
       const deliveryDate = new Date(order.delivery_date + "T00:00:00Z")
       const orderDow = (deliveryDate.getUTCDay() + 6) % 7 // Convert Sunday=0 to Mon=0
       if (orderDow !== row.dayOfWeek) continue
+      if (order.meal_template_id === row.mealTemplateId) continue // already on it
 
       if (order.delivery_date === today && todayFrozen) {
         frozen++
@@ -131,6 +127,8 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
           .update({ meal_template_id: templateId })
           .in("id", part)
         if (error) throw error
+        // The kitchen's ingredient list follows the dish.
+        await Promise.all(part.map((id) => supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: id })))
       })
     )
   )
@@ -154,17 +152,6 @@ export async function propagateMenuChanges(rows: WeeklyMenuRow[]) {
   ).catch(() => {})
 
   return { frozen }
-}
-
-export async function swapMealForOrder(orderId: string, mealTemplateId: string) {
-  await requireAdmin()
-  const { error } = await supabaseAdmin
-    .from("orders")
-    .update({ meal_template_id: mealTemplateId, is_customized: true })
-    .eq("id", orderId)
-
-  if (error) throw error
-  revalidatePath("/kitchen")
 }
 
 // Per-date availability only hides an item from subscribers choosing NEW

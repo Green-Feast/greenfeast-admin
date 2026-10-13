@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
-import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 
 export type MealSlot = "lunch" | "dinner"
 
@@ -46,24 +45,30 @@ export async function updateBatch(id: string, data: {
 export async function deleteBatch(id: string) {
   await requireAdmin()
   const { count } = await supabaseAdmin
-    .from("subscriptions")
+    .from("addresses")
     .select("*", { count: "exact", head: true })
     .or(`batch_id_lunch.eq.${id},batch_id_dinner.eq.${id}`)
-    .in("status", ["active", "paused", "pending"])
-  if ((count ?? 0) > 0) throw new Error("Batch has active subscribers. Reassign them first.")
+    .is("archived_at", null)
+  if ((count ?? 0) > 0) throw new Error("Addresses are still on this batch. Move them to another batch first.")
   const { error } = await supabaseAdmin.from("batches").delete().eq("id", id)
   if (error) throw error
   revalidatePath("/batches")
 }
 
-export async function moveSubscriberToBatch(subscriptionId: string, batchId: string | null, slot: MealSlot) {
+// Batches belong to addresses (migration 052). Setting one moves every
+// upcoming meal going to that address in that slot onto the batch (trigger
+// addresses_batch_changed), so Operations follows straight away.
+export async function setAddressBatch(addressId: string, slot: MealSlot, batchId: string | null) {
   await requireAdmin()
+  if (batchId) {
+    const { data: batch } = await supabaseAdmin.from("batches").select("meal_slot").eq("id", batchId).maybeSingle()
+    if (!batch) throw new Error("Batch not found.")
+    if (batch.meal_slot !== slot) throw new Error(`That's a ${batch.meal_slot} batch.`)
+  }
   const column = slot === "lunch" ? "batch_id_lunch" : "batch_id_dinner"
-  const { error } = await supabaseAdmin
-    .from("subscriptions")
-    .update({ [column]: batchId })
-    .eq("id", subscriptionId)
+  const { error } = await supabaseAdmin.from("addresses").update({ [column]: batchId }).eq("id", addressId)
   if (error) throw error
-  await syncFutureOrdersBatch(subscriptionId, batchId, slot)
   revalidatePath("/batches")
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
 }

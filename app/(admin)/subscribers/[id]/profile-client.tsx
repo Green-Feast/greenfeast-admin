@@ -1,28 +1,46 @@
 "use client"
 
-import { useState, useTransition, useEffect } from "react"
+import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
-  Phone, Calendar, MapPin, Utensils, StickyNote,
-  Pause, Play, X, Plus, CheckCircle, AlertCircle,
-  Truck, Clock, Banknote, Wallet,
+  Phone, Calendar, MapPin, Utensils, StickyNote, Pencil, Mail,
+  Pause, Play, X, Plus, CheckCircle, AlertCircle, Pin,
+  Clock, Banknote, Wallet, Star, Trash2, CalendarDays,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { OrderEditor, type EditorTarget } from "@/components/order-editor"
+import { setFixedDish, clearFixedDish } from "@/app/(admin)/kitchen/order-actions"
+import { setAddressBatch } from "@/app/(admin)/batches/actions"
 import {
   saveNotes,
   pauseSubscription,
   resumeSubscription,
   cancelSubscription,
   extendSubscription,
-  changeBatch,
-  markCodPaid,
+  updateCustomerIdentity,
+  saveDietaryProfile,
+  updatePlanSettings,
+  recordCashPayment,
+  setCashDue,
+  activatePendingPlan,
+  adjustWallet,
+  saveCustomerAddress,
+  makeDefaultAddress,
+  removeCustomerAddress,
+  type ActionResult,
 } from "./actions"
+import {
+  ModalOverlay, ModalCard, ModalFooter, Field, GhostBtn, PrimaryBtn, DangerBtn, inputCls, fmtRupees,
+  IdentityModal, PlanModal, DietaryModal, AddressModal, WalletModal, CashModal, ActivateModal, FixedDishModal,
+  type DietaryValue, type AddressFormValue,
+} from "./profile-editors"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Subscription = {
   status: string
   paymentMethod: string
+  planId: string
   planName: string
   deliveriesRemaining: number
   mealsTotal: number
@@ -34,21 +52,18 @@ type Subscription = {
   pauseUntil: string | null
   specialNotes: string
   createdAt: string
-  batchIdLunch: string | null
-  batchIdDinner: string | null
-  batchNameLunch: string
-  batchNameDinner: string
   deliveryMode: string
-  menuType: string
   mealsLunch: number
   mealsDinner: number
   // Empty = opt-out (every day, skipped individually from the app). Non-empty
   // = opt-in — delivery only happens on these days. See instantiate-orders'
   // hasScheduleDays for the exact rule this mirrors.
   deliveryDays: string[]
+  codDue: number
+  onCredit: boolean
 }
 
-type User = { name: string; code: string; isTest: boolean; phone: string; createdAt: string }
+type User = { id: string; name: string; code: string; isTest: boolean; phone: string; email: string; createdAt: string }
 
 type Payment = {
   id: string
@@ -56,6 +71,29 @@ type Payment = {
   status: string
   created_at: string
   cf_payment_id: string | null
+  cf_order_id: string | null
+}
+
+type Upcoming = {
+  id: string
+  date: string
+  slot: "lunch" | "dinner"
+  status: string
+  skipReason: string | null
+  quantity: number
+  extra: boolean
+  cartTotal: number | null
+  mealName: string
+  addressLabel: string
+  addons: string[]
+}
+
+type Rule = { id: string; slot: "lunch" | "dinner"; dayOfWeek: number | null; mealName: string }
+
+type Catalogue = {
+  meals: { id: string; name: string; category: string }[]
+  addons: { id: string; name: string; price_per_meal: number }[]
+  plans: { id: string; name: string; base_price: number; meals_total: number }[]
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -65,16 +103,17 @@ function fmtDate(s: string | null) {
   return new Date(s).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
 }
 
-function fmtRupees(paise: number) {
-  return `₹${(paise / 100).toLocaleString("en-IN")}`
+function fmtDay(iso: string) {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })
 }
 
 function today() {
-  return new Date().toISOString().split("T")[0]
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split("T")[0]
 }
 
 // Matches subscription_schedule.day_of_week's CHECK constraint order.
 const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const DAY_NAMES = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"]
 
 const STATUS_STYLES: Record<string, string> = {
   active:    "bg-green-100 text-green-700 border-green-200",
@@ -89,6 +128,15 @@ const PAY_STATUS_STYLES: Record<string, string> = {
   created:  "bg-yellow-100 text-yellow-700",
   failed:   "bg-red-100 text-red-600",
   refunded: "bg-blue-100 text-blue-700",
+}
+
+const ORDER_STATUS: Record<string, string> = {
+  scheduled: "text-gray-500",
+  confirmed: "text-gray-500",
+  preparing: "text-amber-700",
+  out_for_delivery: "text-blue-700",
+  delivered: "text-[#1B5E20]",
+  skipped: "text-gray-400 line-through",
 }
 
 export type WeeklyMenuEntry = {
@@ -108,6 +156,10 @@ export type WalletTx = {
   created_at: string
 }
 
+type Modal =
+  | "pause" | "extend" | "cancel" | "identity" | "plan" | "dietary" | "address"
+  | "wallet" | "cash" | "activate" | "fixed" | null
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function ProfileClient({
@@ -122,6 +174,9 @@ export function ProfileClient({
   walletBalance,
   weeklyMenu,
   walletTransactions,
+  upcoming,
+  rules,
+  catalogue,
 }: {
   subscriptionId: string
   subscription: Subscription
@@ -134,22 +189,20 @@ export function ProfileClient({
   walletBalance: number | null
   weeklyMenu: WeeklyMenuEntry[]
   walletTransactions: WalletTx[]
+  upcoming: Upcoming[]
+  rules: Rule[]
+  catalogue: Catalogue
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-
-  const [pauseOpen, setPauseOpen]   = useState(false)
-  const [extendOpen, setExtendOpen] = useState(false)
-  const [cancelOpen, setCancelOpen] = useState(false)
+  const [modal, setModal] = useState<Modal>(null)
+  const [editingAddress, setEditingAddress] = useState<AddressFormValue | null>(null)
+  const [editing, setEditing] = useState<EditorTarget | null>(null)
 
   const [pauseFrom, setPauseFrom]   = useState(today())
   const [pauseUntil, setPauseUntil] = useState("")
   const [extendMeals, setExtendMeals] = useState(15)
   const [notes, setNotes] = useState(subscription.specialNotes)
-  // Batches are meal-specific, so lunch and dinner are picked (and saved)
-  // independently — a subscriber can ride different routes for each.
-  const [selectedBatchLunch, setSelectedBatchLunch] = useState(subscription.batchIdLunch ?? "")
-  const [selectedBatchDinner, setSelectedBatchDinner] = useState(subscription.batchIdDinner ?? "")
   const lunchBatches = allBatches.filter(b => b.meal_slot === "lunch")
   const dinnerBatches = allBatches.filter(b => b.meal_slot === "dinner")
 
@@ -157,9 +210,10 @@ export function ProfileClient({
 
   function showToast(type: "success" | "error", msg: string) {
     setToast({ type, msg })
-    setTimeout(() => setToast(null), 3000)
+    setTimeout(() => setToast(null), 4000)
   }
 
+  // Old-style actions that throw on failure.
   function run(action: () => Promise<void>, successMsg: string, onSuccess?: () => void) {
     startTransition(async () => {
       try {
@@ -173,9 +227,24 @@ export function ProfileClient({
     })
   }
 
+  // Actions that return { ok, message | error }.
+  function act(action: () => Promise<ActionResult | { ok: true; message?: string } | { ok: false; error: string }>, close = true) {
+    startTransition(async () => {
+      try {
+        const res = await action()
+        if (!res.ok) return showToast("error", res.error)
+        router.refresh()
+        showToast("success", res.message ?? "Saved.")
+        if (close) { setModal(null); setEditingAddress(null) }
+      } catch (e: any) {
+        showToast("error", e?.message ?? "Something went wrong. Try again.")
+      }
+    })
+  }
+
   const isPaused      = subscription.status === "paused"
   const isCancelled   = subscription.status === "cancelled"
-  const isCodPending  = subscription.status === "pending" && subscription.paymentMethod === "cod"
+  const isPendingPlan = subscription.status === "pending"
   const progress    = subscription.mealsTotal > 0
     ? Math.min(100, Math.round((subscription.deliveriesRemaining / subscription.mealsTotal) * 100))
     : 0
@@ -185,8 +254,7 @@ export function ProfileClient({
     ? Math.round(subscription.basePrice / Math.max(subscription.mealsTotal, 1))
     : 0
   const addonTotalPerSlot = addons.reduce((s, a) => s + a.price_per_meal, 0)
-  // What a CoD customer owes — same formula markCodPaid charges.
-  const codAmountDue = subscription.basePrice + addonTotalPerSlot * subscription.mealsTotal
+  const planPrice = subscription.basePrice + addonTotalPerSlot * subscription.mealsTotal
   const perDayCost = (baseMealRate + addonTotalPerSlot) * Math.max(slotsPerDay, 1)
 
   // Weekly rotation, indexed by weekly_menu's Mon=0..Sun=6 convention so it
@@ -197,18 +265,31 @@ export function ProfileClient({
     day[e.slot] = e
     menuByDay.set(e.dayOfWeek, day)
   }
-  // Which days this subscriber actually receives on is governed by
-  // subscription_schedule alone — instantiate-orders skips any weekday absent
-  // from it whenever it has rows at all, regardless of delivery_mode.
-  // delivery_mode only decides *skip behaviour* (opt-out = auto-deliver and
-  // skip individually; opt-in = only pre-chosen days), NOT which days exist.
-  // Verified against production: an opt-out subscriber with a Mon-Sat schedule
-  // has zero Sunday orders, so treating opt-out as "all 7 days" was wrong.
   const takesEveryDay = subscription.deliveryDays.length === 0
   const takesDelivery = (dayIdx: number) => takesEveryDay || subscription.deliveryDays.includes(DOW_ORDER[dayIdx])
 
   const walletCredited = walletTransactions.filter(t => t.type === "credit").reduce((s, t) => s + t.amount, 0)
   const walletDebited = walletTransactions.filter(t => t.type === "debit").reduce((s, t) => s + t.amount, 0)
+
+  // Upcoming meals grouped by date + slot.
+  const slots = new Map<string, Upcoming[]>()
+  for (const o of upcoming) {
+    const k = `${o.date}|${o.slot}`
+    if (!slots.has(k)) slots.set(k, [])
+    slots.get(k)!.push(o)
+  }
+
+  const dietaryValue: DietaryValue = {
+    dietary_preference: dietary?.dietary_preference ?? "none",
+    health_goal: dietary?.health_goal ?? null,
+    allergens: dietary?.allergens ?? [],
+    protein_preference: dietary?.protein_preference ?? [],
+    base_avoidance: dietary?.base_avoidance ?? [],
+    veggie_avoidance: dietary?.veggie_avoidance ?? [],
+    spice_preference: dietary?.spice_preference ?? null,
+    dressing_preference: dietary?.dressing_preference ?? null,
+    free_text: dietary?.free_text ?? null,
+  }
 
   return (
     <div className="space-y-6">
@@ -227,14 +308,18 @@ export function ProfileClient({
             )}>
               {subscription.status}
             </span>
+            <button onClick={() => setModal("identity")} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-[#1B5E20]" title="Edit details">
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
           </div>
           <div className="flex items-center gap-4 mt-1.5 text-sm text-gray-500 flex-wrap">
             <span className="flex items-center gap-1.5">
               <Phone className="w-3.5 h-3.5" />
-              <a href={`tel:+91${user.phone}`} className="hover:text-[#1B5E20] transition-colors">
-                +91 {user.phone}
-              </a>
+              <a href={`tel:${user.phone}`} className="hover:text-[#1B5E20] transition-colors">{user.phone || "—"}</a>
             </span>
+            {user.email && (
+              <span className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5" />{user.email}</span>
+            )}
             <span className="flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5" />
               Joined {fmtDate(user.createdAt)}
@@ -245,17 +330,13 @@ export function ProfileClient({
         {/* Action buttons */}
         {!isCancelled && (
           <div className="flex items-center gap-2 flex-wrap">
-            {isCodPending ? (
-              // CoD sub awaiting cash on first delivery — only payment + cancel apply
+            {isPendingPlan ? (
               <ActionBtn
-                icon={<Banknote className="w-3.5 h-3.5" />}
-                label={`Mark cash received · ${fmtRupees(codAmountDue)}`}
+                icon={<Play className="w-3.5 h-3.5" />}
+                label="Activate plan"
                 color="green"
                 disabled={isPending}
-                onClick={() => {
-                  if (!window.confirm(`Confirm ${fmtRupees(codAmountDue)} cash was collected? This credits the customer's wallet and activates the plan.`)) return
-                  run(() => markCodPaid(subscriptionId), "Cash recorded — wallet credited and plan activated.")
-                }}
+                onClick={() => setModal("activate")}
               />
             ) : (
               <>
@@ -273,7 +354,7 @@ export function ProfileClient({
                     label="Pause"
                     color="yellow"
                     disabled={isPending}
-                    onClick={() => setPauseOpen(true)}
+                    onClick={() => setModal("pause")}
                   />
                 )}
                 <ActionBtn
@@ -281,7 +362,7 @@ export function ProfileClient({
                   label="Extend"
                   color="blue"
                   disabled={isPending}
-                  onClick={() => setExtendOpen(true)}
+                  onClick={() => setModal("extend")}
                 />
               </>
             )}
@@ -290,11 +371,32 @@ export function ProfileClient({
               label="Cancel"
               color="red"
               disabled={isPending}
-              onClick={() => setCancelOpen(true)}
+              onClick={() => setModal("cancel")}
             />
           </div>
         )}
       </div>
+
+      {/* Cash on delivery */}
+      {subscription.codDue > 0 && !isPendingPlan && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200">
+          <div className="flex items-center gap-2 text-sm text-amber-900">
+            <Banknote className="w-4 h-4" />
+            <span>
+              <span className="font-semibold">{fmtRupees(subscription.codDue)} cash to collect</span>
+              {subscription.onCredit
+                ? " — meals continue on credit until it's recorded."
+                : " — first day was paid online; record the cash the day it's collected or the next meals are skipped for low balance."}
+            </span>
+          </div>
+          <button
+            onClick={() => setModal("cash")}
+            className="px-3 py-1.5 rounded-lg bg-[#1B5E20] text-white text-xs font-medium hover:bg-[#155116]"
+          >
+            Record cash received
+          </button>
+        </div>
+      )}
 
       {/* ── Main grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -304,113 +406,78 @@ export function ProfileClient({
 
           {/* Subscription card */}
           <Card>
-            <CardHeader title="Subscription" />
+            <CardHeader title="Subscription" action={!isCancelled ? { label: "Edit plan", onClick: () => setModal("plan") } : undefined} />
             <div className="px-5 pb-5 space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-lg font-bold text-[#1A1A1A]">{subscription.planName}</p>
                   <p className="text-sm text-gray-500 mt-0.5">
-                    {subscription.mealsTotal} meals · {subscription.daysPerWeek} days/week
-                    {subscription.basePrice > 0 && ` · ${fmtRupees(subscription.basePrice)}`}
+                    {subscription.mealsTotal} meals · {fmtRupees(planPrice)}
+                    {subscription.paymentMethod === "cod" && " · cash on delivery"}
                   </p>
-                  {isCodPending && (
-                    <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-2 py-1 mt-2 inline-flex items-center gap-1.5">
-                      <Banknote className="w-3.5 h-3.5" />
-                      Cash on delivery — collect {fmtRupees(codAmountDue)} on first delivery
+                  {isPendingPlan && (
+                    <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-1 mt-2 inline-flex items-center gap-1.5">
+                      Not paid yet — no meals are scheduled. Use &quot;Activate plan&quot; once they&apos;ve paid or agreed cash on delivery.
                     </p>
                   )}
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-2xl font-bold text-[#1B5E20]">{subscription.deliveriesRemaining}</p>
-                  <p className="text-xs text-gray-400">deliveries left</p>
+                  <p className="text-xs text-gray-400">meals left</p>
                 </div>
               </div>
 
-              {/* Progress bar */}
               <div>
                 <div className="flex justify-between text-xs text-gray-400 mb-1.5">
                   <span>Progress</span>
                   <span>{progress}%</span>
                 </div>
                 <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-[#1B5E20] rounded-full transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
+                  <div className="h-full bg-[#1B5E20] rounded-full transition-all" style={{ width: `${progress}%` }} />
                 </div>
               </div>
 
-              {/* Plan composition */}
               <div className="flex flex-wrap gap-2 text-sm">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#E8F5E9] text-[#1B5E20] font-semibold text-xs">
-                  {subscription.menuType}
-                </span>
                 {subscription.mealsLunch > 0 && (
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs">
-                    {subscription.mealsLunch} lunch{subscription.mealsLunch > 1 ? "es" : ""}
+                    {subscription.mealsLunch} lunch{subscription.mealsLunch > 1 ? "es" : ""} / day
                   </span>
                 )}
                 {subscription.mealsDinner > 0 && (
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs">
-                    {subscription.mealsDinner} dinner{subscription.mealsDinner > 1 ? "s" : ""}
+                    {subscription.mealsDinner} dinner{subscription.mealsDinner > 1 ? "s" : ""} / day
                   </span>
                 )}
                 {addons.map((a) => (
                   <span key={a.id} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs">
-                    {a.name} +₹{(a.price_per_meal / 100).toLocaleString("en-IN")}/meal
+                    {a.name} +{fmtRupees(a.price_per_meal)}/meal
                   </span>
                 ))}
               </div>
 
-              {/* Which weekdays this subscriber receives on — driven by
-                  subscription_schedule, which instantiate-orders honours
-                  regardless of delivery_mode. delivery_mode only changes how
-                  skipping works on those days. */}
               <div className="pt-1">
                 <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">Delivery Days</label>
                 {takesEveryDay ? (
-                  <span className="text-sm text-[#1A1A1A]">
-                    All days{" "}
-                    <span className="text-xs text-gray-400">(no fixed schedule set)</span>
-                  </span>
+                  <span className="text-sm text-[#1A1A1A]">All days <span className="text-xs text-gray-400">(no fixed schedule set)</span></span>
                 ) : (
                   <div className="flex gap-1.5">
                     {DOW_ORDER.map((d) => {
                       const active = subscription.deliveryDays.includes(d)
                       return (
-                        <span
-                          key={d}
-                          className={cn(
-                            "w-9 h-9 flex items-center justify-center rounded-lg text-xs font-semibold",
-                            active ? "bg-[#1B5E20] text-white" : "bg-gray-100 text-gray-300"
-                          )}
-                        >
+                        <span key={d} className={cn("w-9 h-9 flex items-center justify-center rounded-lg text-xs font-semibold", active ? "bg-[#1B5E20] text-white" : "bg-gray-100 text-gray-300")}>
                           {d}
                         </span>
                       )
                     })}
                   </div>
                 )}
-                <p className="text-xs text-gray-400 mt-1.5">
-                  {subscription.deliveryMode === "opt-out"
-                    ? "Opt-out — delivered automatically on these days unless the subscriber skips."
-                    : "Opt-in — only delivered on the days chosen at signup."}
-                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">
-                <InfoRow label="Start date"     value={fmtDate(subscription.startDate)} />
-                <InfoRow label="End date"       value={fmtDate(subscription.endDate)} />
+                <InfoRow label="First delivery" value={fmtDate(subscription.startDate)} />
                 <InfoRow label="Delivery mode"  value={subscription.deliveryMode === "opt-in" ? "Opt-in" : "Opt-out"} />
-                <InfoRow label="Lunch batch"    value={subscription.batchNameLunch} />
-                <InfoRow label="Dinner batch"   value={subscription.batchNameDinner} />
-                <InfoRow
-                  label="Wallet balance"
-                  value={walletBalance !== null ? fmtRupees(walletBalance) : "—"}
-                />
-                {perDayCost > 0 && (
-                  <InfoRow label="Default cart/day" value={fmtRupees(perDayCost)} />
-                )}
+                <InfoRow label="Wallet balance" value={walletBalance !== null ? fmtRupees(walletBalance) : "—"} />
+                {perDayCost > 0 && <InfoRow label="Default cart/day" value={fmtRupees(perDayCost)} />}
                 {isPaused && (
                   <>
                     <InfoRow label="Paused from"  value={fmtDate(subscription.pauseFrom)} />
@@ -418,149 +485,124 @@ export function ProfileClient({
                   </>
                 )}
               </div>
-
-              {/* Batch selectors — lunch and dinner are reassigned independently,
-                  since a subscriber can ride a different route for each. */}
-              <div className="pt-1 border-t border-[#e2e8d5] space-y-3">
-                <div>
-                  <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">
-                    Reassign lunch batch
-                  </label>
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedBatchLunch}
-                      onChange={(e) => setSelectedBatchLunch(e.target.value)}
-                      className="flex-1 h-9 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
-                    >
-                      <option value="">Unassigned</option>
-                      {lunchBatches.map((b) => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => run(
-                        () => changeBatch(subscriptionId, selectedBatchLunch || null, "lunch"),
-                        "Lunch batch updated."
-                      )}
-                      disabled={isPending || selectedBatchLunch === (subscription.batchIdLunch ?? "")}
-                      className="h-9 px-4 text-sm font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">
-                    Reassign dinner batch
-                  </label>
-                  <div className="flex gap-2">
-                    <select
-                      value={selectedBatchDinner}
-                      onChange={(e) => setSelectedBatchDinner(e.target.value)}
-                      className="flex-1 h-9 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
-                    >
-                      <option value="">Unassigned</option>
-                      {dinnerBatches.map((b) => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => run(
-                        () => changeBatch(subscriptionId, selectedBatchDinner || null, "dinner"),
-                        "Dinner batch updated."
-                      )}
-                      disabled={isPending || selectedBatchDinner === (subscription.batchIdDinner ?? "")}
-                      className="h-9 px-4 text-sm font-medium rounded-lg bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              </div>
             </div>
           </Card>
 
-          {/* Weekly meal plan — what this subscriber actually eats each day,
-              from the weekly rotation their menu type is on. */}
+          {/* Upcoming meals — every one editable */}
           <Card>
-            <CardHeader
-              title={`Weekly Plan — Menu ${subscription.menuType}`}
-              icon={<Utensils className="w-3.5 h-3.5" />}
-            />
+            <CardHeader title="Upcoming meals (next 2 weeks)" icon={<CalendarDays className="w-3.5 h-3.5" />} />
+            <div className="px-5 pb-5 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-gray-400 uppercase tracking-wide">Fixed dishes</span>
+                {rules.length === 0 && <span className="text-xs text-gray-400">none — weekly menu</span>}
+                {rules.map((r) => (
+                  <span key={r.id} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#E8F5E9] text-[#1B5E20] text-xs">
+                    <Pin className="w-3 h-3" />
+                    {r.slot === "lunch" ? "Lunch" : "Dinner"} {r.dayOfWeek === null ? "every day" : `on ${DAY_NAMES[r.dayOfWeek]}`}: <b>{r.mealName}</b>
+                    <button
+                      disabled={isPending}
+                      title="Remove (upcoming meals go back to the weekly menu)"
+                      onClick={() => act(() => clearFixedDish(subscriptionId, r.id, true), false)}
+                      className="ml-0.5 text-[#1B5E20]/60 hover:text-red-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+                <button onClick={() => setModal("fixed")} className="text-xs font-medium text-[#1B5E20] hover:underline">+ Fixed dish</button>
+              </div>
+
+              {slots.size === 0 ? (
+                <p className="text-sm text-gray-400">Nothing scheduled in the next 2 weeks.</p>
+              ) : (
+                <div className="divide-y divide-[#e2e8d5] border border-[#e2e8d5] rounded-lg">
+                  {Array.from(slots.entries()).map(([key, items]) => {
+                    const [date, slot] = key.split("|") as [string, "lunch" | "dinner"]
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setEditing({ subscriptionId, date, slot })}
+                        className="w-full text-left px-3 py-2.5 hover:bg-[#F9FBF7] flex items-start justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-gray-500">{fmtDay(date)} · {slot === "lunch" ? "Lunch" : "Dinner"}</p>
+                          {items.map((o) => (
+                            <p key={o.id} className={cn("text-sm", ORDER_STATUS[o.status] ?? "text-gray-600")}>
+                              <span className="text-[#1A1A1A]">{o.extra && "+ "}{o.mealName}</span>
+                              {o.quantity > 1 && <span className="text-gray-400"> ×{o.quantity}</span>}
+                              {o.addons.length > 0 && <span className="text-xs text-gray-400"> · {o.addons.join(", ")}</span>}
+                              <span className="text-xs text-gray-400"> → {o.addressLabel}</span>
+                              {o.status !== "scheduled" && o.status !== "confirmed" && (
+                                <span className="ml-1.5 text-[10px] uppercase font-semibold">{o.status === "skipped" ? `skipped${o.skipReason === "user" ? " by them" : ""}` : o.status.replace(/_/g, " ")}</span>
+                              )}
+                            </p>
+                          ))}
+                        </div>
+                        <span className="text-xs font-medium text-[#1B5E20] shrink-0">Edit</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-gray-400">Click a meal to change the dish, portions, add-ons, address, skip it or bring it back. The Kitchen page has the same editor for everyone.</p>
+            </div>
+          </Card>
+
+          {/* Weekly menu */}
+          <Card>
+            <CardHeader title="Weekly menu" icon={<Utensils className="w-3.5 h-3.5" />} />
             <div className="px-5 pb-5">
               {weeklyMenu.length === 0 ? (
-                <p className="text-sm text-gray-400">
-                  No weekly menu set for Menu {subscription.menuType} yet — set it on the Kitchen page.
-                </p>
+                <p className="text-sm text-gray-400">No weekly menu set yet — set it on the Kitchen page.</p>
               ) : (
-                <>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-[#e2e8d5]">
-                          {["Day", "Lunch", "Dinner"].map((h) => (
-                            <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide py-2.5 pr-4 whitespace-nowrap">
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {DOW_ORDER.map((dow, idx) => {
-                          const day = menuByDay.get(idx) ?? {}
-                          const active = takesDelivery(idx)
-                          const cell = (entry: WeeklyMenuEntry | undefined, qty: number) => {
-                            if (qty <= 0) return <span className="text-xs text-gray-300">Not on plan</span>
-                            if (!entry?.mealName) return <span className="text-xs text-gray-300">—</span>
-                            return (
-                              <div>
-                                <span className="text-[#1A1A1A]">{entry.mealName}</span>
-                                {qty > 1 && (
-                                  <span className="ml-1.5 text-xs font-semibold text-[#1B5E20]">×{qty}</span>
-                                )}
-                                {(entry.kcal || entry.protein) && (
-                                  <p className="text-xs text-gray-400">
-                                    {entry.kcal ? `${entry.kcal} kcal` : ""}
-                                    {entry.kcal && entry.protein ? " · " : ""}
-                                    {entry.protein ? `${entry.protein}g protein` : ""}
-                                  </p>
-                                )}
-                              </div>
-                            )
-                          }
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[#e2e8d5]">
+                        {["Day", "Lunch", "Dinner"].map((h) => (
+                          <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide py-2.5 pr-4 whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {DOW_ORDER.map((dow, idx) => {
+                        const day = menuByDay.get(idx) ?? {}
+                        const active = takesDelivery(idx)
+                        const cell = (entry: WeeklyMenuEntry | undefined, qty: number) => {
+                          if (qty <= 0) return <span className="text-xs text-gray-300">Not on plan</span>
+                          if (!entry?.mealName) return <span className="text-xs text-gray-300">—</span>
                           return (
-                            <tr key={dow} className={cn("border-b border-[#e2e8d5] last:border-0", !active && "opacity-40")}>
-                              <td className="py-2.5 pr-4 whitespace-nowrap align-top">
-                                <span className="font-medium text-[#1A1A1A]">{dow}</span>
-                                {!active && <p className="text-xs text-gray-400">No delivery</p>}
-                              </td>
-                              <td className="py-2.5 pr-4 align-top">{cell(day.lunch, subscription.mealsLunch)}</td>
-                              <td className="py-2.5 pr-4 align-top">{cell(day.dinner, subscription.mealsDinner)}</td>
-                            </tr>
+                            <div>
+                              <span className="text-[#1A1A1A]">{entry.mealName}</span>
+                              {qty > 1 && <span className="ml-1.5 text-xs font-semibold text-[#1B5E20]">×{qty}</span>}
+                            </div>
                           )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-3 leading-relaxed">
-                    This is the standing weekly rotation. Individual days can differ if the subscriber
-                    swapped a meal, added a dish, or skipped — check Operations for a given date to see
-                    what's actually going out.
-                  </p>
-                </>
+                        }
+                        return (
+                          <tr key={dow} className={cn("border-b border-[#e2e8d5] last:border-0", !active && "opacity-40")}>
+                            <td className="py-2.5 pr-4 whitespace-nowrap align-top">
+                              <span className="font-medium text-[#1A1A1A]">{dow}</span>
+                              {!active && <p className="text-xs text-gray-400">No delivery</p>}
+                            </td>
+                            <td className="py-2.5 pr-4 align-top">{cell(day.lunch, subscription.mealsLunch)}</td>
+                            <td className="py-2.5 pr-4 align-top">{cell(day.dinner, subscription.mealsDinner)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </Card>
 
-          {/* Wallet ledger — every credit and debit for this customer */}
+          {/* Wallet ledger */}
           <Card>
-            <CardHeader title="Wallet History" icon={<Wallet className="w-3.5 h-3.5" />} />
+            <CardHeader title="Wallet History" icon={<Wallet className="w-3.5 h-3.5" />} action={{ label: "Adjust wallet", onClick: () => setModal("wallet") }} />
             <div className="px-5 pb-3 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
               <div>
                 <span className="text-gray-400">Balance </span>
-                <span className="font-semibold text-[#1A1A1A]">
-                  {walletBalance !== null ? fmtRupees(walletBalance) : "—"}
-                </span>
+                <span className="font-semibold text-[#1A1A1A]">{walletBalance !== null ? fmtRupees(walletBalance) : "—"}</span>
               </div>
               <div>
                 <span className="text-gray-400">Credited </span>
@@ -579,9 +621,7 @@ export function ProfileClient({
                   <thead className="sticky top-0 bg-white">
                     <tr className="border-b border-[#e2e8d5]">
                       {["Date", "Type", "Amount", "Reason"].map((h) => (
-                        <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">
-                          {h}
-                        </th>
+                        <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -589,22 +629,14 @@ export function ProfileClient({
                     {walletTransactions.map((t, i) => (
                       <tr key={t.id} className={cn("border-b border-[#e2e8d5] last:border-0", i % 2 === 1 && "bg-[#fafcf8]")}>
                         <td className="px-5 py-3 whitespace-nowrap text-gray-500">
-                          {new Date(t.created_at).toLocaleString("en-IN", {
-                            day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit",
-                          })}
+                          {new Date(t.created_at).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}
                         </td>
                         <td className="px-5 py-3">
-                          <span className={cn(
-                            "px-2 py-0.5 rounded-full text-xs font-medium capitalize",
-                            t.type === "credit" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
-                          )}>
+                          <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium capitalize", t.type === "credit" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600")}>
                             {t.type}
                           </span>
                         </td>
-                        <td className={cn(
-                          "px-5 py-3 font-semibold whitespace-nowrap",
-                          t.type === "credit" ? "text-green-700" : "text-[#1A1A1A]"
-                        )}>
+                        <td className={cn("px-5 py-3 font-semibold whitespace-nowrap", t.type === "credit" ? "text-green-700" : "text-[#1A1A1A]")}>
                           {t.type === "credit" ? "+" : "−"}{fmtRupees(t.amount)}
                         </td>
                         <td className="px-5 py-3 text-gray-600">{t.reason || "—"}</td>
@@ -626,32 +658,23 @@ export function ProfileClient({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[#e2e8d5]">
-                      {["Date", "Amount", "Status", "Cashfree ID"].map((h) => (
-                        <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">
-                          {h}
-                        </th>
+                      {["Date", "Amount", "Status", "How"].map((h) => (
+                        <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-2.5 whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {payments.map((p, i) => (
                       <tr key={p.id} className={cn("border-b border-[#e2e8d5] last:border-0", i % 2 === 1 && "bg-[#fafcf8]")}>
-                        <td className="px-5 py-3 whitespace-nowrap text-gray-600">
-                          {fmtDate(p.created_at)}
-                        </td>
-                        <td className="px-5 py-3 font-semibold text-[#1A1A1A]">
-                          {fmtRupees(p.amount)}
-                        </td>
+                        <td className="px-5 py-3 whitespace-nowrap text-gray-600">{fmtDate(p.created_at)}</td>
+                        <td className="px-5 py-3 font-semibold text-[#1A1A1A]">{fmtRupees(p.amount)}</td>
                         <td className="px-5 py-3">
-                          <span className={cn(
-                            "px-2 py-0.5 rounded-full text-xs font-medium capitalize",
-                            PAY_STATUS_STYLES[p.status] ?? "bg-gray-100 text-gray-600"
-                          )}>
+                          <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium capitalize", PAY_STATUS_STYLES[p.status] ?? "bg-gray-100 text-gray-600")}>
                             {p.status}
                           </span>
                         </td>
                         <td className="px-5 py-3 font-mono text-xs text-gray-400 truncate max-w-[160px]" title={p.cf_payment_id ?? ""}>
-                          {p.cf_payment_id ?? "—"}
+                          {p.cf_order_id ? (p.cf_payment_id ?? "Cashfree") : "Cash / recorded by admin"}
                         </td>
                       </tr>
                     ))}
@@ -665,66 +688,111 @@ export function ProfileClient({
         {/* ─── Right col (2/5) ─── */}
         <div className="lg:col-span-2 space-y-6">
 
-          {/* Addresses */}
+          {/* Addresses + their batches */}
           <Card>
-            <CardHeader title="Delivery Addresses" icon={<MapPin className="w-3.5 h-3.5" />} />
+            <CardHeader
+              title="Delivery Addresses"
+              icon={<MapPin className="w-3.5 h-3.5" />}
+              action={{ label: "Add", onClick: () => { setEditingAddress({ label: "", type: "home", line1: "", landmark: "", pincode: "", timeWindow: "" }); setModal("address") } }}
+            />
             <div className="px-5 pb-5 space-y-3">
               {addresses.length === 0 ? (
-                <p className="text-sm text-gray-400">No address on file.</p>
-              ) : addresses.map((addr: any) => (
-                <div key={addr.id} className="text-sm border border-[#e2e8d5] rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-[#1A1A1A]">{addr.label ?? addr.type}</span>
-                    {addr.is_default && (
-                      <span className="text-xs bg-[#E8F5E9] text-[#1B5E20] px-1.5 py-0.5 rounded-full font-medium">Default</span>
+                <p className="text-sm text-gray-400">No address on file — meals can&apos;t be delivered.</p>
+              ) : addresses.map((addr: any) => {
+                const missing = (subscription.mealsLunch > 0 && !addr.batch_id_lunch) || (subscription.mealsDinner > 0 && !addr.batch_id_dinner)
+                return (
+                  <div key={addr.id} className={cn("text-sm border rounded-lg p-3 space-y-2", missing && addr.is_default ? "border-red-300 bg-red-50/40" : "border-[#e2e8d5]")}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-[#1A1A1A]">{addr.label || addr.type}</span>
+                        {addr.is_default && (
+                          <span className="text-xs bg-[#E8F5E9] text-[#1B5E20] px-1.5 py-0.5 rounded-full font-medium">Default</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {!addr.is_default && (
+                          <button
+                            title="Make default"
+                            disabled={isPending}
+                            onClick={() => {
+                              const move = window.confirm("Send all upcoming meals to this address too?\n\nOK = yes, move them · Cancel = only new meals")
+                              act(() => makeDefaultAddress(subscriptionId, addr.id, move), false)
+                            }}
+                            className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1B5E20]"
+                          >
+                            <Star className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          title="Edit"
+                          onClick={() => {
+                            setEditingAddress({ id: addr.id, label: addr.label ?? "", type: addr.type ?? "home", line1: addr.line1 ?? "", landmark: addr.landmark ?? "", pincode: addr.pincode ?? "", timeWindow: addr.time_window ?? "" })
+                            setModal("address")
+                          }}
+                          className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1B5E20]"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          title="Remove"
+                          disabled={isPending}
+                          onClick={() => window.confirm("Remove this address? Upcoming meals going there move to their other address.") && act(() => removeCustomerAddress(subscriptionId, addr.id), false)}
+                          className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-600"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-gray-600">{addr.line1}</p>
+                    {addr.landmark && <p className="text-gray-500 text-xs">Near: {addr.landmark}</p>}
+                    {addr.time_window && (
+                      <p className="text-gray-500 text-xs flex items-center gap-1"><Clock className="w-3 h-3" />{addr.time_window}</p>
                     )}
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      {([["lunch", lunchBatches, addr.batch_id_lunch], ["dinner", dinnerBatches, addr.batch_id_dinner]] as const).map(([slot, list, current]) => (
+                        <label key={slot} className="text-xs text-gray-500">
+                          <span className="capitalize">{slot} batch</span>
+                          <select
+                            value={current ?? ""}
+                            disabled={isPending}
+                            onChange={(e) => act(async () => {
+                              await setAddressBatch(addr.id, slot, e.target.value || null)
+                              return { ok: true as const, message: `${slot === "lunch" ? "Lunch" : "Dinner"} batch saved — upcoming meals to this address moved.` }
+                            }, false)}
+                            className={cn("mt-1 w-full h-8 rounded-lg border bg-white px-2 text-xs", !current ? "border-red-300 text-red-700" : "border-[#e2e8d5] text-[#1A1A1A]")}
+                          >
+                            <option value="">Needs a batch</option>
+                            {list.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                  <p className="text-gray-600">{addr.line1}</p>
-                  {addr.landmark && <p className="text-gray-500 text-xs">Near: {addr.landmark}</p>}
-                  <p className="text-gray-500 text-xs">{[addr.city, addr.pincode].filter(Boolean).join(" — ")}</p>
-                  {addr.time_window && (
-                    <p className="text-gray-500 text-xs flex items-center gap-1 mt-1">
-                      <Clock className="w-3 h-3" />{addr.time_window}
-                    </p>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           </Card>
 
-          {/* Dietary Profile */}
+          {/* Food preferences */}
           <Card>
-            <CardHeader title="Dietary Profile" icon={<Utensils className="w-3.5 h-3.5" />} />
-            <div className="px-5 pb-5">
-              {dietary ? (
-                <div className="space-y-3 text-sm">
-                  {dietary.dietary_preference && (
-                    <InfoRow label="Preference" value={dietary.dietary_preference} />
-                  )}
-                  {dietary.health_goal && (
-                    <InfoRow label="Health goal" value={dietary.health_goal} />
-                  )}
-                  {dietary.allergens?.length > 0 && (
-                    <div>
-                      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1.5">Allergens</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {dietary.allergens.map((a: string) => (
-                          <span key={a} className="px-2 py-0.5 bg-red-50 text-red-600 text-xs rounded-full font-medium">
-                            {a}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {dietary.free_text && (
-                    <div>
-                      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Notes</p>
-                      <p className="text-gray-600 leading-relaxed">{dietary.free_text}</p>
-                    </div>
-                  )}
+            <CardHeader title="Food Preferences" icon={<Utensils className="w-3.5 h-3.5" />} action={{ label: "Edit", onClick: () => setModal("dietary") }} />
+            <div className="px-5 pb-5 space-y-3 text-sm">
+              <InfoRow label="Diet" value={dietaryValue.dietary_preference && dietaryValue.dietary_preference !== "none" ? dietaryValue.dietary_preference : "No restriction"} />
+              {dietaryValue.health_goal && <InfoRow label="Goal" value={dietaryValue.health_goal} />}
+              <TagList label="Allergies" items={dietaryValue.allergens} tone="red" />
+              <TagList label="Avoid" items={[...dietaryValue.base_avoidance, ...dietaryValue.veggie_avoidance]} tone="amber" />
+              <TagList label="Preferred protein" items={dietaryValue.protein_preference} tone="green" />
+              {(dietaryValue.spice_preference || dietaryValue.dressing_preference) && (
+                <InfoRow
+                  label="Spice / dressing"
+                  value={[dietaryValue.spice_preference, dietaryValue.dressing_preference?.replace(/-/g, " ")].filter(Boolean).join(" · ")}
+                />
+              )}
+              {dietaryValue.free_text && (
+                <div>
+                  <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Notes for the kitchen</p>
+                  <p className="text-gray-600 leading-relaxed">{dietaryValue.free_text}</p>
                 </div>
-              ) : (
-                <p className="text-sm text-gray-400">No dietary profile on file.</p>
               )}
             </div>
           </Card>
@@ -736,7 +804,7 @@ export function ProfileClient({
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Internal notes, delivery instructions, follow-ups..."
+                placeholder="Internal notes, delivery instructions, follow-ups... (shows as Note on the Operations sheets)"
                 rows={4}
                 className="w-full text-sm rounded-lg border border-[#e2e8d5] bg-[#F9FBF7] px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20] resize-none transition-colors placeholder:text-gray-300"
               />
@@ -754,42 +822,23 @@ export function ProfileClient({
 
       {/* ── Modals ── */}
 
-      {/* Pause */}
-      {pauseOpen && (
-        <ModalOverlay onClose={() => setPauseOpen(false)}>
-          <ModalCard title="Pause subscription" onClose={() => setPauseOpen(false)}>
+      {modal === "pause" && (
+        <ModalOverlay onClose={() => setModal(null)}>
+          <ModalCard title="Pause subscription" onClose={() => setModal(null)}>
             <div className="space-y-4">
               <Field label="Pause from">
-                <input
-                  type="date"
-                  min={today()}
-                  value={pauseFrom}
-                  onChange={(e) => setPauseFrom(e.target.value)}
-                  className={inputCls}
-                />
+                <input type="date" min={today()} value={pauseFrom} onChange={(e) => setPauseFrom(e.target.value)} className={inputCls} />
               </Field>
               <Field label="Pause until">
-                <input
-                  type="date"
-                  min={pauseFrom || today()}
-                  value={pauseUntil}
-                  onChange={(e) => setPauseUntil(e.target.value)}
-                  className={inputCls}
-                />
+                <input type="date" min={pauseFrom || today()} value={pauseUntil} onChange={(e) => setPauseUntil(e.target.value)} className={inputCls} />
               </Field>
-              <p className="text-xs text-gray-400">
-                All scheduled orders in this range will be cancelled.
-              </p>
+              <p className="text-xs text-gray-400">All scheduled orders in this range will be cancelled.</p>
             </div>
             <ModalFooter>
-              <GhostBtn onClick={() => setPauseOpen(false)}>Cancel</GhostBtn>
+              <GhostBtn onClick={() => setModal(null)}>Cancel</GhostBtn>
               <PrimaryBtn
                 disabled={!pauseFrom || !pauseUntil || isPending}
-                onClick={() => run(
-                  () => pauseSubscription(subscriptionId, pauseFrom, pauseUntil),
-                  "Subscription paused.",
-                  () => setPauseOpen(false)
-                )}
+                onClick={() => run(() => pauseSubscription(subscriptionId, pauseFrom, pauseUntil), "Subscription paused.", () => setModal(null))}
               >
                 Confirm Pause
               </PrimaryBtn>
@@ -798,20 +847,12 @@ export function ProfileClient({
         </ModalOverlay>
       )}
 
-      {/* Extend */}
-      {extendOpen && (
-        <ModalOverlay onClose={() => setExtendOpen(false)}>
-          <ModalCard title="Extend plan" onClose={() => setExtendOpen(false)}>
+      {modal === "extend" && (
+        <ModalOverlay onClose={() => setModal(null)}>
+          <ModalCard title="Extend plan" onClose={() => setModal(null)}>
             <div className="space-y-4">
               <Field label="Meals to add">
-                <input
-                  type="number"
-                  min={1}
-                  max={90}
-                  value={extendMeals}
-                  onChange={(e) => setExtendMeals(Number(e.target.value))}
-                  className={inputCls}
-                />
+                <input type="number" min={1} max={90} value={extendMeals} onChange={(e) => setExtendMeals(Number(e.target.value))} className={inputCls} />
               </Field>
               <p className="text-sm text-gray-500">
                 Current: <strong>{subscription.deliveriesRemaining}</strong> → New total:{" "}
@@ -819,14 +860,10 @@ export function ProfileClient({
               </p>
             </div>
             <ModalFooter>
-              <GhostBtn onClick={() => setExtendOpen(false)}>Cancel</GhostBtn>
+              <GhostBtn onClick={() => setModal(null)}>Cancel</GhostBtn>
               <PrimaryBtn
                 disabled={extendMeals < 1 || isPending}
-                onClick={() => run(
-                  () => extendSubscription(subscriptionId, extendMeals),
-                  `Added ${extendMeals} meals.`,
-                  () => setExtendOpen(false)
-                )}
+                onClick={() => run(() => extendSubscription(subscriptionId, extendMeals), `Added ${extendMeals} meals.`, () => setModal(null))}
               >
                 Confirm Extension
               </PrimaryBtn>
@@ -835,22 +872,17 @@ export function ProfileClient({
         </ModalOverlay>
       )}
 
-      {/* Cancel */}
-      {cancelOpen && (
-        <ModalOverlay onClose={() => setCancelOpen(false)}>
-          <ModalCard title="Cancel subscription?" onClose={() => setCancelOpen(false)}>
+      {modal === "cancel" && (
+        <ModalOverlay onClose={() => setModal(null)}>
+          <ModalCard title="Cancel subscription?" onClose={() => setModal(null)}>
             <p className="text-sm text-gray-600 leading-relaxed">
               All upcoming scheduled orders will be cancelled. This cannot be undone from the app.
             </p>
             <ModalFooter>
-              <GhostBtn onClick={() => setCancelOpen(false)}>Keep it</GhostBtn>
+              <GhostBtn onClick={() => setModal(null)}>Keep it</GhostBtn>
               <DangerBtn
                 disabled={isPending}
-                onClick={() => run(
-                  () => cancelSubscription(subscriptionId),
-                  "Subscription cancelled.",
-                  () => setCancelOpen(false)
-                )}
+                onClick={() => run(() => cancelSubscription(subscriptionId), "Subscription cancelled.", () => setModal(null))}
               >
                 Cancel Plan
               </DangerBtn>
@@ -859,15 +891,106 @@ export function ProfileClient({
         </ModalOverlay>
       )}
 
+      {modal === "identity" && (
+        <IdentityModal
+          initial={{ name: user.name, phone: user.phone, email: user.email }}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(v) => act(() => updateCustomerIdentity(subscriptionId, user.id, v))}
+        />
+      )}
+
+      {modal === "plan" && (
+        <PlanModal
+          initial={{
+            planId: subscription.planId,
+            mealsLunch: subscription.mealsLunch,
+            mealsDinner: subscription.mealsDinner,
+            days: subscription.deliveryDays,
+            addonIds: addons.map((a) => a.id),
+            startDate: subscription.startDate,
+            mealsLeft: subscription.deliveriesRemaining,
+            deliveryMode: subscription.deliveryMode === "opt-in" ? "opt-in" : "opt-out",
+          }}
+          plans={catalogue.plans}
+          addons={catalogue.addons}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(v) => act(() => updatePlanSettings(subscriptionId, v))}
+        />
+      )}
+
+      {modal === "dietary" && (
+        <DietaryModal
+          initial={dietaryValue}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(v) => act(() => saveDietaryProfile(subscriptionId, user.id, v))}
+        />
+      )}
+
+      {modal === "address" && editingAddress && (
+        <AddressModal
+          initial={editingAddress}
+          pending={isPending}
+          onClose={() => { setModal(null); setEditingAddress(null) }}
+          onSave={(v) => act(() => saveCustomerAddress(subscriptionId, user.id, v))}
+        />
+      )}
+
+      {modal === "wallet" && (
+        <WalletModal
+          balance={walletBalance}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(amount, direction, reason) => act(() => adjustWallet(subscriptionId, user.id, amount, direction, reason))}
+        />
+      )}
+
+      {modal === "cash" && (
+        <CashModal
+          due={subscription.codDue}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onRecord={(amount) => act(() => recordCashPayment(subscriptionId, amount))}
+          onSetDue={(due, onCredit) => act(() => setCashDue(subscriptionId, due, onCredit))}
+        />
+      )}
+
+      {modal === "activate" && (
+        <ActivateModal
+          total={planPrice}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(paid, due) => act(() => activatePendingPlan(subscriptionId, paid, due))}
+        />
+      )}
+
+      {modal === "fixed" && (
+        <FixedDishModal
+          meals={catalogue.meals}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(slot, day, meal) => act(() => setFixedDish(subscriptionId, slot, day, meal))}
+        />
+      )}
+
+      <OrderEditor
+        key={editing ? `${editing.subscriptionId}|${editing.date}|${editing.slot}` : "closed"}
+        target={editing}
+        meals={catalogue.meals}
+        addons={catalogue.addons}
+        onClose={() => setEditing(null)}
+        onChanged={() => router.refresh()}
+      />
+
       {/* Toast */}
       {toast && (
         <div className={cn(
-          "fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg text-sm text-white",
+          "fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-lg text-sm text-white max-w-[90vw]",
           toast.type === "success" ? "bg-[#1B5E20]" : "bg-red-600"
         )}>
-          {toast.type === "success"
-            ? <CheckCircle className="w-4 h-4 shrink-0" />
-            : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {toast.type === "success" ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
           {toast.msg}
         </div>
       )}
@@ -885,11 +1008,16 @@ function Card({ children }: { children: React.ReactNode }) {
   )
 }
 
-function CardHeader({ title, icon }: { title: string; icon?: React.ReactNode }) {
+function CardHeader({ title, icon, action }: { title: string; icon?: React.ReactNode; action?: { label: string; onClick: () => void } }) {
   return (
-    <div className="px-5 py-3.5 border-b border-[#e2e8d5] bg-[#F9FBF7] flex items-center gap-2">
+    <div className="px-5 py-3.5 border-b border-[#e2e8d5] bg-[#F9FBF7] flex items-center gap-2 mb-4">
       {icon && <span className="text-gray-400">{icon}</span>}
       <h2 className="font-semibold text-[#1A1A1A] text-sm">{title}</h2>
+      {action && (
+        <button onClick={action.onClick} className="ml-auto text-xs font-medium text-[#1B5E20] hover:underline">
+          {action.label}
+        </button>
+      )}
     </div>
   )
 }
@@ -905,11 +1033,15 @@ function InfoRow({ label, value, highlight }: { label: string; value: string; hi
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function TagList({ label, items, tone }: { label: string; items: string[]; tone: "red" | "amber" | "green" }) {
+  if (!items.length) return null
+  const cls = { red: "bg-red-50 text-red-600", amber: "bg-amber-50 text-amber-700", green: "bg-[#E8F5E9] text-[#1B5E20]" }[tone]
   return (
     <div>
-      <label className="block text-sm font-medium text-[#1A1A1A] mb-1.5">{label}</label>
-      {children}
+      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1.5">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((a) => <span key={a} className={cn("px-2 py-0.5 text-xs rounded-full font-medium", cls)}>{a}</span>)}
+      </div>
     </div>
   )
 }
@@ -936,71 +1068,3 @@ function ActionBtn({
     </button>
   )
 }
-
-function ModalOverlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md">{children}</div>
-    </div>
-  )
-}
-
-function ModalCard({
-  title, children, onClose,
-}: {
-  title: string; children: React.ReactNode; onClose: () => void
-}) {
-  return (
-    <div className="bg-white rounded-2xl shadow-2xl p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold text-[#1A1A1A]">{title}</h3>
-        <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 transition-colors">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function ModalFooter({ children }: { children: React.ReactNode }) {
-  return <div className="flex gap-3 pt-1">{children}</div>
-}
-
-function GhostBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex-1 h-10 rounded-xl border border-[#e2e8d5] text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-    >
-      {children}
-    </button>
-  )
-}
-
-function PrimaryBtn({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="flex-1 h-10 rounded-xl bg-[#1B5E20] text-sm font-medium text-white hover:bg-[#155116] disabled:opacity-40 transition-colors"
-    >
-      {children}
-    </button>
-  )
-}
-
-function DangerBtn({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="flex-1 h-10 rounded-xl bg-red-600 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-40 transition-colors"
-    >
-      {children}
-    </button>
-  )
-}
-
-const inputCls = "w-full h-10 rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm text-[#1A1A1A] focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20] transition-colors"

@@ -2,161 +2,145 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
 import { istToday, addDaysISO } from "@/lib/ist"
-import { KitchenClient, type WeeklyMenuRow, type NextMealItem, type WeeklyOverviewRow } from "./kitchen-client"
+import { KitchenClient, type WeeklyMenuRow, type WeeklyOverviewRow, type CellItem } from "./kitchen-client"
 
 export const dynamic = "force-dynamic"
 
-function getWeekBounds(today: string): { weekStart: string; weekEnd: string } {
-  // day_of_week elsewhere in this file is Mon=0..Sun=6 (see dowNum below), so
-  // derive the same way rather than re-deriving from getUTCDay/getDay, which
-  // would reintroduce a Sun=0 vs Mon=0 mismatch.
-  const d = new Date(today + "T00:00:00Z")
-  const dowMon0 = (d.getUTCDay() + 6) % 7
-  const weekStart = addDaysISO(today, -dowMon0)
-  const weekEnd = addDaysISO(weekStart, 6)
-  return { weekStart, weekEnd }
+// Monday of the week containing `day` (weekly_menu.day_of_week is Mon=0..Sun=6).
+function mondayOf(day: string): string {
+  const d = new Date(day + "T00:00:00Z")
+  return addDaysISO(day, -((d.getUTCDay() + 6) % 7))
 }
 
-export default async function KitchenPage() {
+export default async function KitchenPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ week?: string }>
+}) {
   await requireAdmin()
   const isTest = await isTestMode()
+  const params = await searchParams
 
   const today = istToday()
-  const { weekStart, weekEnd } = getWeekBounds(today)
+  const weekStart = mondayOf(params.week && /^\d{4}-\d{2}-\d{2}$/.test(params.week) ? params.week : today)
+  const weekEnd = addDaysISO(weekStart, 6)
 
   const [
     { data: weeklyMenuRows, error },
-    { data: nextMeals, error: nextError },
     { data: weekOrders },
-    { data: activeSubs },
+    { data: liveSubs },
+    { data: meals },
+    { data: addons },
   ] = await Promise.all([
+    // One menu for everyone since migration 052 (the M2 track is gone).
     supabaseAdmin
       .from("weekly_menu")
-      .select("id, menu_type, day_of_week, meal_slot, meal_template_id, meal_templates ( name )")
-      .order("menu_type")
+      .select("id, day_of_week, meal_slot, meal_template_id, meal_templates ( name )")
+      .eq("menu_type", "M1")
       .order("day_of_week")
       .order("meal_slot"),
     supabaseAdmin
       .from("orders")
       .select(`
-        id, subscription_id, delivery_date, meal_slot,
-        subscriptions!inner ( id, menu_type, users!inner ( name, is_test ) ),
-        meal_templates ( name )
-      `)
-      .gte("delivery_date", today)
-      .in("status", ["scheduled", "confirmed", "preparing"])
-      .eq("subscriptions.users.is_test", isTest)
-      .order("delivery_date")
-      .limit(50),
-    supabaseAdmin
-      .from("orders")
-      .select(`
-        id, subscription_id, delivery_date, meal_slot, is_customized, quantity,
-        subscriptions!inner ( id, menu_type, user_id, users!inner ( name, is_test ) ),
+        id, subscription_id, delivery_date, meal_slot, status, skip_reason, is_customized, extra_dish, quantity, slot_seq,
+        subscriptions!inner ( id, user_id, users!inner ( name, is_test ) ),
         meal_templates ( name ),
-        order_addons ( kind, quantity, addons ( name ) )
+        order_addons ( kind, quantity, unit_price, addons ( name ) )
       `)
       .gte("delivery_date", weekStart)
       .lte("delivery_date", weekEnd)
-      .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
+      .neq("status", "cancelled")
       .eq("subscriptions.users.is_test", isTest)
-      .order("delivery_date"),
+      .order("delivery_date")
+      .order("slot_seq"),
     supabaseAdmin
       .from("subscriptions")
-      .select("id, menu_type, users!inner ( name, is_test )")
-      .eq("status", "active")
+      .select("id, user_id, users!inner ( name, is_test )")
+      .in("status", ["active", "paused"])
       .eq("users.is_test", isTest),
+    supabaseAdmin
+      .from("meal_templates")
+      .select("id, name, category")
+      .eq("is_active", true)
+      .eq("subscription_valid", true)
+      .order("category")
+      .order("name"),
+    supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
   ])
 
   const menuRows = (weeklyMenuRows ?? []).map((row: any) => ({
     id: row.id,
-    menuType: row.menu_type as "M1" | "M2",
     dayOfWeek: row.day_of_week as number,
     mealSlot: row.meal_slot as "lunch" | "dinner",
     mealTemplateId: row.meal_template_id as string | null,
     mealName: (row.meal_templates?.name ?? null) as string | null,
   })) as WeeklyMenuRow[]
 
-  // Next meal per subscription
-  const nextMealMap = new Map<string, NextMealItem>()
-  for (const order of (nextMeals ?? []) as any[]) {
-    const subId = order.subscription_id
-    if (!nextMealMap.has(subId)) {
-      const sub = Array.isArray(order.subscriptions) ? order.subscriptions[0] : order.subscriptions
-      const user = Array.isArray(sub?.users) ? sub?.users[0] : sub?.users
-      nextMealMap.set(subId, {
-        orderId: order.id,
-        subscriptionId: subId,
-        menuType: (sub?.menu_type ?? "M1") as "M1" | "M2",
-        userName: (user?.name ?? "Unknown") as string,
-        mealName: (order.meal_templates?.name ?? "—") as string,
-        deliveryDate: order.delivery_date as string,
-        mealSlot: order.meal_slot as "lunch" | "dinner",
-      })
-    }
-  }
-
-  // Weekly overview — group orders by subscription, then by date+slot
-  const DOW_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+  // Weekly calendar — one row per subscriber, one cell per date + slot, with
+  // every order in it (base meal, extra dishes, skipped, delivered).
   const subMap = new Map<string, WeeklyOverviewRow>()
+  const userOf = new Map<string, string>()
+  for (const s of (liveSubs ?? []) as any[]) {
+    const user = Array.isArray(s.users) ? s.users[0] : s.users
+    userOf.set(s.id, s.user_id)
+    subMap.set(s.id, { subscriptionId: s.id, userId: s.user_id, userName: user?.name ?? "Unknown", fixed: [], cells: {} })
+  }
   for (const order of (weekOrders ?? []) as any[]) {
     const sub = Array.isArray(order.subscriptions) ? order.subscriptions[0] : order.subscriptions
     const user = Array.isArray(sub?.users) ? sub?.users[0] : sub?.users
     const subId = order.subscription_id as string
     if (!subMap.has(subId)) {
-      subMap.set(subId, {
-        subscriptionId: subId,
-        userName: (user?.name ?? "Unknown") as string,
-        menuType: (sub?.menu_type ?? "M1") as string,
-        days: {},
-      })
+      userOf.set(subId, sub?.user_id)
+      subMap.set(subId, { subscriptionId: subId, userId: sub?.user_id, userName: user?.name ?? "Unknown", fixed: [], cells: {} })
     }
     const row = subMap.get(subId)!
-    const deliveryDate = new Date(order.delivery_date + "T00:00:00Z")
-    const dowNum = (deliveryDate.getUTCDay() + 6) % 7
-    const key = `${dowNum}-${order.meal_slot}`
-    const addons = ((order.order_addons ?? []) as any[])
-      .filter((oa: any) => oa.kind !== 'fee')   // fee lines aren't cooked — exclude from prep
-      .map((oa: any) => {
-        const name = oa.addons?.name
-        if (!name) return null
-        return (oa.quantity ?? 1) > 1 ? `${name} ×${oa.quantity}` : name
+    const key = `${order.delivery_date}|${order.meal_slot}`
+    const addonsOut = ((order.order_addons ?? []) as any[])
+      .filter((oa) => oa.kind === "addon" && oa.addons?.name)
+      .map((oa) => {
+        // A plan add-on is included once per portion.
+        const n = (oa.quantity ?? 1) * (oa.unit_price == null && !order.extra_dish ? (order.quantity ?? 1) : 1)
+        return n > 1 ? `${oa.addons.name} ×${n}` : oa.addons.name
       })
-      .filter(Boolean) as string[]
-    row.days[key] = {
-      mealName: (order.meal_templates?.name ?? "—") as string,
-      slot: order.meal_slot as string,
-      dow: DOW_NAMES[dowNum],
-      dowNum,
-      quantity: (order.quantity ?? 1) as number,
-      isCustomized: (order.is_customized ?? false) as boolean,
-      addons,
+    const item: CellItem = {
+      mealName: order.meal_templates?.name ?? "—",
+      quantity: order.quantity ?? 1,
+      status: order.status,
+      skipReason: order.skip_reason ?? null,
+      extra: !!order.extra_dish,
+      customized: !!order.is_customized,
+      addons: addonsOut,
     }
+    ;(row.cells[key] ??= []).push(item)
   }
 
-  // Ensure every active subscription appears in the weekly overview, even with no orders yet.
-  for (const sub of (activeSubs ?? []) as any[]) {
-    if (!subMap.has(sub.id)) {
-      const user = Array.isArray(sub.users) ? sub.users[0] : sub.users
-      subMap.set(sub.id, {
-        subscriptionId: sub.id,
-        userName: (user?.name ?? "Unknown") as string,
-        menuType: (sub.menu_type ?? "M1") as string,
-        days: {},
-      })
+  // Fixed-dish rules, shown as a pin on the subscriber's row.
+  const userIds = Array.from(new Set(Array.from(userOf.values()).filter(Boolean)))
+  if (userIds.length) {
+    const { data: rules } = await supabaseAdmin
+      .from("customer_meal_rules")
+      .select("user_id, meal_slot, day_of_week, meal_templates ( name )")
+      .in("user_id", userIds)
+    const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for (const row of subMap.values()) {
+      row.fixed = ((rules ?? []) as any[])
+        .filter((r) => r.user_id === row.userId)
+        .map((r) => `${r.meal_slot === "lunch" ? "L" : "D"}${r.day_of_week === null ? "" : ` ${DAY[r.day_of_week]}`}: ${(Array.isArray(r.meal_templates) ? r.meal_templates[0] : r.meal_templates)?.name ?? "?"}`)
     }
   }
 
   if (error) console.error("[kitchen] load failed:", error)
-  if (nextError) console.error("[kitchen] next meals load failed:", nextError)
 
   return (
     <div className="p-6 md:p-8 max-w-7xl">
       <KitchenClient
         initialRows={menuRows}
-        initialNextMeals={Array.from(nextMealMap.values())}
-        weeklyOverview={Array.from(subMap.values())}
-        weekDates={{ weekStart, weekEnd }}
+        weeklyOverview={Array.from(subMap.values()).sort((a, b) => a.userName.localeCompare(b.userName))}
+        week={{ start: weekStart, end: weekEnd, today }}
+        catalogue={{
+          meals: (meals ?? []) as { id: string; name: string; category: string }[],
+          addons: (addons ?? []) as { id: string; name: string; price_per_meal: number }[],
+        }}
       />
     </div>
   )

@@ -88,10 +88,10 @@ export async function archiveDish(id: string) {
   await requireAdmin()
 
   const { data: weeklyRows } = await supabaseAdmin
-    .from("weekly_menu").select("menu_type, day_of_week, meal_slot").eq("meal_template_id", id)
+    .from("weekly_menu").select("day_of_week, meal_slot").eq("meal_template_id", id)
   if (weeklyRows && weeklyRows.length > 0) {
     const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    const slots = weeklyRows.map((r) => `${r.menu_type} ${DAYS[r.day_of_week]} ${r.meal_slot}`).join(", ")
+    const slots = weeklyRows.map((r) => `${DAYS[r.day_of_week]} ${r.meal_slot}`).join(", ")
     throw new Error(`This dish is in the weekly menu (${slots}). Clear it there first.`)
   }
 

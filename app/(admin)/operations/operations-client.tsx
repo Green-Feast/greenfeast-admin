@@ -2,18 +2,25 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { advanceBatchStatus, advanceOrderStatus, type DeliveryStatus, type MealSlot } from "./actions";
+import { setAddressBatch } from "@/app/(admin)/batches/actions";
+import { recordCashPayment } from "@/app/(admin)/subscribers/[id]/actions";
 import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
 
 export type OperationsSubscriber = {
   orderId: string;
+  subscriptionId: string;
+  addressId: string | null;
+  addressLabel: string;
+  quantity: number;
+  codDue: number;
   batchId: string | null;
   status: string;
   mealSlot: MealSlot;
@@ -69,12 +76,22 @@ function batchCurrentStage(counts: ReturnType<typeof statusCounts>): DeliverySta
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
 
+// Portions, not orders: two dinners for a customer and their roommate are
+// two meals to cook (this used to count 1 per order).
 function countMeals(subs: OperationsSubscriber[]) {
   const counts: Record<string, number> = {};
   subs.forEach((s) => {
-    counts[s.meal] = (counts[s.meal] || 0) + 1;
+    counts[s.meal] = (counts[s.meal] || 0) + (s.quantity || 1);
   });
   return counts;
+}
+
+function mealWithQty(s: OperationsSubscriber) {
+  return s.quantity > 1 ? `${s.meal} ×${s.quantity}` : s.meal;
+}
+
+function rupees(paise: number) {
+  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
 function mealCountsText(counts: Record<string, number>) {
@@ -160,8 +177,8 @@ function generateMasterListPDF(subs: OperationsSubscriber[], date: string, slot:
       s.rc,
       s.name,
       s.phone,
-      s.address.substring(0, 30),
-      s.meal,
+      `${s.addressLabel}: ${s.address}`.substring(0, 34),
+      mealWithQty(s),
       s.constraints.substring(0, 25),
       s.addons,
       s.timing,
@@ -254,7 +271,7 @@ function generateKitchenSheetPDF(subs: OperationsSubscriber[], date: string, slo
       s.code,
       s.rc,
       s.name,
-      s.meal,
+      mealWithQty(s),
       s.constraints,
       s.addons,
     ]);
@@ -348,9 +365,9 @@ function generateDeliverySheetPDF(batch: string, subs: OperationsSubscriber[], d
   // Table
   const tableData = subs.map((s) => [
     s.code,
-    s.name,
+    s.quantity > 1 ? `${s.name} (×${s.quantity})` : s.name,
     s.phone,
-    s.address,
+    `${s.addressLabel}: ${s.address}`,
     s.timing,
   ]);
 
@@ -394,10 +411,12 @@ export function OperationsClient({
   initialSubscribers,
   serverDate,
   closures,
+  batches,
 }: {
   initialSubscribers: OperationsSubscriber[];
   serverDate: string; // YYYY-MM-DD from URL/server
   closures: KitchenClosure[];
+  batches: { id: string; name: string; meal_slot: MealSlot }[];
 }) {
   const [showClosure, setShowClosure] = useState(false);
   const router = useRouter();
@@ -424,8 +443,45 @@ export function OperationsClient({
   const [advancing, setAdvancing] = useState<string | null>(null);
   const [advancingOrder, setAdvancingOrder] = useState<string | null>(null);
 
-  const batchNames = [...new Set(slotSubs.map((s) => s.batch))].sort();
+  const batchNames = [...new Set(slotSubs.map((s) => s.batch))].sort((a, b) =>
+    a === "Unassigned" ? -1 : b === "Unassigned" ? 1 : a.localeCompare(b)
+  );
   const totalDeliveries = slotSubs.length;
+  const unassigned = slotSubs.filter((s) => !s.batchId && s.status !== "delivered").length;
+  const slotBatches = batches.filter((b) => b.meal_slot === slot);
+  const [busyRow, setBusyRow] = useState<string | null>(null);
+
+  // An address's batch, set from here: every upcoming meal going there
+  // follows (migration 052), so this fixes today's sheet and future days.
+  function handleAssign(s: OperationsSubscriber, batchId: string) {
+    if (!s.addressId || !batchId) return;
+    setBusyRow(s.orderId);
+    startTransition(async () => {
+      try {
+        await setAddressBatch(s.addressId!, slot, batchId);
+        router.refresh();
+        showToast(`${s.name} (${s.addressLabel}) → ${batches.find((b) => b.id === batchId)?.name ?? "batch"}`);
+      } catch (e: any) {
+        showToast(e?.message ?? "Could not assign the batch.");
+      } finally {
+        setBusyRow(null);
+      }
+    });
+  }
+
+  function handleCollect(s: OperationsSubscriber) {
+    const answer = window.prompt(`Cash collected from ${s.name} (₹). Still due: ${rupees(s.codDue)}`, String(s.codDue / 100));
+    if (!answer) return;
+    const paise = Math.round((parseFloat(answer) || 0) * 100);
+    if (paise <= 0) return;
+    setBusyRow(s.orderId);
+    startTransition(async () => {
+      const res = await recordCashPayment(s.subscriptionId, paise);
+      setBusyRow(null);
+      showToast(res.ok ? res.message ?? "Cash recorded." : res.error);
+      if (res.ok) router.refresh();
+    });
+  }
 
   function showToast(msg: string) {
     setToast(msg);
@@ -576,6 +632,16 @@ export function OperationsClient({
         />
       )}
 
+      {unassigned > 0 && (
+        <div className="mb-4 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            <span className="font-semibold">{unassigned} {slot} meal{unassigned === 1 ? "" : "s"} with no batch</span>
+            {" "}— a new or changed address. Pick a batch on the Unassigned card below; it applies to every meal going to that address.
+          </span>
+        </div>
+      )}
+
       {provisional && (
         <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
           <span className="font-semibold">Provisional</span>
@@ -638,7 +704,9 @@ export function OperationsClient({
                 style={{ backgroundColor: `rgb(${colors.light.join(",")})` }}
               >
                 <h3 className="text-lg font-bold text-[#1A1A1A]">{batch}</h3>
-                <p className="text-sm font-semibold text-[#1B5E20] mt-1">{batchSubs.length} deliveries</p>
+                <p className="text-sm font-semibold text-[#1B5E20] mt-1">
+                  {batchSubs.length} deliveries · {batchSubs.reduce((n, s) => n + (s.quantity || 1), 0)} meals
+                </p>
               </div>
 
               {/* Status pipeline */}
@@ -698,8 +766,31 @@ export function OperationsClient({
                   return (
                     <div key={s.orderId} className="flex items-center justify-between gap-2 py-2 border-b border-[#e2e8d5] last:border-0">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-[#1A1A1A] truncate">{s.name}</p>
-                        <p className="text-xs text-gray-400 truncate">{s.address}</p>
+                        <p className="text-sm font-medium text-[#1A1A1A] truncate">
+                          {s.name}
+                          {s.quantity > 1 && <span className="ml-1 text-xs font-semibold text-[#1B5E20]">×{s.quantity}</span>}
+                        </p>
+                        <p className="text-xs text-gray-400 truncate"><span className="font-medium text-gray-500">{s.addressLabel}</span> · {s.address}</p>
+                        {!s.batchId && s.addressId && (
+                          <select
+                            defaultValue=""
+                            disabled={busyRow === s.orderId}
+                            onChange={(e) => handleAssign(s, e.target.value)}
+                            className="mt-1 h-7 w-full rounded-md border border-red-300 bg-white px-1.5 text-xs text-red-700"
+                          >
+                            <option value="">Assign a {slot} batch…</option>
+                            {slotBatches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                          </select>
+                        )}
+                        {s.codDue > 0 && (
+                          <button
+                            onClick={() => handleCollect(s)}
+                            disabled={busyRow === s.orderId}
+                            className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+                          >
+                            <Banknote className="w-3 h-3" /> Collect {rupees(s.codDue)}
+                          </button>
+                        )}
                       </div>
                       {s.status === "delivered" ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1B5E20] bg-green-50 px-2 py-1 rounded-md shrink-0">

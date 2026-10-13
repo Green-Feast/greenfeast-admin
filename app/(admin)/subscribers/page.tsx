@@ -21,15 +21,12 @@ export default async function SubscribersPage() {
       plan_name,
       deliveries_remaining,
       end_date,
-      menu_type,
       meals_lunch,
       meals_dinner,
       delivery_mode,
       special_notes,
       created_at,
       users!inner ( name, phone, created_at, customer_code, is_test ),
-      batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
-      batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name ),
       plans ( meals_total )
     `)
     .in("status", ["active", "pending", "paused"])
@@ -56,7 +53,12 @@ export default async function SubscribersPage() {
 
   const [{ data: addressRows }, { data: dietaryRows }, { data: walletRows }, { data: addonRows }] = await Promise.all([
     userIds.length
-      ? supabaseAdmin.from("addresses").select("user_id, line1, landmark, pincode, is_default").in("user_id", userIds).order("is_default", { ascending: false })
+      ? supabaseAdmin
+          .from("addresses")
+          .select("user_id, line1, landmark, pincode, is_default, bl:batches!addresses_batch_id_lunch_fkey ( name ), bd:batches!addresses_batch_id_dinner_fkey ( name )")
+          .in("user_id", userIds)
+          .is("archived_at", null)
+          .order("is_default", { ascending: false })
       : Promise.resolve({ data: [] as any[] }),
     userIds.length
       ? supabaseAdmin.from("dietary_profiles").select("user_id, dietary_preference, allergens").in("user_id", userIds)
@@ -84,14 +86,15 @@ export default async function SubscribersPage() {
 
   const subscribers: Subscriber[] = rows.map((s) => {
     const user = Array.isArray(s.users) ? s.users[0] : s.users;
-    const batchLunch = Array.isArray((s as any).batchLunch) ? (s as any).batchLunch[0] : (s as any).batchLunch;
-    const batchDinner = Array.isArray((s as any).batchDinner) ? (s as any).batchDinner[0] : (s as any).batchDinner;
     const plan = Array.isArray(s.plans) ? s.plans[0] : s.plans;
     const expiry = s.end_date
       ? new Date(s.end_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
       : "";
 
     const addr = addressByUser.get(s.user_id);
+    // Batches belong to addresses (migration 052) — the default one's.
+    const batchLunch = Array.isArray(addr?.bl) ? addr.bl[0] : addr?.bl;
+    const batchDinner = Array.isArray(addr?.bd) ? addr.bd[0] : addr?.bd;
     const address = addr ? [addr.line1, addr.landmark, addr.pincode].filter(Boolean).join(", ") : "";
     const dietary = dietaryByUser.get(s.user_id);
     const constraints = [
@@ -117,7 +120,10 @@ export default async function SubscribersPage() {
       name: (user as any)?.name ?? "Unknown",
       phone: (user as any)?.phone ?? "",
       address,
-      meal: s.menu_type ?? "—",
+      meal: [
+        (s.meals_lunch ?? 0) > 0 ? `${s.meals_lunch} lunch${s.meals_lunch > 1 ? "es" : ""}` : null,
+        (s.meals_dinner ?? 0) > 0 ? `${s.meals_dinner} dinner${s.meals_dinner > 1 ? "s" : ""}` : null,
+      ].filter(Boolean).join(" + ") || "—",
       constraints,
       addons: addonNames,
       timing: "",

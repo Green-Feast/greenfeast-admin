@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
-import { notifyUsers } from "@/lib/notifications"
+import { notifyEvent } from "@/lib/notifications"
+import { instantiateOrders } from "@/lib/instantiate"
 import { isTestMode } from "@/lib/mode"
 import { randomInt } from "crypto"
 import type { CreateSubInput, NewCustomer } from "./types"
@@ -34,31 +35,6 @@ async function wipeUserData(userId: string) {
   await supabaseAdmin.from("notifications").delete().eq("user_id", userId)
 }
 
-async function instantiateOrders(subscriptionId: string) {
-  // Reuse the tested edge function (ingredient snapshot, addon copy, pause skip).
-  // INTERNAL_FN_SECRET (not SUPABASE_SECRET_KEY — see
-  // app/api/cron/instantiate-orders/route.ts for why that doesn't work from
-  // outside Supabase's own edge runtime) unlocks any subscription_id.
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const secret = process.env.INTERNAL_FN_SECRET
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !secret || !anonKey) return
-  try {
-    await fetch(`${url}/functions/v1/instantiate-orders`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${secret}`,
-        apikey: anonKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ subscription_id: subscriptionId }),
-    })
-  } catch (e) {
-    // Non-fatal — the nightly cron will pick the subscription up regardless.
-    console.error("instantiate-orders call failed:", e)
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Create subscription (admin-side onboarding)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,21 +46,26 @@ export async function createSubscription(
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, deliveryMode, activation, address,
-    mealsLeft, walletCredit, addonIds, startDate,
+    mealsLeft, walletCredit, addonIds, startDate, cashDue,
   } = input
 
   if (!planId) return { ok: false, error: "Pick a plan." }
   if (!days || days.length === 0) return { ok: false, error: "Select at least one delivery day." }
   if (mealsLunch + mealsDinner < 1) return { ok: false, error: "Set at least one meal per day." }
   if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return { ok: false, error: "Pick a valid first delivery date." }
+  // Cash on delivery set up by the admin: whatever was paid upfront goes in
+  // the wallet (walletCredit, can be 0) and the plan runs on credit until the
+  // rest (cashDue) is recorded — the wallet may go negative meanwhile.
   const isCod = activation === "cod"
-  if (!isCod) {
-    if (!Number.isInteger(mealsLeft) || (mealsLeft as number) < 1 || (mealsLeft as number) > 500) {
-      return { ok: false, error: "Meals left must be between 1 and 500." }
-    }
-    if (!Number.isInteger(walletCredit) || (walletCredit as number) < 0 || (walletCredit as number) > 20_000_000) {
-      return { ok: false, error: "Wallet credit must be between ₹0 and ₹2,00,000." }
-    }
+  if (!Number.isInteger(mealsLeft) || (mealsLeft as number) < 1 || (mealsLeft as number) > 500) {
+    return { ok: false, error: "Meals left must be between 1 and 500." }
+  }
+  if (!Number.isInteger(walletCredit) || (walletCredit as number) < 0 || (walletCredit as number) > 20_000_000) {
+    return { ok: false, error: "Amount paid must be between ₹0 and ₹2,00,000." }
+  }
+  const due = isCod ? (cashDue ?? 0) : 0
+  if (!Number.isInteger(due) || due < 0 || due > 20_000_000) {
+    return { ok: false, error: "Cash to collect must be between ₹0 and ₹2,00,000." }
   }
 
   // 1. Ensure a public.users row exists (phone is NOT NULL UNIQUE).
@@ -128,13 +109,16 @@ export async function createSubscription(
       user_id: userId,
       plan_id: plan.id,
       plan_name: plan.name,
-      status: isCod ? "pending" : "active",
+      status: "active",
       payment_method: isCod ? "cod" : "online",
+      cod_due_paise: due,
+      cod_on_credit: isCod && due > 0,
+      menu_type: "M1",
       delivery_mode: deliveryMode,
       meals_per_day: mealsLunch + mealsDinner,
       meals_lunch: mealsLunch,
       meals_dinner: mealsDinner,
-      deliveries_remaining: isCod ? 0 : (mealsLeft as number),
+      deliveries_remaining: mealsLeft as number,
       // Orders start from here (instantiate-orders) — lets the app take over
       // from a chosen day without doubling up with the old process.
       start_date: startDate || null,
@@ -180,11 +164,12 @@ export async function createSubscription(
   )
   await supabaseAdmin.from("users").update({ onboarded: true }).eq("id", userId)
 
-  // 7. Already paid outside the app: record it and put the money in the wallet.
-  //    Meals are billed from the wallet at delivery and the 8 AM / 1 PM check
-  //    skips meals it can't cover, so without this credit every meal of a
-  //    customer moved over from the spreadsheet would be skipped.
-  if (!isCod && (walletCredit as number) > 0) {
+  // 7. Already paid outside the app (or the cash-on-delivery upfront): record it
+  //    and put the money in the wallet. Meals are billed from the wallet at
+  //    delivery and the 8 AM / 1 PM check skips meals it can't cover, so
+  //    without this credit every meal of a customer moved over from the
+  //    spreadsheet would be skipped (cash-on-delivery plans run on credit).
+  if ((walletCredit as number) > 0) {
     const { error: payErr } = await supabaseAdmin.from("payments").insert({
       user_id: userId,
       subscription_id: sub.id,
@@ -196,26 +181,22 @@ export async function createSubscription(
     const { error: creditErr } = await supabaseAdmin.rpc("wallet_credit", {
       p_user: userId,
       p_amount: walletCredit,
-      p_reason: "Opening balance — moved from previous records",
+      p_reason: isCod ? "Paid upfront — cash on delivery plan" : "Opening balance — moved from previous records",
       p_reference_id: sub.id,
     })
     if (creditErr) return { ok: false, error: `Plan created, but the wallet credit failed: ${creditErr.message}` }
   }
 
-  if (!isCod) {
-    const { data: who } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
-    const rupees = `₹${((walletCredit as number) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
-    await notifyUsers(
-      [{ user_id: userId, name: who?.name ?? "Customer", phone: who?.phone ?? null }],
-      "Your GreenFeast plan is ready",
-      `${mealsLeft} meals are set up in the app${(walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : ""}. Manage meals, skips and deliveries from My Plan.`,
-      "custom",
-      ["push"]
-    )
-  }
-
-  // 8. Generate the next 14 days of orders (active + CoD-pending are eligible).
+  // 8. Generate the next 14 days of orders.
   await instantiateOrders(sub.id)
+
+  const { data: who } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
+  const rupees = `₹${((walletCredit as number) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+  await notifyEvent(
+    "plan_ready",
+    [{ user_id: userId, name: who?.name ?? "Customer", phone: who?.phone ?? null }],
+    { meals: mealsLeft as number, wallet_note: (walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : "" }
+  )
 
   revalidatePath("/users")
   return { ok: true }
