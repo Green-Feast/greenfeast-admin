@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireAdmin } from "@/lib/auth"
+import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { syncFutureOrdersBatch } from "@/lib/batch-sync"
 import { istToday, isSlotLocked } from "@/lib/ist"
 
@@ -63,7 +63,7 @@ export async function resumeSubscription(subId: string) {
 }
 
 export async function cancelSubscription(subId: string) {
-  await requireAdmin()
+  await requireAdminStrict()
   await supabaseAdmin.from("subscriptions").update({ status: "cancelled" }).eq("id", subId)
   const { data: open } = await supabaseAdmin.from("orders")
     .select("id, delivery_date, meal_slot")
@@ -81,7 +81,7 @@ export async function cancelSubscription(subId: string) {
 }
 
 export async function extendSubscription(subId: string, meals: number) {
-  await requireAdmin()
+  await requireAdminStrict()
   const { data } = await supabaseAdmin
     .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
   if (!data) return
@@ -106,7 +106,7 @@ async function planTotal(subId: string, plan: { base_price: number; meals_total:
 }
 
 export async function markCodPaid(subId: string) {
-  await requireAdmin()
+  await requireAdminStrict()
   // "Mark cash received": the delivery partner has collected the cash. Records
   // the payment, credits it to the wallet, activates the plan and tells the
   // customer. CoD wallets are no longer funded at signup (that was free wallet

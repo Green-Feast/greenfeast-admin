@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireAdmin } from "@/lib/auth"
+import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { notifyUsers, logBroadcast } from "@/lib/notifications"
 import { isTestMode, modeUserIds } from "@/lib/mode"
 
@@ -43,7 +43,7 @@ export async function advanceBatchStatus(
   newStatus: DeliveryStatus,
   slot: MealSlot
 ) {
-  await requireAdmin()
+  await requireAdminStrict()
   // Only the current mode's customers (Live / Test) — a batch can hold both,
   // and marking Live deliveries must never touch (or bill) test accounts.
   const isTest = await isTestMode()
@@ -88,7 +88,7 @@ export async function advanceBatchStatus(
  * logic exactly so the two paths can never diverge.
  */
 export async function advanceOrderStatus(orderId: string, newStatus: DeliveryStatus, slot: MealSlot) {
-  await requireAdmin()
+  await requireAdminStrict()
   let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
 
   if (newStatus === "delivered") {
@@ -213,7 +213,7 @@ export async function previewKitchenClosure(date: string, slots: MealSlot[]) {
 }
 
 export async function closeKitchen(date: string, slots: MealSlot[], reason: string, notify: boolean) {
-  const admin = await requireAdmin()
+  const admin = await requireAdminStrict()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Pick a date.")
   if (slots.length === 0) throw new Error("Pick lunch, dinner or both.")
   let cancelled = 0
@@ -236,7 +236,7 @@ export async function closeKitchen(date: string, slots: MealSlot[], reason: stri
 }
 
 export async function reopenKitchen(date: string, slot: MealSlot, notify: boolean) {
-  await requireAdmin()
+  await requireAdminStrict()
   const { data, error } = await supabaseAdmin.rpc("reopen_kitchen", { p_date: date, p_slot: slot, p_notify: notify })
   if (error) throw new Error(error.message)
   revalidatePath("/operations")

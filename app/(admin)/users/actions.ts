@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireAdmin } from "@/lib/auth"
+import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { notifyUsers } from "@/lib/notifications"
 import { isTestMode } from "@/lib/mode"
 import { randomInt } from "crypto"
@@ -66,7 +66,7 @@ async function instantiateOrders(subscriptionId: string) {
 export async function createSubscription(
   input: CreateSubInput
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, deliveryMode, activation, address,
@@ -227,7 +227,7 @@ export async function createSubscription(
 
 /** Wipe app data but keep the login, so onboarding can be re-tested fresh. */
 export async function resetUserData(userId: string): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   try {
     await wipeUserData(userId)
     await supabaseAdmin.from("users").update({ onboarded: false }).eq("id", userId)
@@ -240,7 +240,7 @@ export async function resetUserData(userId: string): Promise<{ ok: boolean; erro
 
 /** Remove the user entirely — app data first, then the auth + public.users rows. */
 export async function deleteUser(userId: string): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   try {
     await wipeUserData(userId)
     await supabaseAdmin.from("users").delete().eq("id", userId)
@@ -258,7 +258,7 @@ export async function editUserProfile(
   name: string,
   phone: string
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   const { data: existing } = await supabaseAdmin
     .from("users")
     .select("id")
@@ -304,7 +304,7 @@ export async function resumeSub(subId: string) {
 }
 
 export async function cancelSub(subId: string) {
-  await requireAdmin()
+  await requireAdminStrict()
   await supabaseAdmin.from("subscriptions").update({ status: "cancelled" }).eq("id", subId)
   await supabaseAdmin.from("orders").update({ status: "cancelled" })
     .eq("subscription_id", subId)
@@ -313,7 +313,7 @@ export async function cancelSub(subId: string) {
 }
 
 export async function extendSub(subId: string, meals: number) {
-  await requireAdmin()
+  await requireAdminStrict()
   const { data } = await supabaseAdmin
     .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
   if (!data) return
@@ -329,7 +329,7 @@ export async function extendSub(subId: string, meals: number) {
 
 /** Move an account between Live and Test. Going Live gives a test account a real GF- code. */
 export async function setUserTestFlag(userId: string, isTest: boolean): Promise<{ ok: boolean; error?: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   const { error } = await supabaseAdmin.rpc("set_user_test_flag", { p_user: userId, p_is_test: isTest })
   if (error) return { ok: false, error: error.message }
   revalidatePath("/users")
@@ -361,7 +361,7 @@ export async function createCustomerAccount(input: {
   email: string
   phone: string
 }): Promise<{ ok: true; customer: NewCustomer; tempPassword: string } | { ok: false; error: string }> {
-  await requireAdmin()
+  await requireAdminStrict()
   const isTest = await isTestMode()
 
   const name = input.name.trim()

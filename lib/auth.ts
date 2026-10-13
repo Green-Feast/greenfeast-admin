@@ -31,3 +31,28 @@ export const requireAdmin = cache(async (): Promise<AdminUser> => {
 
   return { id: claims.sub, email: (claims.email as string | undefined) ?? null };
 });
+
+// For actions that move money, bill deliveries, create or delete accounts, or
+// message customers: verify the session with the Auth server itself
+// (getUser), so a session revoked by a password change or "sign out
+// everywhere" stops working immediately — getClaims() alone would accept the
+// still-unexpired token for up to its lifetime (~1 hour). Costs one extra
+// round trip, only on these clicks.
+export const requireAdminStrict = cache(async (): Promise<AdminUser> => {
+  const supabase = await createServerSupabase();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+  if (error || !user) redirect("/login");
+
+  const { data: adminRow } = await supabaseAdmin
+    .from("admin_users")
+    .select("user_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!adminRow) redirect("/login");
+
+  return { id: user.id, email: user.email ?? null };
+});

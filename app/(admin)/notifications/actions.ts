@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireAdminStrict } from "@/lib/auth";
 import { notifyUsers, logBroadcast, type Channel } from "@/lib/notifications";
 
 export type SendBroadcastInput = {
@@ -14,7 +14,7 @@ export type SendBroadcastInput = {
 };
 
 export async function sendBroadcast(input: SendBroadcastInput) {
-  const admin = await requireAdmin();
+  const admin = await requireAdminStrict();
 
   if (!input.title.trim() || !input.body.trim()) {
     throw new Error("Title and message are required.");

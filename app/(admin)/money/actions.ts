@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireAdmin } from "@/lib/auth"
+import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { notifyUsers } from "@/lib/notifications"
 
 export type RefundResult = { ok: true; message: string } | { ok: false; error: string }
@@ -22,7 +22,7 @@ async function recipient(userId: string) {
 // Store credit — the default under the Refunds & Cancellations policy
 // (undelivered meal, quality issue, wrong or missing item…).
 export async function refundToWallet(userId: string, amountPaise: number, reason: string): Promise<RefundResult> {
-  const admin = await requireAdmin()
+  const admin = await requireAdminStrict()
   if (!userId) return { ok: false, error: "Pick a customer." }
   if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
   if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
@@ -60,7 +60,7 @@ export async function refundToWallet(userId: string, amountPaise: number, reason
 // Money back to the original UPI / card / bank through Cashfree, against one
 // paid payment. The edge function deducts the same amount from the wallet.
 export async function refundToBank(paymentId: string, amountPaise: number, reason: string): Promise<RefundResult> {
-  const admin = await requireAdmin()
+  const admin = await requireAdminStrict()
   if (!paymentId) return { ok: false, error: "Pick the payment to refund." }
   if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
   if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
