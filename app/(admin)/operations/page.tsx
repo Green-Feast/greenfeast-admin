@@ -20,14 +20,14 @@ export default async function OperationsPage({
 
   // Kitchen closures from today on (banner for the selected date + the
   // "Close kitchen" dialog's list).
-  const { data: closureRows } = await supabaseAdmin
+  const closuresQuery = supabaseAdmin
     .from("kitchen_closures")
     .select("closed_on, meal_slot, reason")
     .gte("closed_on", istToday())
     .order("closed_on")
     .order("meal_slot");
 
-  const { data, error } = await supabaseAdmin
+  const ordersQuery = supabaseAdmin
     .from("orders")
     .select(`
       id,
@@ -52,6 +52,9 @@ export default async function OperationsPage({
     // at all before — codes came from whatever order Postgres happened to
     // return that request).
     .order("id");
+
+  // Both in one round trip.
+  const [{ data: closureRows }, { data, error }] = await Promise.all([closuresQuery, ordersQuery]);
 
   if (error) console.error("[operations] load failed:", error);
 

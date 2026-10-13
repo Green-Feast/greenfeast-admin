@@ -19,14 +19,10 @@ type SubRow = {
 export default async function UsersPage() {
   await requireAdmin()
 
-  // 1. Auth accounts (the superset — everyone who has ever signed in).
-  const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
-  })
-
-  // 2. App-side profile + subscription data + plan catalogue (for create form).
-  const [{ data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }] = await Promise.all([
+  // Auth accounts (the superset — everyone who has ever signed in) and the
+  // app-side profile, subscription, plan and add-on data, all in parallel.
+  const [{ data: authData, error: authErr }, { data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }] = await Promise.all([
+    supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
     supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code, is_test"),
     supabaseAdmin
       .from("subscriptions")

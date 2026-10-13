@@ -12,8 +12,11 @@ export default async function MoneyPage() {
   const isTest = await isTestMode()
 
   // Settle pending bank refunds by asking Cashfree (refund events aren't
-  // available on our webhook settings). Best-effort, capped at a few seconds.
-  await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/admin-refund`, {
+  // available on our webhook settings). Only when one is actually pending —
+  // calling the edge function on every load cost a second or more.
+  const { count: pendingBank } = await supabaseAdmin
+    .from("refunds").select("id", { count: "exact", head: true }).eq("kind", "bank").eq("status", "pending");
+  if (pendingBank) await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/admin-refund`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
