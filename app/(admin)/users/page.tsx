@@ -1,10 +1,11 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { UsersClient, type UserRow, type Plan, type AddonOption } from "./users-client"
+import { isTestMode } from "@/lib/mode"
 
 export const dynamic = "force-dynamic"
 
-type PublicUser = { id: string; name: string | null; phone: string | null; onboarded: boolean; created_at: string; customer_code: string | null }
+type PublicUser = { id: string; name: string | null; phone: string | null; onboarded: boolean; created_at: string; customer_code: string | null; is_test: boolean }
 type SubRow = {
   id: string
   user_id: string
@@ -26,7 +27,7 @@ export default async function UsersPage() {
 
   // 2. App-side profile + subscription data + plan catalogue (for create form).
   const [{ data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }] = await Promise.all([
-    supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code"),
+    supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code, is_test"),
     supabaseAdmin
       .from("subscriptions")
       .select("id, user_id, status, plan_name, deliveries_remaining, payment_method, created_at")
@@ -59,6 +60,7 @@ export default async function UsersPage() {
       email: au.email ?? null,
       name: pub?.name ?? metaName ?? null,
       customerCode: pub?.customer_code ?? null,
+      isTest: pub?.is_test ?? false,
       phone: pub?.phone ?? au.phone ?? null,
       provider: (au.app_metadata?.provider as string) ?? "email",
       joinedAt: au.created_at ?? null,
@@ -73,14 +75,19 @@ export default async function UsersPage() {
     }
   })
 
+  // Live / Test (admin mode, sidebar switch): only this side's accounts.
+  const isTest = await isTestMode()
+  const modeRows = rows.filter((r) => r.isTest === isTest)
+
   // Newest sign-ups first.
-  rows.sort((a, b) => (b.joinedAt ?? "").localeCompare(a.joinedAt ?? ""))
+  modeRows.sort((a, b) => (b.joinedAt ?? "").localeCompare(a.joinedAt ?? ""))
 
   const planList = (plans ?? []) as Plan[]
 
   return (
     <UsersClient
-      initialUsers={rows}
+      initialUsers={modeRows}
+      isTestMode={isTest}
       plans={planList}
       addons={(addonRows ?? []) as AddonOption[]}
       loadError={!!authErr}

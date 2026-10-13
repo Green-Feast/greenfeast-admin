@@ -1,7 +1,9 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { istToday } from "@/lib/ist";
+import { isTestMode } from "@/lib/mode";
 import { OperationsClient, type OperationsSubscriber } from "./operations-client";
+import type { KitchenClosure } from "./kitchen-closure";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,16 @@ export default async function OperationsPage({
 
   const params = await searchParams;
   const date = params.date ?? istToday();
+  const isTest = await isTestMode();
+
+  // Kitchen closures from today on (banner for the selected date + the
+  // "Close kitchen" dialog's list).
+  const { data: closureRows } = await supabaseAdmin
+    .from("kitchen_closures")
+    .select("closed_on, meal_slot, reason")
+    .gte("closed_on", istToday())
+    .order("closed_on")
+    .order("meal_slot");
 
   const { data, error } = await supabaseAdmin
     .from("orders")
@@ -26,7 +38,7 @@ export default async function OperationsPage({
         id,
         user_id,
         special_notes,
-        users!inner ( name, phone )
+        users!inner ( name, phone, is_test )
       ),
       meal_templates ( name ),
       addresses ( line1, landmark, city, time_window ),
@@ -34,6 +46,7 @@ export default async function OperationsPage({
     `)
     .eq("delivery_date", date)
     .not("status", "in", "(cancelled,skipped)")
+    .eq("subscriptions.users.is_test", isTest)
     // Stable order so row codes don't reshuffle between the kitchen's copy
     // and the driver's copy of the same day's lists (there was no .order()
     // at all before — codes came from whatever order Postgres happened to
@@ -102,5 +115,11 @@ export default async function OperationsPage({
     };
   });
 
-  return <OperationsClient initialSubscribers={subscribers} serverDate={date} />;
+  return (
+    <OperationsClient
+      initialSubscribers={subscribers}
+      serverDate={date}
+      closures={(closureRows ?? []) as KitchenClosure[]}
+    />
+  );
 }

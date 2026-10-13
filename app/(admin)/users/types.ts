@@ -28,3 +28,5 @@ export type CreateSubInput = {
     landmark?: string
   }
 }
+
+export type NewCustomer = { id: string; name: string; email: string; phone: string; customerCode: string | null }

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
+import { isTestMode } from "@/lib/mode"
 import { isWhatsAppConfigured } from "@/lib/notifications";
 import { NotificationsClient, type Audience, type Broadcast } from "./notifications-client";
 
@@ -7,17 +8,19 @@ export const dynamic = "force-dynamic";
 
 export default async function NotificationsPage() {
   await requireAdmin()
+  const isTest = await isTestMode()
 
   const [{ data: subs }, { data: broadcasts }] = await Promise.all([
     supabaseAdmin
       .from("subscriptions")
       .select(`
         user_id, status, plan_name, plan_id,
-        users ( name, phone ),
+        users!inner ( name, phone, is_test ),
         batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
         batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name )
       `)
       .in("status", ["active", "paused", "pending"])
+      .eq("users.is_test", isTest)
       .order("created_at", { ascending: false }),
     supabaseAdmin
       .from("notification_broadcasts")

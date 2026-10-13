@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { notifyUsers, logBroadcast } from "@/lib/notifications"
+import { isTestMode, modeUserIds } from "@/lib/mode"
 
 export type DeliveryStatus = "preparing" | "out_for_delivery" | "delivered"
 export type MealSlot = "lunch" | "dinner"
@@ -43,6 +44,10 @@ export async function advanceBatchStatus(
   slot: MealSlot
 ) {
   await requireAdmin()
+  // Only the current mode's customers (Live / Test) — a batch can hold both,
+  // and marking Live deliveries must never touch (or bill) test accounts.
+  const isTest = await isTestMode()
+  const userIds = await modeUserIds(isTest)
   let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
 
   if (newStatus === "delivered") {
@@ -50,6 +55,7 @@ export async function advanceBatchStatus(
       p_batch: batchId,
       p_date: date,
       p_slot: slot,
+      p_is_test: isTest,
     })
     if (error) throw error
     billingSummary = data
@@ -61,6 +67,7 @@ export async function advanceBatchStatus(
       .eq("delivery_date", date)
       .eq("meal_slot", slot)
       .in("status", PRIOR[newStatus])
+      .in("user_id", userIds)
     if (error) throw error
   }
 
@@ -68,7 +75,7 @@ export async function advanceBatchStatus(
 
   const copy = notifyCopy(slot)[newStatus]
   if (copy) {
-    await notifyAffectedSubscribers(batchId, date, slot, newStatus, copy.title, copy.body)
+    await notifyAffectedSubscribers(batchId, date, slot, newStatus, copy.title, copy.body, userIds)
   }
 
   return billingSummary
@@ -145,7 +152,8 @@ async function notifyAffectedSubscribers(
   slot: MealSlot,
   status: DeliveryStatus,
   title: string,
-  body: string
+  body: string,
+  userIds: string[]
 ) {
   try {
     const { data: orders } = await supabaseAdmin
@@ -155,6 +163,7 @@ async function notifyAffectedSubscribers(
       .eq("delivery_date", date)
       .eq("meal_slot", slot)
       .eq("status", status)
+      .in("user_id", userIds)
     const subIds = Array.from(new Set((orders ?? []).map((o) => o.subscription_id)))
     if (subIds.length === 0) return
 
@@ -181,4 +190,56 @@ async function notifyAffectedSubscribers(
   } catch {
     // best-effort — see comment above
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kitchen closures (holidays, emergencies). Applies to everyone — Live and
+// Test — since it's the kitchen that's closed. close_kitchen() cancels that
+// slot's orders unbilled (the meals stay on each plan and get scheduled on
+// later days) and notifies the customers; reopen_kitchen() brings them back
+// while the slot is still open (migration 051).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function previewKitchenClosure(date: string, slots: MealSlot[]) {
+  await requireAdmin()
+  const { data } = await supabaseAdmin
+    .from("orders")
+    .select("user_id")
+    .eq("delivery_date", date)
+    .in("meal_slot", slots)
+    .in("status", ["scheduled", "confirmed", "preparing"])
+  const rows = (data ?? []) as { user_id: string }[]
+  return { orders: rows.length, customers: new Set(rows.map((r) => r.user_id)).size }
+}
+
+export async function closeKitchen(date: string, slots: MealSlot[], reason: string, notify: boolean) {
+  const admin = await requireAdmin()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Pick a date.")
+  if (slots.length === 0) throw new Error("Pick lunch, dinner or both.")
+  let cancelled = 0
+  let customers = 0
+  for (const slot of slots) {
+    const { data, error } = await supabaseAdmin.rpc("close_kitchen", {
+      p_date: date,
+      p_slot: slot,
+      p_reason: reason,
+      p_admin: admin.id,
+      p_notify: notify,
+    })
+    if (error) throw new Error(error.message)
+    cancelled += data?.cancelled ?? 0
+    customers += data?.customers ?? 0
+  }
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  return { cancelled, customers }
+}
+
+export async function reopenKitchen(date: string, slot: MealSlot, notify: boolean) {
+  await requireAdmin()
+  const { data, error } = await supabaseAdmin.rpc("reopen_kitchen", { p_date: date, p_slot: slot, p_notify: notify })
+  if (error) throw new Error(error.message)
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  return { revived: data?.revived ?? 0, note: (data?.note as string | undefined) ?? null }
 }

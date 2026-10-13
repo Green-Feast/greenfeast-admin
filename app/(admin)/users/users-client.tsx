@@ -6,13 +6,14 @@ import { useRouter } from "next/navigation"
 import {
   Search, X, Phone, Mail, Calendar, Plus, Trash2,
   RotateCcw, Pencil, ExternalLink, ChevronLeft, ChevronRight,
-  AlertCircle, CheckCircle, ShieldAlert,
+  AlertCircle, CheckCircle, ShieldAlert, UserPlus, Copy, FlaskConical, BadgeCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   createSubscription, resetUserData, deleteUser, editUserProfile,
+  setUserTestFlag, createCustomerAccount,
 } from "./actions"
-import type { CreateSubInput } from "./types"
+import type { CreateSubInput, NewCustomer } from "./types"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export type UserRow = {
   email: string | null
   name: string | null
   customerCode: string | null
+  isTest: boolean
   phone: string | null
   provider: string
   joinedAt: string | null
@@ -96,8 +98,9 @@ function matchesFilter(u: UserRow, filter: string) {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function UsersClient({
-  initialUsers, plans, addons, loadError,
+  initialUsers, plans, addons, loadError, isTestMode,
 }: {
+  isTestMode: boolean
   initialUsers: UserRow[]
   plans: Plan[]
   addons: AddonOption[]
@@ -115,6 +118,7 @@ export function UsersClient({
   const [editOpen, setEditOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
 
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
 
@@ -185,6 +189,12 @@ export function UsersClient({
             {counts.total} total · {counts.active} active · {counts.onboarded} onboarded · {counts.signedIn} signed-in only
           </p>
         </div>
+        <button
+          onClick={() => setAddOpen(true)}
+          className="flex items-center gap-2 h-9 px-4 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] transition-colors"
+        >
+          <UserPlus className="w-4 h-4" /> Add customer
+        </button>
       </div>
 
       {loadError && (
@@ -317,6 +327,31 @@ export function UsersClient({
           onEdit={() => setEditOpen(true)}
           onReset={() => setResetOpen(true)}
           onDelete={() => setDeleteOpen(true)}
+          onToggleTest={() => {
+            const toTest = !selected.isTest
+            if (!window.confirm(toTest
+              ? `Move ${selected.name ?? "this account"} to Test? It disappears from Live — kitchen sheets, deliveries, money and broadcasts.`
+              : `Move ${selected.name ?? "this account"} to Live? It becomes a real customer${selected.customerCode?.startsWith("GT-") ? " and gets a GF- customer ID" : ""}.`)) return
+            run(() => setUserTestFlag(selected.id, toTest), toTest ? "Moved to Test." : "Moved to Live.", { closePanel: true })
+          }}
+        />
+      )}
+
+      {addOpen && (
+        <AddCustomerModal
+          isTestMode={isTestMode}
+          onClose={() => setAddOpen(false)}
+          onSetUpPlan={(c) => {
+            setAddOpen(false)
+            setSelected({
+              id: c.id, email: c.email, name: c.name, customerCode: c.customerCode, isTest: isTestMode,
+              phone: c.phone, provider: "email", joinedAt: new Date().toISOString(), lastSignIn: null,
+              hasPublicRow: true, onboarded: false, subscriptionId: null, subStatus: null, planName: null,
+              deliveriesRemaining: null, paymentMethod: null,
+            } as UserRow)
+            setCreateOpen(true)
+            router.refresh()
+          }}
         />
       )}
 
@@ -382,7 +417,7 @@ export function UsersClient({
 // ─── Detail slide-over ─────────────────────────────────────────────────────────
 
 function DetailPanel({
-  user, isPending, onClose, onCreate, onEdit, onReset, onDelete,
+  user, isPending, onClose, onCreate, onEdit, onReset, onDelete, onToggleTest,
 }: {
   user: UserRow
   isPending: boolean
@@ -391,6 +426,7 @@ function DetailPanel({
   onEdit: () => void
   onReset: () => void
   onDelete: () => void
+  onToggleTest: () => void
 }) {
   const tier = tierOf(user)
 
@@ -407,7 +443,10 @@ function DetailPanel({
                 {tier.label}
               </span>
             </div>
-            <p className="text-xs text-gray-400 mt-0.5">{providerLabel(user.provider)} account</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {providerLabel(user.provider)} account{user.customerCode ? ` · ${user.customerCode}` : ""}
+              {user.isTest && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-[#FDD835] text-[#1A1A1A] text-[10px] font-bold">TEST</span>}
+            </p>
           </div>
           <button onClick={onClose} className="ml-2 p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
             <X className="w-4 h-4" />
@@ -474,9 +513,114 @@ function DetailPanel({
             <PanelBtn color="gray" disabled={isPending} onClick={onReset} icon={<RotateCcw className="w-3.5 h-3.5" />} label="Reset" />
             <PanelBtn color="red" disabled={isPending} onClick={onDelete} icon={<Trash2 className="w-3.5 h-3.5" />} label="Delete" />
           </div>
+          <button
+            onClick={onToggleTest}
+            disabled={isPending}
+            className="flex items-center justify-center gap-1.5 w-full py-2 text-xs font-medium rounded-lg border border-[#e2e8d5] text-gray-600 hover:bg-white disabled:opacity-40 transition-colors"
+          >
+            {user.isTest
+              ? <><BadgeCheck className="w-3.5 h-3.5" /> Move to Live (real customer)</>
+              : <><FlaskConical className="w-3.5 h-3.5" /> Move to Test</>}
+          </button>
         </div>
       </aside>
     </>
+  )
+}
+
+// ─── Add customer (create their login) ──────────────────────────────────────────
+
+const APP_STORE_URL = "https://apps.apple.com/in/app/id6805608220"
+
+function AddCustomerModal({
+  isTestMode, onClose, onSetUpPlan,
+}: {
+  isTestMode: boolean
+  onClose: () => void
+  onSetUpPlan: (c: NewCustomer) => void
+}) {
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [phone, setPhone] = useState("")
+  const [error, setError] = useState("")
+  const [pending, start] = useTransition()
+  const [done, setDone] = useState<{ customer: NewCustomer; tempPassword: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const message = done
+    ? `Hi ${done.customer.name}! Your GreenFeast app is ready 🌿\n\n` +
+      `Download it — iPhone: ${APP_STORE_URL}\nAndroid: we'll send you the link.\n\n` +
+      `Log in with Email & Password:\nEmail: ${done.customer.email}\nTemporary password: ${done.tempPassword}\n\n` +
+      `You'll be asked to set your own password. If that's your Gmail address, "Continue with Google" works too.`
+    : ""
+
+  function submit() {
+    setError("")
+    start(async () => {
+      const r = await createCustomerAccount({ name, email, phone })
+      if (r.ok) setDone({ customer: r.customer, tempPassword: r.tempPassword })
+      else setError(r.error)
+    })
+  }
+
+  return (
+    <ModalShell title={done ? "Login created" : "Add customer"} onClose={onClose}>
+      {!done ? (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Creates an email + password login for someone who hasn&apos;t signed up — e.g. an existing customer moving
+            over. You&apos;ll get a temporary password to send them; the app asks them to change it.
+            {isTestMode && <span className="block mt-1 font-medium text-amber-700">You&apos;re in Test mode — this will be a test account.</span>}
+          </p>
+          <Field label="Name">
+            <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="Full name" />
+          </Field>
+          <Field label="Email (their login)">
+            <input value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} placeholder="name@gmail.com" />
+          </Field>
+          <Field label="Phone">
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} className={inputCls} placeholder="10-digit mobile" />
+          </Field>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-lg bg-[#F9FBF7] border border-[#e2e8d5] p-3 text-sm">
+            <p className="font-medium text-[#1A1A1A]">{done.customer.name} {done.customer.customerCode && <span className="font-mono text-gray-400">· {done.customer.customerCode}</span>}</p>
+            <p className="text-gray-600 mt-1">Email: <span className="font-mono">{done.customer.email}</span></p>
+            <p className="text-gray-600">Temporary password: <span className="font-mono font-semibold text-[#1A1A1A]">{done.tempPassword}</span></p>
+            <p className="text-xs text-amber-700 mt-2">Shown only once — send it now.</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { navigator.clipboard.writeText(message); setCopied(true) }}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg border border-[#e2e8d5] hover:bg-gray-50"
+            >
+              <Copy className="w-4 h-4" /> {copied ? "Copied" : "Copy message"}
+            </button>
+            <a
+              href={`https://wa.me/91${done.customer.phone.slice(-10)}?text=${encodeURIComponent(message)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg bg-[#25D366] text-white hover:opacity-90"
+            >
+              Send on WhatsApp
+            </a>
+          </div>
+        </div>
+      )}
+
+      <ModalFooter>
+        <GhostBtn onClick={onClose}>{done ? "Done" : "Cancel"}</GhostBtn>
+        {!done ? (
+          <PrimaryBtn disabled={pending || !name.trim() || !email.trim() || !phone.trim()} onClick={submit}>
+            {pending ? "Creating…" : "Create login"}
+          </PrimaryBtn>
+        ) : (
+          <PrimaryBtn onClick={() => onSetUpPlan(done.customer)}>Set up their plan →</PrimaryBtn>
+        )}
+      </ModalFooter>
+    </ModalShell>
   )
 }
 

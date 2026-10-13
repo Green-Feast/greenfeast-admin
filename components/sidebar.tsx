@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -20,6 +20,7 @@ import {
   UtensilsCrossed,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
+import { setDataMode } from "@/app/(admin)/mode-actions";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -34,9 +35,33 @@ const navItems = [
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
-export function Sidebar({ email }: { email: string }) {
+export function Sidebar({ email, mode }: { email: string; mode: "live" | "test" }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [switching, startSwitch] = useTransition();
+
+  // Live = real customers, Test = test accounts (users.is_test). Every page
+  // filters by this, so it's always visible here.
+  const ModeSwitch = () => (
+    <div className="px-3 pt-4">
+      <div className="flex rounded-lg bg-black/20 p-1 text-xs font-semibold">
+        {(["live", "test"] as const).map((m) => (
+          <button
+            key={m}
+            disabled={switching}
+            onClick={() => m !== mode && startSwitch(() => setDataMode(m))}
+            className={`flex-1 rounded-md py-1.5 transition-colors ${
+              mode === m
+                ? m === "live" ? "bg-white text-[#1B5E20]" : "bg-[#FDD835] text-[#1A1A1A]"
+                : "text-white/70 hover:text-white"
+            }`}
+          >
+            {m === "live" ? "● Live" : "Test"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   const NavContent = () => (
     <>
@@ -54,6 +79,8 @@ export function Sidebar({ email }: { email: string }) {
           </span>
         </div>
       </div>
+
+      <ModeSwitch />
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-1">

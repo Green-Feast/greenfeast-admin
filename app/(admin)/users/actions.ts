@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { notifyUsers } from "@/lib/notifications"
-import type { CreateSubInput } from "./types"
+import { isTestMode } from "@/lib/mode"
+import { randomInt } from "crypto"
+import type { CreateSubInput, NewCustomer } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -319,4 +321,94 @@ export async function extendSub(subId: string, meals: number) {
     .update({ deliveries_remaining: data.deliveries_remaining + meals })
     .eq("id", subId)
   revalidatePath("/users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live / Test
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Move an account between Live and Test. Going Live gives a test account a real GF- code. */
+export async function setUserTestFlag(userId: string, isTest: boolean): Promise<{ ok: boolean; error?: string }> {
+  await requireAdmin()
+  const { error } = await supabaseAdmin.rpc("set_user_test_flag", { p_user: userId, p_is_test: isTest })
+  if (error) return { ok: false, error: error.message }
+  revalidatePath("/users")
+  return { ok: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Add a customer without them signing up first
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PW_LETTERS = "abcdefghjkmnpqrstuvwxyz" // no i/l/o — easy to read out over WhatsApp
+
+function tempPassword() {
+  let letters = ""
+  for (let i = 0; i < 4; i++) letters += PW_LETTERS[randomInt(PW_LETTERS.length)]
+  return `GF-${letters}-${String(randomInt(10000)).padStart(4, "0")}`
+}
+
+
+/**
+ * Creates an email + password login for a customer (e.g. an existing customer
+ * being moved over), with a temporary password the admin shares. The account
+ * is flagged must_change_password, so the app asks them to set their own on
+ * first sign-in. Signing in later with Google on the same (verified) email
+ * links to this account automatically.
+ */
+export async function createCustomerAccount(input: {
+  name: string
+  email: string
+  phone: string
+}): Promise<{ ok: true; customer: NewCustomer; tempPassword: string } | { ok: false; error: string }> {
+  await requireAdmin()
+  const isTest = await isTestMode()
+
+  const name = input.name.trim()
+  const email = input.email.trim().toLowerCase()
+  const digits = input.phone.replace(/\D/g, "").slice(-10)
+  if (!name) return { ok: false, error: "Enter their name." }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Enter a valid email address." }
+  if (!/^[6-9]\d{9}$/.test(digits)) return { ok: false, error: "Enter a 10-digit Indian mobile number." }
+  const phone = `+91${digits}`
+
+  const { data: taken } = await supabaseAdmin
+    .from("users").select("customer_code").eq("phone", phone).maybeSingle()
+  if (taken) return { ok: false, error: `That phone number already belongs to ${taken.customer_code ?? "another account"}.` }
+
+  const password = tempPassword()
+  const { data: created, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: name, must_change_password: true },
+  })
+  if (authErr || !created?.user) {
+    const msg = authErr?.message ?? "Could not create the login."
+    return { ok: false, error: /already|registered|exists/i.test(msg) ? "An account with this email already exists — find them in the list." : msg }
+  }
+  const userId = created.user.id
+
+  // handle_new_auth_user has created the profile row; fill it in.
+  const { error: profileErr } = await supabaseAdmin
+    .from("users").update({ name, phone, is_test: isTest }).eq("id", userId)
+  if (profileErr) {
+    await supabaseAdmin.auth.admin.deleteUser(userId)
+    return { ok: false, error: `Could not save the profile: ${profileErr.message}` }
+  }
+  if (isTest) {
+    // Created while in Test mode: keep it out of the real GF- numbering.
+    const { data: row } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
+    if (row?.customer_code?.startsWith("GF-")) {
+      await supabaseAdmin.from("users").update({ customer_code: "GT-" + row.customer_code.slice(3) }).eq("id", userId)
+    }
+  }
+
+  const { data: final } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
+  revalidatePath("/users")
+  return {
+    ok: true,
+    tempPassword: password,
+    customer: { id: userId, name, email, phone, customerCode: final?.customer_code ?? null },
+  }
 }

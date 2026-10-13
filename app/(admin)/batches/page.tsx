@@ -1,11 +1,13 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
+import { isTestMode } from "@/lib/mode"
 import BatchesClient from "./batches-client"
 
 export const dynamic = "force-dynamic"
 
 export default async function BatchesPage() {
   await requireAdmin()
+  const isTest = await isTestMode()
 
   const [batchRes, partnersRes, subsRes] = await Promise.all([
     supabaseAdmin
@@ -23,8 +25,9 @@ export default async function BatchesPage() {
       .order("name"),
     supabaseAdmin
       .from("subscriptions")
-      .select("id, user_id, status, plan_name, batch_id_lunch, batch_id_dinner, meals_lunch, meals_dinner, users!inner ( name, phone )")
+      .select("id, user_id, status, plan_name, batch_id_lunch, batch_id_dinner, meals_lunch, meals_dinner, users!inner ( name, phone, is_test )")
       .in("status", ["active", "paused", "pending"])
+      .eq("users.is_test", isTest)
       .order("created_at"),
   ])
 

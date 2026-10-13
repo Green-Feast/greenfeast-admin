@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
+import { isTestMode } from "@/lib/mode"
 import { SubscribersClient, type Subscriber, type DeletedAccount } from "./subscribers-client";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,7 @@ const STATUS_RANK: Record<string, number> = { active: 0, paused: 1, pending: 2 }
 
 export default async function SubscribersPage() {
   await requireAdmin()
+  const isTest = await isTestMode()
 
   const { data } = await supabaseAdmin
     .from("subscriptions")
@@ -25,12 +27,13 @@ export default async function SubscribersPage() {
       delivery_mode,
       special_notes,
       created_at,
-      users ( name, phone, created_at, customer_code ),
+      users!inner ( name, phone, created_at, customer_code, is_test ),
       batchLunch:batches!subscriptions_batch_id_lunch_fkey ( name ),
       batchDinner:batches!subscriptions_batch_id_dinner_fkey ( name ),
       plans ( meals_total )
     `)
     .in("status", ["active", "pending", "paused"])
+    .eq("users.is_test", isTest)
     .order("created_at", { ascending: false });
 
   // Deduplicate: one row per user, preferring active > paused > pending then most recent.

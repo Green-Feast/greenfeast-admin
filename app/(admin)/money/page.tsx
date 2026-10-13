@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
+import { isTestMode } from "@/lib/mode"
 import { istToday } from "@/lib/ist";
 import { MoneyClient, type PaymentRow, type TxRow, type BalanceRow, type RefundRow } from "./money-client";
 import type { RefundCustomer, RefundablePayment } from "./refund-dialog";
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function MoneyPage() {
   await requireAdmin()
+  const isTest = await isTestMode()
 
   // Settle pending bank refunds by asking Cashfree (refund events aren't
   // available on our webhook settings). Best-effort, capped at a few seconds.
@@ -35,17 +37,20 @@ export default async function MoneyPage() {
   ] = await Promise.all([
     supabaseAdmin
       .from("payments")
-      .select("id, user_id, subscription_id, amount, status, cf_order_id, cf_payment_id, created_at, users ( name, phone, customer_code )")
+      .select("id, user_id, subscription_id, amount, status, cf_order_id, cf_payment_id, created_at, users!inner ( name, phone, customer_code, is_test )")
+      .eq("users.is_test", isTest)
       .order("created_at", { ascending: false })
       .limit(300),
     supabaseAdmin
       .from("wallet_transactions")
-      .select("id, user_id, type, amount, reason, reference_id, created_at, users ( name, customer_code )")
+      .select("id, user_id, type, amount, reason, reference_id, created_at, users!inner ( name, customer_code, is_test )")
+      .eq("users.is_test", isTest)
       .order("created_at", { ascending: false })
       .limit(500),
     supabaseAdmin
       .from("wallets")
-      .select("user_id, balance, updated_at, users ( name, phone, customer_code )")
+      .select("user_id, balance, updated_at, users!inner ( name, phone, customer_code, is_test )")
+      .eq("users.is_test", isTest)
       .order("balance", { ascending: false }),
     // Deliveries still owed against prepaid balance — the operational side of
     // the wallet liability below.
@@ -55,11 +60,12 @@ export default async function MoneyPage() {
       .in("status", ["active", "paused", "pending"]),
     supabaseAdmin
       .from("refunds")
-      .select("id, user_id, payment_id, kind, amount, reason, status, failure_note, created_at, users ( name, customer_code )")
+      .select("id, user_id, payment_id, kind, amount, reason, status, failure_note, created_at, users!inner ( name, customer_code, is_test )")
+      .eq("users.is_test", isTest)
       .order("created_at", { ascending: false })
       .limit(300),
     // Everyone, for the refund dialog's customer picker.
-    supabaseAdmin.from("users").select("id, name, phone, customer_code").order("customer_code"),
+    supabaseAdmin.from("users").select("id, name, phone, customer_code").eq("is_test", isTest).order("customer_code"),
   ]);
 
   const payments: PaymentRow[] = (paymentRows ?? []).map((p: any) => {

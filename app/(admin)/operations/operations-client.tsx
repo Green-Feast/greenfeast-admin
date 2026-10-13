@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2 } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed } from "lucide-react";
+import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -392,10 +393,13 @@ type LoadingState = {
 export function OperationsClient({
   initialSubscribers,
   serverDate,
+  closures,
 }: {
   initialSubscribers: OperationsSubscriber[];
   serverDate: string; // YYYY-MM-DD from URL/server
+  closures: KitchenClosure[];
 }) {
+  const [showClosure, setShowClosure] = useState(false);
   const router = useRouter();
   // Display format for PDFs: DD/MM/YYYY
   const [y, m, d] = serverDate.split("-");
@@ -520,6 +524,12 @@ export function OperationsClient({
           <p className="text-sm text-gray-500 mt-0.5">Daily sheet generation — {displayDate} · {slot === "lunch" ? "Lunch" : "Dinner"}</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setShowClosure(true)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-red-200 bg-white text-sm font-medium text-red-700 hover:bg-red-50"
+          >
+            <DoorClosed className="w-4 h-4" /> Close kitchen
+          </button>
           <div className="flex rounded-lg border border-[#e2e8d5] overflow-hidden">
             {(["lunch", "dinner"] as const).map((s) => (
               <button
@@ -545,6 +555,26 @@ export function OperationsClient({
           </div>
         </div>
       </div>
+
+      {closures
+        .filter((c) => c.closed_on === serverDate && c.meal_slot === slot)
+        .map((c) => (
+          <ClosedBanner
+            key={c.closed_on + c.meal_slot}
+            closure={c}
+            onReopened={(msg) => { showToast(msg); router.refresh(); }}
+          />
+        ))}
+
+      {showClosure && (
+        <KitchenClosureDialog
+          defaultDate={serverDate}
+          defaultSlot={slot}
+          closures={closures}
+          onClose={() => setShowClosure(false)}
+          onDone={(msg) => { setShowClosure(false); showToast(msg); router.refresh(); }}
+        />
+      )}
 
       {provisional && (
         <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">

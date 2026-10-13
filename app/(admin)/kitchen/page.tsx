@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
+import { isTestMode } from "@/lib/mode"
 import { istToday, addDaysISO } from "@/lib/ist"
 import { KitchenClient, type WeeklyMenuRow, type NextMealItem, type WeeklyOverviewRow } from "./kitchen-client"
 
@@ -18,6 +19,7 @@ function getWeekBounds(today: string): { weekStart: string; weekEnd: string } {
 
 export default async function KitchenPage() {
   await requireAdmin()
+  const isTest = await isTestMode()
 
   const today = istToday()
   const { weekStart, weekEnd } = getWeekBounds(today)
@@ -38,29 +40,32 @@ export default async function KitchenPage() {
       .from("orders")
       .select(`
         id, subscription_id, delivery_date, meal_slot,
-        subscriptions ( id, menu_type, users ( name ) ),
+        subscriptions!inner ( id, menu_type, users!inner ( name, is_test ) ),
         meal_templates ( name )
       `)
       .gte("delivery_date", today)
       .in("status", ["scheduled", "confirmed", "preparing"])
+      .eq("subscriptions.users.is_test", isTest)
       .order("delivery_date")
       .limit(50),
     supabaseAdmin
       .from("orders")
       .select(`
         id, subscription_id, delivery_date, meal_slot, is_customized, quantity,
-        subscriptions ( id, menu_type, user_id, users ( name ) ),
+        subscriptions!inner ( id, menu_type, user_id, users!inner ( name, is_test ) ),
         meal_templates ( name ),
         order_addons ( kind, quantity, addons ( name ) )
       `)
       .gte("delivery_date", weekStart)
       .lte("delivery_date", weekEnd)
       .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
+      .eq("subscriptions.users.is_test", isTest)
       .order("delivery_date"),
     supabaseAdmin
       .from("subscriptions")
-      .select("id, menu_type, users ( name )")
-      .eq("status", "active"),
+      .select("id, menu_type, users!inner ( name, is_test )")
+      .eq("status", "active")
+      .eq("users.is_test", isTest),
   ])
 
   const menuRows = (weeklyMenuRows ?? []).map((row: any) => ({
