@@ -15,6 +15,13 @@ export type Audience = {
   status: string;
 };
 
+export type BroadcastRecipient = {
+  user_id: string;
+  name: string;
+  push?: string;
+  whatsapp?: string;
+};
+
 export type Broadcast = {
   id: string;
   type: string;
@@ -26,6 +33,15 @@ export type Broadcast = {
   whatsapp_sent_count: number;
   created_by: string | null;
   created_at: string;
+  results?: BroadcastRecipient[] | null;
+};
+
+// What happened to the push for one person.
+const PUSH_OUTCOME: Record<string, { label: string; cls: string }> = {
+  sent: { label: "push sent", cls: "text-[#1B5E20]" },
+  no_token: { label: "no push — app not set up for notifications", cls: "text-amber-700" },
+  failed: { label: "push failed", cls: "text-red-600" },
+  not_configured: { label: "not sent", cls: "text-neutral-400" },
 };
 
 export type TemplateRow = {
@@ -267,6 +283,7 @@ function Composer({
             recipient_count: summary.sent,
             push_sent_count: summary.pushSent,
             whatsapp_sent_count: summary.whatsappSent,
+            results: summary.results,
             created_by: null,
             created_at: new Date().toISOString(),
           },
@@ -489,29 +506,56 @@ function Composer({
           {broadcasts.length === 0 && (
             <p className="text-sm text-neutral-400 p-6 text-center">Nothing sent yet.</p>
           )}
-          {broadcasts.map((b) => (
-            <div key={b.id} className="px-6 py-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-medium text-[#1A1A1A]">{b.title}</p>
-                  <p className="text-sm text-neutral-500 mt-0.5">{b.body}</p>
-                </div>
-                <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
-                  {TYPE_LABEL[b.type] ?? b.type}
-                </span>
-              </div>
-              <div className="flex items-center gap-4 mt-2 text-xs text-neutral-500">
-                <span>{formatDateTime(b.created_at)}</span>
-                <span>{b.recipient_count} recipient{b.recipient_count === 1 ? "" : "s"}</span>
-                {b.channels.includes("push") && <span>{b.push_sent_count} push delivered</span>}
-                {b.channels.includes("whatsapp") && <span>{b.whatsapp_sent_count} WhatsApp delivered</span>}
-                {b.created_by && <span>by {b.created_by}</span>}
-              </div>
-            </div>
-          ))}
+          {broadcasts.map((b) => <BroadcastRow key={b.id} b={b} />)}
         </div>
       </div>
     </>
+  );
+}
+
+// One sent message, with who it went to (stored per send in
+// notification_broadcasts.results) one click away.
+function BroadcastRow({ b }: { b: Broadcast }) {
+  const [open, setOpen] = useState(false);
+  const people = b.results ?? [];
+  return (
+    <div className="px-6 py-4">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="font-medium text-[#1A1A1A]">{b.title}</p>
+          <p className="text-sm text-neutral-500 mt-0.5">{b.body}</p>
+        </div>
+        <span className="text-xs font-medium text-neutral-500 whitespace-nowrap">
+          {TYPE_LABEL[b.type] ?? b.type}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-neutral-500">
+        <span>{formatDateTime(b.created_at)}</span>
+        {people.length > 0 ? (
+          <button onClick={() => setOpen((v) => !v)} className="font-medium text-[#1B5E20] hover:underline">
+            {open ? "Hide" : "Show"} {b.recipient_count} recipient{b.recipient_count === 1 ? "" : "s"}
+          </button>
+        ) : (
+          <span>{b.recipient_count} recipient{b.recipient_count === 1 ? "" : "s"}</span>
+        )}
+        {b.channels.includes("push") && <span>{b.push_sent_count} push sent</span>}
+        {b.channels.includes("whatsapp") && <span>{b.whatsapp_sent_count} WhatsApp sent</span>}
+        {b.created_by && <span>by {b.created_by}</span>}
+      </div>
+      {open && (
+        <ul className="mt-3 max-h-60 overflow-y-auto rounded-lg border border-black/5 divide-y divide-black/5">
+          {people.map((r) => {
+            const outcome = r.push ? PUSH_OUTCOME[r.push] ?? { label: r.push, cls: "text-neutral-500" } : null;
+            return (
+              <li key={r.user_id} className="flex items-center justify-between gap-3 px-3 py-1.5 text-sm">
+                <span className="text-[#1A1A1A]">{r.name}</span>
+                {outcome && <span className={cn("text-xs", outcome.cls)}>{outcome.label}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

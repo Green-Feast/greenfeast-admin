@@ -81,6 +81,7 @@ export async function sendBroadcast(input: SendBroadcastInput) {
     sent: results.length,
     pushSent: results.filter((r) => r.push === "sent").length,
     whatsappSent: results.filter((r) => r.whatsapp === "sent").length,
+    results,
   };
 }
 
