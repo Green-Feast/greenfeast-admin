@@ -1,28 +1,45 @@
 "use server"
 
-import { headers } from "next/headers"
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { tempPassword } from "@/lib/temp-password"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Partner app logins (migration 057). The login ID is the partner's phone;
-// the Supabase account behind it has an internal email they never see, and
-// user_metadata.gf_account = 'partner' so it isn't made a customer (058).
-// Resetting the password replaces the account, which also signs out every
-// phone the old password was used on.
+// Logins for the GreenFeast Partner app (greenfeast-delivery-partner repo —
+// Android/iOS and web). The login ID is the partner's phone: the app signs
+// in to the Supabase account p<10 digits>@partners.greenfeast.test, which
+// has user_metadata.gf_account = 'partner' so it isn't made a customer
+// (migration 058). Everything the app does goes through the database's
+// partner_* functions (060). Resetting the password replaces the account,
+// which also signs out every phone the old password was used on.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type LoginResult =
   | { ok: true; loginId: string; password: string; appUrl: string; name: string }
   | { ok: false; error: string }
 
-async function appUrl() {
-  const h = await headers()
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "greenfeast-admin.vercel.app"
-  const proto = h.get("x-forwarded-proto") ?? "https"
-  return `${proto}://${host}/partner`
+// Where partners open the app (its web version) — set PARTNER_APP_URL in
+// Vercel if the partner app's project lives at another address.
+function appUrl() {
+  return process.env.PARTNER_APP_URL ?? "https://greenfeast-delivery-partner.vercel.app"
+}
+
+function partnerEmail(digits: string) {
+  return `p${digits}@partners.greenfeast.test`
+}
+
+// An account left over with this login's email (e.g. the phone used to be
+// another partner's): found through the Auth admin list.
+async function staleAccountId(email: string): Promise<string | null> {
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 })
+    if (error || !data) return null
+    const hit = data.users.find((u) => u.email?.toLowerCase() === email)
+    if (hit) return hit.id
+    if (data.users.length < 200) return null
+  }
+  return null
 }
 
 async function newLogin(partnerId: string): Promise<LoginResult> {
@@ -47,13 +64,24 @@ async function newLogin(partnerId: string): Promise<LoginResult> {
   if (p.user_id) await supabaseAdmin.auth.admin.deleteUser(p.user_id)
 
   const password = tempPassword()
-  const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
-    email: `partner-${p.id}-${Date.now()}@partners.greenfeast.test`,
-    password,
-    email_confirm: true,
-    app_metadata: { role: "partner" },
-    user_metadata: { gf_account: "partner", partner_id: p.id },
-  })
+  const email = partnerEmail(digits)
+  const create = () =>
+    supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      app_metadata: { role: "partner" },
+      user_metadata: { gf_account: "partner", partner_id: p.id },
+    })
+  let { data: created, error } = await create()
+  if (error && /already|registered|exists/i.test(error.message)) {
+    // Not linked to any partner (checked above) — safe to replace.
+    const stale = await staleAccountId(email)
+    if (stale) {
+      await supabaseAdmin.auth.admin.deleteUser(stale)
+      ;({ data: created, error } = await create())
+    }
+  }
   if (error || !created.user) return { ok: false, error: `Couldn't create the login: ${error?.message ?? "unknown error"}` }
 
   // Safety net: a staff account must never show up as a customer.
@@ -69,7 +97,7 @@ async function newLogin(partnerId: string): Promise<LoginResult> {
   }
 
   revalidatePath("/delivery-partners")
-  return { ok: true, loginId: digits, password, appUrl: await appUrl(), name: p.name }
+  return { ok: true, loginId: digits, password, appUrl: appUrl(), name: p.name }
 }
 
 export async function createPartnerLogin(partnerId: string): Promise<LoginResult> {

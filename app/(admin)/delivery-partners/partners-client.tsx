@@ -383,7 +383,7 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
             {editing?.id && (
               <Section title="App login">
                 <p className="text-xs text-gray-500 -mt-1">
-                  The partner signs in at <span className="font-mono">/partner</span> with their phone number and this password,
+                  The partner signs in to the GreenFeast Partner app with their phone number and this password,
                   and sees their batches, stops and map. Status &quot;inactive&quot; also blocks the login.
                 </p>
                 {editing.user_id ? (
@@ -589,7 +589,7 @@ function CredentialsDialog({ creds, onClose }: { creds: Extract<LoginResult, { o
   const [copied, setCopied] = useState(false)
   const first = creds.name.trim().split(/\s+/)[0]
   const message =
-    `Hi ${first}, your GreenFeast delivery app login:\n` +
+    `Hi ${first}, your GreenFeast Partner app login:\n` +
     `Open: ${creds.appUrl}\n` +
     `Phone: ${creds.loginId}\n` +
     `Password: ${creds.password}\n\n` +

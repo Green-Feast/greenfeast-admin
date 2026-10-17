@@ -2,9 +2,10 @@ import "server-only";
 import { supabaseAdmin } from "./supabase-admin";
 import { notifyEvent, logBroadcast } from "./notifications";
 
-// The one delivery path. Admin Operations (batch and per-customer buttons)
-// and the delivery partner app both move orders and message customers
-// through here, so the two can never drift apart.
+// The admin's delivery path (Operations batch and per-customer buttons). The
+// GreenFeast Partner app does the same through the database's partner_*
+// functions (migration 060): both bill with advance_order_delivered and send
+// the same Automated messages — keep the two in step.
 
 export type DeliveryStatus = "preparing" | "out_for_delivery" | "delivered";
 export type MealSlot = "lunch" | "dinner";
