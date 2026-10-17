@@ -55,6 +55,7 @@ export default async function SubscriberProfilePage({
     { data: addons },
     { data: plans },
     { data: authUser },
+    { data: cashReportRows },
   ] = await Promise.all([
     supabaseAdmin.from("plans").select("name, meals_total, days_per_week, base_price").eq("id", sub.plan_id).maybeSingle(),
     supabaseAdmin.from("subscription_addons").select("addons ( id, name, price_per_meal )").eq("subscription_id", id),
@@ -114,6 +115,14 @@ export default async function SubscriberProfilePage({
     supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
     supabaseAdmin.from("plans").select("id, name, base_price, meals_total").eq("is_active", true).order("base_price"),
     supabaseAdmin.auth.admin.getUserById(userId),
+    // Cash a delivery partner reported collecting — recorded by the office.
+    supabaseAdmin
+      .from("cash_reports")
+      .select("id, amount_paise, note, reported_at, delivery_partners ( name )")
+      .eq("subscription_id", id)
+      .is("recorded_at", null)
+      .is("dismissed_at", null)
+      .order("reported_at"),
   ])
 
   const userName = (user as any).name ?? "Unknown"
@@ -152,6 +161,13 @@ export default async function SubscriberProfilePage({
           deliveryDays: (schedule ?? []).map((r: any) => r.day_of_week as string),
           codDue: (sub as any).cod_due_paise ?? 0,
           onCredit: !!(sub as any).cod_on_credit,
+          cashReports: ((cashReportRows ?? []) as any[]).map((r) => ({
+            id: r.id as string,
+            amount: r.amount_paise as number,
+            note: (r.note ?? null) as string | null,
+            reportedAt: r.reported_at as string,
+            partner: ((Array.isArray(r.delivery_partners) ? r.delivery_partners[0] : r.delivery_partners)?.name ?? "Partner") as string,
+          })),
         }}
         user={{
           id: userId,

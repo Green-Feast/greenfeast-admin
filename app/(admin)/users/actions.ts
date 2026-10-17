@@ -6,7 +6,7 @@ import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { isTestMode } from "@/lib/mode"
-import { randomInt } from "crypto"
+import { tempPassword } from "@/lib/temp-password"
 import type { CreateSubInput, NewCustomer } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,14 +320,6 @@ export async function setUserTestFlag(userId: string, isTest: boolean): Promise<
 // ─────────────────────────────────────────────────────────────────────────────
 // Add a customer without them signing up first
 // ─────────────────────────────────────────────────────────────────────────────
-
-const PW_LETTERS = "abcdefghjkmnpqrstuvwxyz" // no i/l/o — easy to read out over WhatsApp
-
-function tempPassword() {
-  let letters = ""
-  for (let i = 0; i < 4; i++) letters += PW_LETTERS[randomInt(PW_LETTERS.length)]
-  return `GF-${letters}-${String(randomInt(10000)).padStart(4, "0")}`
-}
 
 
 /**

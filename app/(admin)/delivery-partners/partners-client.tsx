@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useTransition, useRef, useEffect } from "react"
-import { Plus, X, Pencil, CheckCircle, AlertCircle, Eye, Upload, Phone, Bike } from "lucide-react"
+import { Plus, X, Pencil, CheckCircle, AlertCircle, Eye, Upload, Phone, Bike, KeyRound, Copy, Smartphone } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import {
@@ -9,6 +9,11 @@ import {
   createSignedUploadUrl,
   saveDocUrl,
   getSignedViewUrl,
+  createPartnerLogin,
+  resetPartnerPassword,
+  removePartnerLogin,
+  setPartnerTest,
+  type LoginResult,
 } from "./actions"
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -28,6 +33,19 @@ export type Partner = {
   vehicle_rc_doc_url?: string
   notes?: string
   status: "active" | "inactive"
+  user_id?: string | null
+  is_test?: boolean
+  last_seen_at?: string | null
+}
+
+function lastActive(iso?: string | null) {
+  if (!iso) return "Never signed in"
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (mins < 10) return "Active now"
+  if (mins < 60) return `Active ${mins} min ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `Active ${hours} h ago`
+  return `Active ${new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
 }
 
 const DOCS = [
@@ -48,6 +66,7 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
   const [isPending, startTransition] = useTransition()
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
   const [uploadingDoc, setUploadingDoc] = useState<DocKey | null>(null)
+  const [credentials, setCredentials] = useState<Extract<LoginResult, { ok: true }> | null>(null)
 
   // Form fields
   const [name, setName]                   = useState("")
@@ -137,6 +156,44 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
     setUploadingDoc(null)
   }
 
+  // App login: create / reset give back the password once — shown in a
+  // dialog to copy or send on WhatsApp.
+  function patchPartner(id: string, patch: Partial<Partner>) {
+    setPartners(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
+    setEditing(prev => prev && prev.id === id ? { ...prev, ...patch } : prev)
+  }
+
+  function handleLogin(p: Partner, kind: "create" | "reset") {
+    if (kind === "reset" && !window.confirm(`Give ${p.name} a new password? Their phone will be signed out until they use the new one.`)) return
+    startTransition(async () => {
+      const res = kind === "create" ? await createPartnerLogin(p.id!) : await resetPartnerPassword(p.id!)
+      if (!res.ok) return showToast("error", res.error)
+      patchPartner(p.id!, { user_id: "linked", last_seen_at: null })
+      setCredentials(res)
+    })
+  }
+
+  function handleRemoveLogin(p: Partner) {
+    if (!window.confirm(`Remove ${p.name}'s app login? They're signed out straight away.`)) return
+    startTransition(async () => {
+      const res = await removePartnerLogin(p.id!)
+      if (!res.ok) return showToast("error", res.error ?? "Could not remove the login.")
+      patchPartner(p.id!, { user_id: null })
+      showToast("success", "Login removed.")
+    })
+  }
+
+  function handleTest(p: Partner, isTest: boolean) {
+    startTransition(async () => {
+      try {
+        await setPartnerTest(p.id!, isTest)
+        patchPartner(p.id!, { is_test: isTest })
+      } catch {
+        showToast("error", "Could not save. Try again.")
+      }
+    })
+  }
+
   async function handleViewDoc(path: string) {
     try {
       const url = await getSignedViewUrl(path)
@@ -190,7 +247,7 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
-                {["Name", "Phone", "Alt. Phone", "Status", "Documents", "Notes", "Actions"].map(h => (
+                {["Name", "Phone", "Alt. Phone", "Status", "App", "Documents", "Notes", "Actions"].map(h => (
                   <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3 whitespace-nowrap">
                     {h}
                   </th>
@@ -200,7 +257,7 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
             <tbody>
               {partners.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-gray-400 text-sm">
+                  <td colSpan={8} className="text-center py-12 text-gray-400 text-sm">
                     No delivery partners yet. Add one to get started.
                   </td>
                 </tr>
@@ -223,6 +280,19 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
                         )}>
                           {p.status}
                         </span>
+                      </td>
+                      <td className="px-5 py-3.5 whitespace-nowrap">
+                        {p.user_id ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700">
+                              <Smartphone className="w-3.5 h-3.5" /> Login
+                              {p.is_test && <span className="ml-1 px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 text-[10px] font-semibold">TEST</span>}
+                            </span>
+                            <p className="text-[11px] text-gray-400">{lastActive(p.last_seen_at)}</p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">No login</span>
+                        )}
                       </td>
                       <td className="px-5 py-3.5 text-gray-500">
                         <span className="text-xs">{docCount}/{DOCS.length} uploaded</span>
@@ -310,6 +380,60 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
               </Field>
             </Section>
 
+            {editing?.id && (
+              <Section title="App login">
+                <p className="text-xs text-gray-500 -mt-1">
+                  The partner signs in at <span className="font-mono">/partner</span> with their phone number and this password,
+                  and sees their batches, stops and map. Status &quot;inactive&quot; also blocks the login.
+                </p>
+                {editing.user_id ? (
+                  <>
+                    <div className="rounded-lg border border-[#e2e8d5] bg-[#F9FBF7] px-3 py-2.5 text-sm">
+                      <p>Login ID: <span className="font-mono font-semibold">{editing.phone.replace(/\D/g, "").slice(-10)}</span></p>
+                      <p className="text-xs text-gray-500 mt-0.5">{lastActive(editing.last_seen_at)}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleLogin(editing, "reset")}
+                        disabled={isPending}
+                        className="flex-1 flex items-center justify-center gap-1.5 h-9 rounded-lg border border-[#1B5E20]/30 text-sm font-medium text-[#1B5E20] hover:bg-green-50 disabled:opacity-40"
+                      >
+                        <KeyRound className="w-4 h-4" /> New password
+                      </button>
+                      <button
+                        onClick={() => handleRemoveLogin(editing)}
+                        disabled={isPending}
+                        className="flex-1 h-9 rounded-lg border border-red-200 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
+                      >
+                        Remove login
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => handleLogin(editing, "create")}
+                    disabled={isPending}
+                    className="w-full flex items-center justify-center gap-1.5 h-10 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] disabled:opacity-40"
+                  >
+                    <KeyRound className="w-4 h-4" /> Create login
+                  </button>
+                )}
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={!!editing.is_test}
+                    onChange={e => handleTest(editing, e.target.checked)}
+                    disabled={isPending}
+                    className="mt-0.5 accent-[#1B5E20]"
+                  />
+                  <span>
+                    Test partner
+                    <span className="block text-xs text-gray-400">Sees only test customers&apos; meals (Test mode) — for trying the app.</span>
+                  </span>
+                </label>
+              </Section>
+            )}
+
             {/* Document numbers (always shown) */}
             <Section title="Document Numbers">
               <Field label="Aadhaar Number">
@@ -367,6 +491,10 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
           </div>
         </aside>
       </>
+
+      {credentials && (
+        <CredentialsDialog creds={credentials} onClose={() => setCredentials(null)} />
+      )}
 
       {/* Toast */}
       {toast && (
@@ -452,6 +580,50 @@ function DocRow({ label, hasDoc, isUploading, onUpload, onView }: {
           className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = "" }}
         />
+      </div>
+    </div>
+  )
+}
+
+function CredentialsDialog({ creds, onClose }: { creds: Extract<LoginResult, { ok: true }>; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const first = creds.name.trim().split(/\s+/)[0]
+  const message =
+    `Hi ${first}, your GreenFeast delivery app login:\n` +
+    `Open: ${creds.appUrl}\n` +
+    `Phone: ${creds.loginId}\n` +
+    `Password: ${creds.password}\n\n` +
+    `Tip: in Chrome tap ⋮ → "Add to Home screen" (iPhone: Share → "Add to Home Screen") so it opens like an app.`
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-[#1A1A1A]">Login for {creds.name}</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] p-3 text-sm space-y-1">
+          <p className="text-gray-600">App: <span className="font-mono text-xs break-all">{creds.appUrl}</span></p>
+          <p className="text-gray-600">Phone: <span className="font-mono font-semibold text-[#1A1A1A]">{creds.loginId}</span></p>
+          <p className="text-gray-600">Password: <span className="font-mono font-semibold text-[#1A1A1A]">{creds.password}</span></p>
+          <p className="text-xs text-amber-700 pt-1">Shown only once — send it now.</p>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <button
+            onClick={() => { navigator.clipboard.writeText(message); setCopied(true) }}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg border border-[#e2e8d5] hover:bg-gray-50"
+          >
+            <Copy className="w-4 h-4" /> {copied ? "Copied" : "Copy message"}
+          </button>
+          <a
+            href={`https://wa.me/91${creds.loginId}?text=${encodeURIComponent(message)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg bg-[#25D366] text-white hover:opacity-90"
+          >
+            Send on WhatsApp
+          </a>
+        </div>
       </div>
     </div>
   )

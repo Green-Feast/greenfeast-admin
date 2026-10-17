@@ -10,7 +10,7 @@ export default async function DeliveryPartnersPage() {
   const { data: partners, error } = await supabaseAdmin
     .from("delivery_partners")
     .select(
-      "id, name, phone, alternate_phone, aadhaar_number, aadhaar_doc_url, pan_number, pan_doc_url, dl_number, dl_doc_url, vehicle_rc_number, vehicle_rc_doc_url, notes, status, created_at"
+      "id, name, phone, alternate_phone, aadhaar_number, aadhaar_doc_url, pan_number, pan_doc_url, dl_number, dl_doc_url, vehicle_rc_number, vehicle_rc_doc_url, notes, status, created_at, user_id, is_test, last_seen_at"
     )
     .order("created_at", { ascending: false })
 

@@ -1,12 +1,21 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import { generateDailyLists, generateKitchenSheets, generateDeliverySheet } from "./daily-lists";
-import { advanceBatchStatus, advanceOrderStatus, type DeliveryStatus, type MealSlot } from "./actions";
+import {
+  advanceBatchStatus,
+  advanceOrderStatus,
+  resolveFailedDrop,
+  recordCashReport,
+  dismissCashReport,
+  deliveryPhotoUrl,
+  type DeliveryStatus,
+  type MealSlot,
+} from "./actions";
 import { setAddressBatch } from "@/app/(admin)/batches/actions";
 import { recordCashPayment } from "@/app/(admin)/subscribers/[id]/actions";
 import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
@@ -35,6 +44,24 @@ export type OperationsSubscriber = {
   addonList: { name: string; qty: number }[];
   timing: string;
   note?: string;
+  // Delivery partner app (057)
+  outAt: string | null;
+  deliveredAt: string | null;
+  issue: string | null;
+  hasPhoto: boolean;
+  partnerName: string | null;
+  cashReport: CashReportRow | null;
+};
+
+// Cash a delivery partner says they collected — recorded by the office.
+export type CashReportRow = {
+  id: string;
+  subscriptionId: string;
+  amount: number;
+  note: string | null;
+  reportedAt: string;
+  partner: string;
+  customer: string;
 };
 
 const BATCH_COLORS: Record<string, { light: [number, number, number]; dark: [number, number, number] }> = {
@@ -80,6 +107,10 @@ function rupees(paise: number) {
   return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
+function clock(iso: string | null) {
+  return iso ? new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
+}
+
 /* ─── Components ────────────────────────────────────────────────────────────── */
 
 function Toast({ message }: { message: string }) {
@@ -101,11 +132,15 @@ export function OperationsClient({
   serverDate,
   closures,
   batches,
+  cashReports,
+  isToday,
 }: {
   initialSubscribers: OperationsSubscriber[];
   serverDate: string; // YYYY-MM-DD from URL/server
   closures: KitchenClosure[];
   batches: { id: string; name: string; meal_slot: MealSlot }[];
+  cashReports: CashReportRow[];
+  isToday: boolean;
 }) {
   const [showClosure, setShowClosure] = useState(false);
   const router = useRouter();
@@ -139,6 +174,60 @@ export function OperationsClient({
   const unassigned = slotSubs.filter((s) => !s.batchId && s.status !== "delivered").length;
   const slotBatches = batches.filter((b) => b.meal_slot === slot);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+
+  // Partners mark deliveries from their app — keep today's view live.
+  useEffect(() => {
+    if (!isToday) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [isToday, router]);
+
+  function handleResolve(s: OperationsSubscriber, outcome: "deliver" | "skip") {
+    const ask = outcome === "deliver"
+      ? `Mark ${s.name}'s meal delivered? It's billed like any delivery.`
+      : `Skip ${s.name}'s meal? Not charged — the meal stays on their plan.`;
+    if (!window.confirm(ask)) return;
+    setBusyRow(s.orderId);
+    startTransition(async () => {
+      const res = await resolveFailedDrop(s.orderId, outcome);
+      setBusyRow(null);
+      showToast(res.ok ? res.message ?? "Done." : res.error);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  function handleCashReport(r: CashReportRow, action: "record" | "dismiss") {
+    if (action === "record") {
+      const answer = window.prompt(`Cash received from ${r.partner} for ${r.customer} (₹):`, String(r.amount / 100));
+      if (!answer) return;
+      const paise = Math.round((parseFloat(answer) || 0) * 100);
+      if (paise <= 0) return;
+      setBusyRow(r.id);
+      startTransition(async () => {
+        const res = await recordCashReport(r.id, paise);
+        setBusyRow(null);
+        showToast(res.ok ? res.message ?? "Recorded." : res.error);
+        if (res.ok) router.refresh();
+      });
+      return;
+    }
+    if (!window.confirm(`Dismiss ${r.partner}'s report of ${rupees(r.amount)} from ${r.customer}? Nothing is recorded.`)) return;
+    setBusyRow(r.id);
+    startTransition(async () => {
+      const res = await dismissCashReport(r.id);
+      setBusyRow(null);
+      showToast(res.ok ? res.message ?? "Dismissed." : res.error);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  async function handlePhoto(orderId: string) {
+    const url = await deliveryPhotoUrl(orderId);
+    if (url) window.open(url, "_blank");
+    else showToast("Couldn't open the photo.");
+  }
 
   // An address's batch, set from here: every upcoming meal going there
   // follows (migration 052), so this fixes today's sheet and future days.
@@ -328,6 +417,44 @@ export function OperationsClient({
         </div>
       )}
 
+      {cashReports.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+            <Banknote className="w-4 h-4" /> Cash collected by partners — record it when they hand it over
+          </p>
+          <p className="text-xs text-amber-800/80 mt-0.5">Until it&apos;s recorded the customer&apos;s wallet doesn&apos;t have it, so their next meal can skip at cutoff.</p>
+          <div className="mt-3 space-y-2">
+            {cashReports.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 rounded-lg bg-white border border-amber-200 px-3 py-2">
+                <div className="min-w-0 text-sm">
+                  <p className="font-medium text-[#1A1A1A] truncate">{rupees(r.amount)} · {r.customer}</p>
+                  <p className="text-xs text-gray-500 truncate">
+                    by {r.partner} · {new Date(r.reportedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })}
+                    {r.note ? ` · ${r.note}` : ""}
+                  </p>
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    onClick={() => handleCashReport(r, "record")}
+                    disabled={busyRow === r.id}
+                    className="px-3 py-1.5 rounded-md bg-[#1B5E20] text-white text-xs font-semibold hover:bg-[#155116] disabled:opacity-40"
+                  >
+                    Record
+                  </button>
+                  <button
+                    onClick={() => handleCashReport(r, "dismiss")}
+                    disabled={busyRow === r.id}
+                    className="px-2.5 py-1.5 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {provisional && (
         <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
           <span className="font-semibold">Provisional</span>
@@ -469,6 +596,46 @@ export function OperationsClient({
                             <option value="">Assign a {slot} batch…</option>
                             {slotBatches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                           </select>
+                        )}
+                        {(s.status === "out_for_delivery" || s.status === "delivered") && (s.outAt || s.deliveredAt) && (
+                          <p className="mt-0.5 text-[11px] text-gray-500 flex items-center gap-1 flex-wrap">
+                            {s.status === "delivered" ? `Delivered ${clock(s.deliveredAt)}` : `On the way ${clock(s.outAt)}`}
+                            {s.partnerName && <span>· {s.partnerName}</span>}
+                            {s.hasPhoto && (
+                              <button onClick={() => handlePhoto(s.orderId)} className="inline-flex items-center gap-0.5 text-[#1B5E20] font-medium hover:underline">
+                                · <Camera className="w-3 h-3" /> photo
+                              </button>
+                            )}
+                          </p>
+                        )}
+                        {s.issue && s.status !== "delivered" && (
+                          <div className="mt-1 rounded-md bg-red-50 border border-red-200 px-2 py-1.5">
+                            <p className="text-[11px] font-medium text-red-800 flex items-start gap-1">
+                              <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                              Couldn&apos;t deliver — {s.issue}{s.partnerName ? ` (${s.partnerName})` : ""}
+                            </p>
+                            <div className="mt-1 flex gap-1.5">
+                              <button
+                                onClick={() => handleResolve(s, "deliver")}
+                                disabled={busyRow === s.orderId}
+                                className="px-2 py-0.5 rounded bg-white border border-red-200 text-[11px] font-medium text-[#1B5E20] hover:bg-green-50 disabled:opacity-40"
+                              >
+                                Mark delivered
+                              </button>
+                              <button
+                                onClick={() => handleResolve(s, "skip")}
+                                disabled={busyRow === s.orderId}
+                                className="px-2 py-0.5 rounded bg-white border border-red-200 text-[11px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-40"
+                              >
+                                Skip, no charge
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {s.cashReport && (
+                          <p className="mt-1 text-[11px] font-medium text-amber-800">
+                            {rupees(s.cashReport.amount)} cash reported by {s.cashReport.partner} — record it above
+                          </p>
                         )}
                         {s.codDue > 0 && (
                           <button

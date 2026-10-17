@@ -3,26 +3,11 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
-import { notifyEvent, logBroadcast } from "@/lib/notifications"
 import { isTestMode, modeUserIds } from "@/lib/mode"
+import { advanceBatch, advanceOrder, deliverOrders, notifyStatus, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
+import { recordCash } from "@/lib/cash"
 
-export type DeliveryStatus = "preparing" | "out_for_delivery" | "delivered"
-export type MealSlot = "lunch" | "dinner"
-
-// Statuses that are allowed to advance INTO the target (so re-clicking or going
-// backwards is a no-op rather than an error).
-const PRIOR: Record<Exclude<DeliveryStatus, "delivered">, string[]> = {
-  preparing: ["scheduled", "confirmed"],
-  out_for_delivery: ["scheduled", "confirmed", "preparing"],
-}
-
-// Only these two transitions are worth pinging a subscriber about — "preparing"
-// is a kitchen-internal state, not something a customer needs to know about.
-// The texts are templates (Notifications → Automated messages).
-const NOTIFY_EVENT: Partial<Record<DeliveryStatus, string>> = {
-  out_for_delivery: "out_for_delivery",
-  delivered: "delivered",
-}
+export type { DeliveryStatus, MealSlot }
 
 /**
  * Advance every (non-terminal) order in a batch for a given date to `newStatus`.
@@ -43,19 +28,19 @@ export async function advanceBatchStatus(
   const userIds = await modeUserIds(isTest)
   let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
 
-  // Orders this click can move — so only they get a message, not customers
-  // whose order was already at this status (a re-click used to re-notify).
-  const { data: candidates } = await supabaseAdmin
-    .from("orders")
-    .select("id")
-    .eq("batch_id", batchId)
-    .eq("delivery_date", date)
-    .eq("meal_slot", slot)
-    .not("status", "in", `(delivered,cancelled,skipped,${newStatus})`)
-    .in("user_id", userIds)
-  const candidateIds = (candidates ?? []).map((o: { id: string }) => o.id)
-
   if (newStatus === "delivered") {
+    // Orders this click can move — so only they get a message, not customers
+    // whose order was already delivered (a re-click used to re-notify).
+    const { data: candidates } = await supabaseAdmin
+      .from("orders")
+      .select("id")
+      .eq("batch_id", batchId)
+      .eq("delivery_date", date)
+      .eq("meal_slot", slot)
+      .not("status", "in", "(delivered,cancelled,skipped)")
+      .in("user_id", userIds)
+    const candidateIds = (candidates ?? []).map((o: { id: string }) => o.id)
+
     const { data, error } = await supabaseAdmin.rpc("advance_batch_delivered", {
       p_batch: batchId,
       p_date: date,
@@ -64,25 +49,14 @@ export async function advanceBatchStatus(
     })
     if (error) throw error
     billingSummary = data
+    if (candidateIds.length > 0) {
+      await notifyStatus(candidateIds, "delivered", slot, null, `Batch ${batchId}, ${date} ${slot}`)
+    }
   } else {
-    const { error } = await supabaseAdmin
-      .from("orders")
-      .update({ status: newStatus })
-      .eq("batch_id", batchId)
-      .eq("delivery_date", date)
-      .eq("meal_slot", slot)
-      .in("status", PRIOR[newStatus])
-      .in("user_id", userIds)
-    if (error) throw error
+    await advanceBatch({ batchId, date, slot, status: newStatus, userIds })
   }
 
   revalidatePath("/operations")
-
-  const event = NOTIFY_EVENT[newStatus]
-  if (event && candidateIds.length > 0) {
-    await notifyAffectedSubscribers(candidateIds, batchId, date, slot, newStatus, event)
-  }
-
   return billingSummary
 }
 
@@ -97,102 +71,113 @@ export async function advanceOrderStatus(orderId: string, newStatus: DeliverySta
   let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
 
   if (newStatus === "delivered") {
-    const { data, error } = await supabaseAdmin.rpc("advance_order_delivered", { p_order: orderId })
-    if (error) throw error
-    result = data?.result ?? null
+    result = (await deliverOrders([orderId], slot))[orderId] ?? null
   } else {
-    const { error } = await supabaseAdmin
-      .from("orders")
-      .update({ status: newStatus })
-      .eq("id", orderId)
-      .in("status", PRIOR[newStatus])
-    if (error) throw error
+    await advanceOrder(orderId, newStatus, slot)
   }
 
   revalidatePath("/operations")
-
-  const event = NOTIFY_EVENT[newStatus]
-  if (event && result !== "skipped_insufficient" && result !== "already_settled") {
-    await notifyOrderSubscriber(orderId, slot, newStatus, event)
-  }
-
   return result
 }
 
-// Same best-effort contract as notifyAffectedSubscribers — a notification
-// failure must never undo or block the status advance above.
-async function notifyOrderSubscriber(orderId: string, slot: MealSlot, status: DeliveryStatus, event: string) {
-  try {
-    const { data: order } = await supabaseAdmin
-      .from("orders")
-      .select("subscription_id, subscriptions ( user_id, users ( name, phone ) )")
-      .eq("id", orderId)
-      .single()
-    if (!order) return
+// ─────────────────────────────────────────────────────────────────────────────
+// Delivery partner app (migration 057): a drop the partner couldn't make,
+// cash they say they collected, the handover photo.
+// ─────────────────────────────────────────────────────────────────────────────
 
-    const sub = Array.isArray(order.subscriptions) ? order.subscriptions[0] : order.subscriptions
-    const user = Array.isArray((sub as any)?.users) ? (sub as any).users[0] : (sub as any)?.users
-    if (!(sub as any)?.user_id) return
+export type ActionResult = { ok: true; message?: string } | { ok: false; error: string }
 
-    const recipients = [{ user_id: (sub as any).user_id, name: (user as any)?.name ?? "Unknown", phone: (user as any)?.phone ?? null }]
-    const sent = await notifyEvent(event, recipients, { slot }, "delivery_status")
-    if (!sent) return
-    await logBroadcast({
-      type: "delivery_status",
-      title: sent.title,
-      body: sent.body,
-      channels: ["push"],
-      audience: { description: `Order ${orderId}, status=${status}`, count: 1 },
-      results: sent.results,
-    })
-  } catch {
-    // best-effort — see comment above
+// A failed drop stays unbilled until the office decides: hand it over after
+// all (billed like any delivery) or skip it — not charged, and the meal
+// stays on the plan.
+export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "skip"): Promise<ActionResult> {
+  await requireAdminStrict()
+  const { data: order } = await supabaseAdmin
+    .from("orders")
+    .select("id, status, meal_slot")
+    .eq("id", orderId)
+    .maybeSingle()
+  if (!order) return { ok: false, error: "Order not found." }
+  if (["delivered", "cancelled", "skipped"].includes(order.status)) return { ok: false, error: "This meal is already settled." }
+
+  if (outcome === "deliver") {
+    const result = (await deliverOrders([orderId], order.meal_slot as MealSlot))[orderId]
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    if (result === "skipped_insufficient") return { ok: true, message: "Wallet was short — skipped and the customer was told." }
+    return { ok: true, message: "Marked delivered and billed." }
   }
+
+  const { error } = await supabaseAdmin
+    .from("orders")
+    .update({ status: "skipped", skip_reason: "not_delivered", updated_at: new Date().toISOString() })
+    .eq("id", orderId)
+    .not("status", "in", "(delivered,cancelled,skipped)")
+  if (error) return { ok: false, error: error.message }
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
 }
 
-// Best-effort — a notification failure should never undo or block the actual
-// status advance above, so this is deliberately swallowed on error.
-async function notifyAffectedSubscribers(
-  candidateIds: string[],
-  batchId: string,
-  date: string,
-  slot: MealSlot,
-  status: DeliveryStatus,
-  event: string
-) {
-  try {
-    const { data: orders } = await supabaseAdmin
-      .from("orders")
-      .select("subscription_id")
-      .in("id", candidateIds)
-      .eq("status", status)
-    const subIds = Array.from(new Set((orders ?? []).map((o) => o.subscription_id)))
-    if (subIds.length === 0) return
+// Cash a partner reported: recording it is the normal "cash received"
+// (payment, wallet credit, less cash due, message to the customer).
+export async function recordCashReport(reportId: string, amountPaise?: number): Promise<ActionResult> {
+  const admin = await requireAdminStrict()
+  const { data: report } = await supabaseAdmin
+    .from("cash_reports")
+    .select("id, subscription_id, amount_paise, recorded_at, dismissed_at")
+    .eq("id", reportId)
+    .maybeSingle()
+  if (!report) return { ok: false, error: "Report not found." }
+  if (report.recorded_at || report.dismissed_at) return { ok: false, error: "Already dealt with." }
 
-    const { data: subs } = await supabaseAdmin
-      .from("subscriptions")
-      .select("user_id, users ( name, phone )")
-      .in("id", subIds)
+  // Claim the report first so a double click can't record the cash twice.
+  const { data: claimed } = await supabaseAdmin
+    .from("cash_reports")
+    .update({ recorded_at: new Date().toISOString(), recorded_by: admin.id })
+    .eq("id", reportId)
+    .is("recorded_at", null)
+    .is("dismissed_at", null)
+    .select("id")
+  if (!claimed?.length) return { ok: false, error: "Already dealt with." }
 
-    const recipients = (subs ?? []).map((s) => {
-      const user = Array.isArray(s.users) ? s.users[0] : s.users
-      return { user_id: s.user_id, name: (user as any)?.name ?? "Unknown", phone: (user as any)?.phone ?? null }
-    })
-    if (recipients.length === 0) return
-
-    const sent = await notifyEvent(event, recipients, { slot }, "delivery_status")
-    if (!sent) return
-    await logBroadcast({
-      type: "delivery_status",
-      title: sent.title,
-      body: sent.body,
-      channels: ["push"],
-      audience: { description: `Batch ${batchId}, ${date} ${slot}, status=${status}`, count: recipients.length },
-      results: sent.results,
-    })
-  } catch {
-    // best-effort — see comment above
+  const res = await recordCash(report.subscription_id, amountPaise ?? report.amount_paise)
+  if (!res.ok) {
+    await supabaseAdmin.from("cash_reports").update({ recorded_at: null, recorded_by: null }).eq("id", reportId)
+    return res
   }
+  await supabaseAdmin.from("cash_reports").update({ payment_id: res.paymentId }).eq("id", reportId)
+
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  revalidatePath(`/subscribers/${report.subscription_id}`)
+  return { ok: true, message: res.message }
+}
+
+export async function dismissCashReport(reportId: string): Promise<ActionResult> {
+  const admin = await requireAdminStrict()
+  const { data, error } = await supabaseAdmin
+    .from("cash_reports")
+    .update({ dismissed_at: new Date().toISOString(), dismissed_by: admin.id })
+    .eq("id", reportId)
+    .is("recorded_at", null)
+    .is("dismissed_at", null)
+    .select("subscription_id")
+  if (error) return { ok: false, error: error.message }
+  if (!data?.length) return { ok: false, error: "Already dealt with." }
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  revalidatePath(`/subscribers/${data[0].subscription_id}`)
+  return { ok: true, message: "Report dismissed — nothing recorded." }
+}
+
+// Handover photos are private; a link lasts 5 minutes.
+export async function deliveryPhotoUrl(orderId: string): Promise<string | null> {
+  await requireAdmin()
+  const { data: order } = await supabaseAdmin.from("orders").select("delivery_photo_path").eq("id", orderId).maybeSingle()
+  if (!order?.delivery_photo_path) return null
+  const { data } = await supabaseAdmin.storage.from("delivery-photos").createSignedUrl(order.delivery_photo_path, 300)
+  return data?.signedUrl ?? null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

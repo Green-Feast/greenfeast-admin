@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { PARTNER_COOKIE, isPartnerPath } from "./lib/partner-cookie";
 
 // Runs before every request to this app (see matcher below) — this, not the
 // (admin) layout, is the real gate. It also covers Server Actions: a POST to
@@ -11,13 +12,27 @@ import { createServerClient } from "@supabase/ssr";
 // stricter "is this user actually an admin" check lives in the login Server
 // Action (so a non-admin can never establish a session here in the first
 // place) and again in lib/auth.ts's requireAdmin() as a second layer.
+//
+// The delivery partner app (/partner) has its own session cookie and login
+// page (lib/partner-cookie.ts); lib/partner-auth.ts checks the partner.
 export async function proxy(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const partner = isPartnerPath(path);
+
+  // greenfeast-partner.* (if that domain is added to the Vercel project) is
+  // the partner app only.
+  const host = request.headers.get("host") ?? "";
+  if (host.startsWith("greenfeast-partner.") && !partner) {
+    return NextResponse.redirect(new URL("/partner", request.url));
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: partner ? { name: PARTNER_COOKIE } : undefined,
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -41,7 +56,18 @@ export async function proxy(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims?.sub ? data.claims : null;
 
-  const isLoginPage = request.nextUrl.pathname.startsWith("/login");
+  if (partner) {
+    // Signed-in partners aren't bounced off the login page here: a session
+    // whose login was removed would loop. The login page sends a working
+    // partner on to /partner itself.
+    const isLogin = path.startsWith("/partner/login");
+    if (!user && !isLogin) {
+      return NextResponse.redirect(new URL("/partner/login", request.url));
+    }
+    return response;
+  }
+
+  const isLoginPage = path.startsWith("/login");
 
   if (!user && !isLoginPage) {
     return NextResponse.redirect(new URL("/login", request.url));
@@ -56,5 +82,6 @@ export async function proxy(request: NextRequest) {
 export const config = {
   // /api/cron/* authenticates itself via CRON_SECRET (Vercel Cron has no
   // session cookie to check here — see app/api/cron/renewal-reminders/route.ts).
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // Static files (images, the partner app's web manifest) need no session.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp|webmanifest)$).*)"],
 };

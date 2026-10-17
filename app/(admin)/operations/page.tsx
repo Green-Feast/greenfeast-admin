@@ -2,7 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { istToday } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
-import { OperationsClient, type OperationsSubscriber } from "./operations-client";
+import { OperationsClient, type OperationsSubscriber, type CashReportRow } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +36,11 @@ export default async function OperationsPage({
       quantity,
       extra_dish,
       address_id,
+      out_for_delivery_at,
+      delivered_at,
+      delivery_issue,
+      delivery_photo_path,
+      delivery_partners ( name ),
       batches ( id, name ),
       subscriptions!inner (
         id,
@@ -57,8 +62,29 @@ export default async function OperationsPage({
     // return that request).
     .order("id");
 
-  // Both in one round trip.
-  const [{ data: closureRows }, { data, error }] = await Promise.all([closuresQuery, ordersQuery]);
+  // Cash delivery partners say they collected, not yet recorded (any day) —
+  // the office records it when the cash is handed over.
+  const cashQuery = supabaseAdmin
+    .from("cash_reports")
+    .select("id, subscription_id, amount_paise, note, reported_at, delivery_partners ( name ), users!inner ( name, is_test )")
+    .is("recorded_at", null)
+    .is("dismissed_at", null)
+    .eq("users.is_test", isTest)
+    .order("reported_at");
+
+  // All in one round trip.
+  const [{ data: closureRows }, { data, error }, { data: cashRows }] = await Promise.all([closuresQuery, ordersQuery, cashQuery]);
+
+  const cashReports: CashReportRow[] = ((cashRows ?? []) as any[]).map((r) => ({
+    id: r.id,
+    subscriptionId: r.subscription_id,
+    amount: r.amount_paise,
+    note: r.note ?? null,
+    reportedAt: r.reported_at,
+    partner: (Array.isArray(r.delivery_partners) ? r.delivery_partners[0] : r.delivery_partners)?.name ?? "Partner",
+    customer: (Array.isArray(r.users) ? r.users[0] : r.users)?.name ?? "Customer",
+  }));
+  const cashBySub = new Map(cashReports.map((r) => [r.subscriptionId, r]));
 
   if (error) console.error("[operations] load failed:", error);
 
@@ -150,6 +176,13 @@ export default async function OperationsPage({
       addonList,
       timing: (addr as any)?.time_window ?? "",
       note: (sub as any)?.special_notes ?? "",
+      // Delivery partner app (057): who took it, when, problems, photo.
+      outAt: ((o as any).out_for_delivery_at ?? null) as string | null,
+      deliveredAt: ((o as any).delivered_at ?? null) as string | null,
+      issue: ((o as any).delivery_issue ?? null) as string | null,
+      hasPhoto: !!(o as any).delivery_photo_path,
+      partnerName: ((Array.isArray((o as any).delivery_partners) ? (o as any).delivery_partners[0] : (o as any).delivery_partners)?.name ?? null) as string | null,
+      cashReport: cashBySub.get((sub as any)?.id) ?? null,
     };
   });
 
@@ -159,6 +192,8 @@ export default async function OperationsPage({
       serverDate={date}
       closures={(closureRows ?? []) as KitchenClosure[]}
       batches={(batchRows ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}
+      cashReports={cashReports}
+      isToday={date === istToday()}
     />
   );
 }

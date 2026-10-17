@@ -56,6 +56,8 @@ async function getDashboardData(isTest: boolean) {
     { data: skips },
     { data: closures },
     { data: noBatchOrders },
+    { data: failedDrops },
+    { data: cashReports },
   ] = await Promise.all([
     // Every plan that matters right now, with what the attention list needs.
     supabaseAdmin
@@ -131,6 +133,24 @@ async function getDashboardData(isTest: boolean) {
       .in("status", ["scheduled", "confirmed", "preparing"])
       .eq("users.is_test", isTest)
       .order("delivery_date"),
+    // Delivery partner app (057): drops a partner couldn't make, waiting
+    // for the office to decide.
+    supabaseAdmin
+      .from("orders")
+      .select("delivery_date, meal_slot, delivery_issue, delivery_partners ( name ), users!inner ( name, customer_code, is_test )")
+      .not("delivery_issue", "is", null)
+      .not("status", "in", "(delivered,cancelled,skipped)")
+      .eq("users.is_test", isTest)
+      .order("delivery_issue_at", { ascending: false }),
+    // Cash partners collected that isn't recorded yet — until it is, the
+    // customer's next meal can skip at cutoff for a short wallet.
+    supabaseAdmin
+      .from("cash_reports")
+      .select("amount_paise, reported_at, delivery_partners ( name ), users!inner ( name, customer_code, is_test )")
+      .is("recorded_at", null)
+      .is("dismissed_at", null)
+      .eq("users.is_test", isTest)
+      .order("reported_at"),
   ]);
 
   const subs = (liveSubs ?? []) as any[];
@@ -163,6 +183,18 @@ async function getDashboardData(isTest: boolean) {
     who: e.who,
     detail: `${e.label} · no ${e.slot} batch · ${e.n} meal${e.n === 1 ? "" : "s"} from ${fmtDay(e.first)}`,
     href: `/subscribers/${e.subId}`,
+  }));
+
+  const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+  const couldntDeliver: AttentionRow[] = ((failedDrops ?? []) as any[]).map((o) => ({
+    who: person(o.users),
+    detail: `${o.delivery_issue}${one(o.delivery_partners)?.name ? ` · ${one(o.delivery_partners).name}` : ""} · ${fmtDay(o.delivery_date)} ${o.meal_slot}`,
+    href: `/operations?date=${o.delivery_date}`,
+  }));
+  const cashWithPartners: AttentionRow[] = ((cashReports ?? []) as any[]).map((r) => ({
+    who: person(r.users),
+    detail: `${rupees(r.amount_paise)} with ${one(r.delivery_partners)?.name ?? "partner"} · ${fmtRelative(r.reported_at)}`,
+    href: "/operations",
   }));
 
   const finishing: AttentionRow[] = active
@@ -277,7 +309,7 @@ async function getDashboardData(isTest: boolean) {
     todayBatches,
     batches,
     walletHeld,
-    attention: { codPending, notActivated, noBatch, finishing, lowWallet, newWithoutPlan, pendingRefunds, stuck },
+    attention: { codPending, notActivated, noBatch, couldntDeliver, cashWithPartners, finishing, lowWallet, newWithoutPlan, pendingRefunds, stuck },
     closures: (closures ?? []) as any[],
     activity: activity.slice(0, 30),
   };
@@ -336,7 +368,8 @@ export default async function DashboardPage() {
   const data = await getDashboardData(isTest);
   const a = data.attention;
   const attentionCount =
-    a.codPending.length + a.notActivated.length + a.noBatch.length + a.finishing.length + a.lowWallet.length + a.pendingRefunds + a.stuck;
+    a.codPending.length + a.notActivated.length + a.noBatch.length + a.couldntDeliver.length + a.cashWithPartners.length +
+    a.finishing.length + a.lowWallet.length + a.pendingRefunds + a.stuck;
 
   const todayLabel = new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
@@ -393,6 +426,8 @@ export default async function DashboardPage() {
           </div>
           <div className="p-5 space-y-5">
             <AttentionGroup icon={Route} tone="text-red-600" title="Priority — addresses with meals but no batch" rows={a.noBatch} />
+            <AttentionGroup icon={AlertTriangle} tone="text-red-600" title="Couldn't deliver — decide in Operations" rows={a.couldntDeliver} />
+            <AttentionGroup icon={Banknote} tone="text-red-600" title="Cash collected by partners — record it before the next cutoff" rows={a.cashWithPartners} />
             <AttentionGroup icon={Banknote} tone="text-amber-600" title="Cash to collect (cash-on-delivery plans)" rows={a.codPending} />
             <AttentionGroup icon={Banknote} tone="text-gray-500" title="Cash-on-delivery signups to activate" rows={a.notActivated} />
             <AttentionGroup icon={Hourglass} tone="text-orange-600" title="Plans finishing — follow up on renewal" rows={a.finishing} />

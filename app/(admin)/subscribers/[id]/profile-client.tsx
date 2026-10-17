@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { OrderEditor, type EditorTarget } from "@/components/order-editor"
 import { setFixedDish, clearFixedDish } from "@/app/(admin)/kitchen/order-actions"
 import { setAddressBatch } from "@/app/(admin)/batches/actions"
+import { recordCashReport, dismissCashReport } from "@/app/(admin)/operations/actions"
 import {
   saveNotes,
   pauseSubscription,
@@ -61,6 +62,8 @@ type Subscription = {
   deliveryDays: string[]
   codDue: number
   onCredit: boolean
+  // Delivery partner app: cash a partner says they collected.
+  cashReports: { id: string; amount: number; note: string | null; reportedAt: string; partner: string }[]
 }
 
 type User = { id: string; name: string; code: string; isTest: boolean; phone: string; email: string; createdAt: string }
@@ -395,6 +398,31 @@ export function ProfileClient({
           >
             Record cash received
           </button>
+          {subscription.cashReports.map((r) => (
+            <div key={r.id} className="basis-full flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white border border-amber-200 px-3 py-2 text-sm">
+              <span className="text-amber-900">
+                <span className="font-semibold">{fmtRupees(r.amount)}</span> collected by {r.partner} ·{" "}
+                {new Date(r.reportedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })}
+                {r.note ? ` · ${r.note}` : ""}
+              </span>
+              <span className="flex gap-1.5">
+                <button
+                  disabled={isPending}
+                  onClick={() => act(() => recordCashReport(r.id), false)}
+                  className="px-2.5 py-1 rounded-md bg-[#1B5E20] text-white text-xs font-medium hover:bg-[#155116] disabled:opacity-40"
+                >
+                  Record {fmtRupees(r.amount)}
+                </button>
+                <button
+                  disabled={isPending}
+                  onClick={() => { if (window.confirm("Dismiss this report? Nothing is recorded.")) act(() => dismissCashReport(r.id), false) }}
+                  className="px-2.5 py-1 rounded-md border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Dismiss
+                </button>
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
