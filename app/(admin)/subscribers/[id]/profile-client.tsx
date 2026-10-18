@@ -240,7 +240,16 @@ export function ProfileClient({
         showToast("success", res.message ?? "Saved.")
         if (close) { setModal(null); setEditingAddress(null) }
       } catch (e: any) {
-        showToast("error", e?.message ?? "Something went wrong. Try again.")
+        // After a new admin deploy, a page opened earlier can't reach the
+        // new server actions — Next only says "error in the Server
+        // Components render". A reload fixes it.
+        const msg = String(e?.message ?? "")
+        showToast(
+          "error",
+          /Server Components render|Server Action|Failed to fetch/i.test(msg)
+            ? "The admin was updated since this page opened — refresh the page (Ctrl+R) and save again."
+            : msg || "Something went wrong. Try again."
+        )
       }
     })
   }
