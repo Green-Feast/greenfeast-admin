@@ -6,12 +6,12 @@ import { useRouter } from "next/navigation"
 import {
   Search, X, Phone, Mail, Calendar, Plus, Trash2,
   RotateCcw, Pencil, ExternalLink, ChevronLeft, ChevronRight,
-  AlertCircle, CheckCircle, ShieldAlert, UserPlus, Copy, FlaskConical, BadgeCheck,
+  AlertCircle, CheckCircle, ShieldAlert, UserPlus, Copy, FlaskConical, BadgeCheck, KeyRound,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   createSubscription, resetUserData, deleteUser, editUserProfile,
-  setUserTestFlag, createCustomerAccount,
+  setUserTestFlag, createCustomerAccount, generateCustomerPassword,
 } from "./actions"
 import type { CreateSubInput, NewCustomer } from "./types"
 
@@ -119,6 +119,7 @@ export function UsersClient({
   const [resetOpen, setResetOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [newPassword, setNewPassword] = useState<NewPassword | null>(null)
 
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
 
@@ -327,6 +328,14 @@ export function UsersClient({
           onEdit={() => setEditOpen(true)}
           onReset={() => setResetOpen(true)}
           onDelete={() => setDeleteOpen(true)}
+          onNewPassword={() => {
+            if (!window.confirm(`Give ${selected.name ?? "this customer"} a new password? Their old password stops working; Google / Apple sign-in still works. You'll see the new one once, to send them.`)) return
+            startTransition(async () => {
+              const res = await generateCustomerPassword(selected.id)
+              if (!res.ok) return showToast("error", res.error)
+              setNewPassword(res)
+            })
+          }}
           onToggleTest={() => {
             const toTest = !selected.isTest
             if (!window.confirm(toTest
@@ -336,6 +345,8 @@ export function UsersClient({
           }}
         />
       )}
+
+      {newPassword && <NewPasswordModal result={newPassword} onClose={() => setNewPassword(null)} />}
 
       {addOpen && (
         <AddCustomerModal
@@ -417,7 +428,7 @@ export function UsersClient({
 // ─── Detail slide-over ─────────────────────────────────────────────────────────
 
 function DetailPanel({
-  user, isPending, onClose, onCreate, onEdit, onReset, onDelete, onToggleTest,
+  user, isPending, onClose, onCreate, onEdit, onReset, onDelete, onToggleTest, onNewPassword,
 }: {
   user: UserRow
   isPending: boolean
@@ -427,6 +438,7 @@ function DetailPanel({
   onReset: () => void
   onDelete: () => void
   onToggleTest: () => void
+  onNewPassword: () => void
 }) {
   const tier = tierOf(user)
 
@@ -513,6 +525,15 @@ function DetailPanel({
             <PanelBtn color="gray" disabled={isPending} onClick={onReset} icon={<RotateCcw className="w-3.5 h-3.5" />} label="Reset" />
             <PanelBtn color="red" disabled={isPending} onClick={onDelete} icon={<Trash2 className="w-3.5 h-3.5" />} label="Delete" />
           </div>
+          {user.email && (
+            <button
+              onClick={onNewPassword}
+              disabled={isPending}
+              className="flex items-center justify-center gap-1.5 w-full py-2 text-xs font-medium rounded-lg border border-[#1B5E20]/30 text-[#1B5E20] hover:bg-green-50 disabled:opacity-40 transition-colors"
+            >
+              <KeyRound className="w-3.5 h-3.5" /> New password
+            </button>
+          )}
           <button
             onClick={onToggleTest}
             disabled={isPending}
@@ -525,6 +546,56 @@ function DetailPanel({
         </div>
       </aside>
     </>
+  )
+}
+
+// ─── New password for an existing customer ─────────────────────────────────────
+
+type NewPassword = { password: string; email: string; name: string; phone: string | null; provider: string }
+
+function NewPasswordModal({ result, onClose }: { result: NewPassword; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const also =
+    result.provider === "google" ? `\n"Continue with Google" still works too.` :
+    result.provider === "apple" ? `\n"Continue with Apple" still works too.` : ""
+  const message =
+    `Hi ${result.name}! Here's a new password for the GreenFeast app 🌿\n\n` +
+    `Log in with Email & Password:\nEmail: ${result.email}\nTemporary password: ${result.password}\n\n` +
+    `You'll be asked to set your own password after signing in.${also}`
+  const digits = (result.phone ?? "").replace(/\D/g, "").slice(-10)
+
+  return (
+    <ModalShell title="New password" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="rounded-lg bg-[#F9FBF7] border border-[#e2e8d5] p-3 text-sm">
+          <p className="font-medium text-[#1A1A1A]">{result.name}</p>
+          <p className="text-gray-600 mt-1">Email: <span className="font-mono">{result.email}</span></p>
+          <p className="text-gray-600">Temporary password: <span className="font-mono font-semibold text-[#1A1A1A]">{result.password}</span></p>
+          <p className="text-xs text-amber-700 mt-2">Shown only once — send it now. The app asks them to set their own after signing in.</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { navigator.clipboard.writeText(message); setCopied(true) }}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg border border-[#e2e8d5] hover:bg-gray-50"
+          >
+            <Copy className="w-4 h-4" /> {copied ? "Copied" : "Copy message"}
+          </button>
+          {digits.length === 10 && (
+            <a
+              href={`https://wa.me/91${digits}?text=${encodeURIComponent(message)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-sm font-medium rounded-lg bg-[#25D366] text-white hover:opacity-90"
+            >
+              Send on WhatsApp
+            </a>
+          )}
+        </div>
+      </div>
+      <ModalFooter>
+        <GhostBtn onClick={onClose}>Done</GhostBtn>
+      </ModalFooter>
+    </ModalShell>
   )
 }
 

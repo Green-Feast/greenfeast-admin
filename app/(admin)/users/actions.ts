@@ -323,6 +323,43 @@ export async function setUserTestFlag(userId: string, isTest: boolean): Promise<
 
 
 /**
+ * A new temporary password for an existing customer (forgot it, or never had
+ * one — a Google / Apple sign-in gets one too, on the same email). The app
+ * asks them to set their own on the next sign-in (must_change_password), the
+ * same as a login made with "Add customer". Their other sign-in methods keep
+ * working, and nobody is signed out.
+ */
+export async function generateCustomerPassword(userId: string): Promise<
+  { ok: true; password: string; email: string; name: string; phone: string | null; provider: string } | { ok: false; error: string }
+> {
+  await requireAdminStrict()
+  const { data: found, error: findErr } = await supabaseAdmin.auth.admin.getUserById(userId)
+  const authUser = found?.user
+  if (findErr || !authUser) return { ok: false, error: "Login not found." }
+  if (authUser.user_metadata?.gf_account === "partner") return { ok: false, error: "That's a delivery partner — use Delivery Partners → App login." }
+  const email = authUser.email?.trim()
+  if (!email) return { ok: false, error: "This account has no email to log in with." }
+
+  const password = tempPassword()
+  // user_metadata is merged, not replaced — only the flag changes.
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+    password,
+    user_metadata: { must_change_password: true },
+  })
+  if (error) return { ok: false, error: `Couldn't set the password: ${error.message}` }
+
+  const { data: profile } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
+  return {
+    ok: true,
+    password,
+    email,
+    name: profile?.name?.trim() || (authUser.user_metadata?.full_name as string | undefined) || "there",
+    phone: profile?.phone ?? null,
+    provider: (authUser.app_metadata?.provider as string | undefined) ?? "email",
+  }
+}
+
+/**
  * Creates an email + password login for a customer (e.g. an existing customer
  * being moved over), with a temporary password the admin shares. The account
  * is flagged must_change_password, so the app asks them to set their own on
