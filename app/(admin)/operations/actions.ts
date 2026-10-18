@@ -87,6 +87,27 @@ export async function advanceOrderStatus(orderId: string, newStatus: DeliverySta
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string }
 
+// The partner hears what the office decided (GreenFeast Partner app push +
+// bell, in their language — notify_partner, migration 062). Best-effort.
+async function tellPartner(partnerId: string | null | undefined, key: string, vars: Record<string, unknown>, data: Record<string, unknown> = {}) {
+  if (!partnerId) return
+  try {
+    await supabaseAdmin.rpc("notify_partner", { p_partner: partnerId, p_key: key, p_vars: vars, p_data: data })
+  } catch {
+    // never block the office's action
+  }
+}
+
+async function customerName(userId: string | null | undefined) {
+  if (!userId) return "Customer"
+  const { data } = await supabaseAdmin.from("users").select("name").eq("id", userId).maybeSingle()
+  return data?.name?.trim() || "Customer"
+}
+
+function rupeesText(paise: number) {
+  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+}
+
 // A failed drop stays unbilled until the office decides: hand it over after
 // all (billed like any delivery) or skip it — not charged, and the meal
 // stays on the plan.
@@ -94,17 +115,20 @@ export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "s
   await requireAdminStrict()
   const { data: order } = await supabaseAdmin
     .from("orders")
-    .select("id, status, meal_slot")
+    .select("id, status, meal_slot, user_id, batch_id, delivery_partner_id")
     .eq("id", orderId)
     .maybeSingle()
   if (!order) return { ok: false, error: "Order not found." }
   if (["delivered", "cancelled", "skipped"].includes(order.status)) return { ok: false, error: "This meal is already settled." }
+  const vars = { name: await customerName(order.user_id), slot: order.meal_slot }
+  const data = { batch_id: order.batch_id }
 
   if (outcome === "deliver") {
     const result = (await deliverOrders([orderId], order.meal_slot as MealSlot))[orderId]
     revalidatePath("/operations")
     revalidatePath("/dashboard")
     if (result === "skipped_insufficient") return { ok: true, message: "Wallet was short — skipped and the customer was told." }
+    await tellPartner(order.delivery_partner_id, "drop_delivered", vars, data)
     return { ok: true, message: "Marked delivered and billed." }
   }
 
@@ -114,6 +138,7 @@ export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "s
     .eq("id", orderId)
     .not("status", "in", "(delivered,cancelled,skipped)")
   if (error) return { ok: false, error: error.message }
+  await tellPartner(order.delivery_partner_id, "drop_skipped", vars, data)
   revalidatePath("/operations")
   revalidatePath("/dashboard")
   return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
@@ -125,7 +150,7 @@ export async function recordCashReport(reportId: string, amountPaise?: number): 
   const admin = await requireAdminStrict()
   const { data: report } = await supabaseAdmin
     .from("cash_reports")
-    .select("id, subscription_id, amount_paise, recorded_at, dismissed_at")
+    .select("id, subscription_id, amount_paise, recorded_at, dismissed_at, partner_id, user_id")
     .eq("id", reportId)
     .maybeSingle()
   if (!report) return { ok: false, error: "Report not found." }
@@ -147,6 +172,10 @@ export async function recordCashReport(reportId: string, amountPaise?: number): 
     return res
   }
   await supabaseAdmin.from("cash_reports").update({ payment_id: res.paymentId }).eq("id", reportId)
+  await tellPartner(report.partner_id, "cash_recorded", {
+    name: await customerName(report.user_id),
+    amount: rupeesText(amountPaise ?? report.amount_paise),
+  })
 
   revalidatePath("/operations")
   revalidatePath("/dashboard")
@@ -162,9 +191,13 @@ export async function dismissCashReport(reportId: string): Promise<ActionResult>
     .eq("id", reportId)
     .is("recorded_at", null)
     .is("dismissed_at", null)
-    .select("subscription_id")
+    .select("subscription_id, partner_id, user_id, amount_paise")
   if (error) return { ok: false, error: error.message }
   if (!data?.length) return { ok: false, error: "Already dealt with." }
+  await tellPartner(data[0].partner_id, "cash_dismissed", {
+    name: await customerName(data[0].user_id),
+    amount: rupeesText(data[0].amount_paise),
+  })
   revalidatePath("/operations")
   revalidatePath("/dashboard")
   revalidatePath(`/subscribers/${data[0].subscription_id}`)

@@ -120,6 +120,31 @@ export async function removePartnerLogin(partnerId: string): Promise<{ ok: boole
   return error ? { ok: false, error: error.message } : { ok: true }
 }
 
+// A message from the office to one partner or every active partner with a
+// login — a push on their phone plus the app's bell. Sent as typed; the title
+// ("Message from the office") is in each partner's language (migration 062).
+export async function sendPartnerMessage(target: "all" | string, message: string): Promise<{ ok: true; sent: number } | { ok: false; error: string }> {
+  await requireAdminStrict()
+  const text = message.trim()
+  if (!text) return { ok: false, error: "Type a message." }
+  if (text.length > 500) return { ok: false, error: "Keep it under 500 characters." }
+  let q = supabaseAdmin.from("delivery_partners").select("id").eq("status", "active").not("user_id", "is", null)
+  if (target !== "all") q = q.eq("id", target)
+  const { data: partners, error } = await q
+  if (error) return { ok: false, error: error.message }
+  if (!partners?.length) return { ok: false, error: "No active partner with a login to send to." }
+  for (const p of partners) {
+    const { error: sendErr } = await supabaseAdmin.rpc("notify_partner", {
+      p_partner: p.id,
+      p_key: "office_message",
+      p_vars: { message: text },
+      p_data: {},
+    })
+    if (sendErr) return { ok: false, error: sendErr.message }
+  }
+  return { ok: true, sent: partners.length }
+}
+
 // A test partner sees only test customers' meals (Test mode in the admin).
 export async function setPartnerTest(partnerId: string, isTest: boolean) {
   await requireAdmin()

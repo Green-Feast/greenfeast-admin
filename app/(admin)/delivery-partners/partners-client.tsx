@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useTransition, useRef, useEffect } from "react"
-import { Plus, X, Pencil, CheckCircle, AlertCircle, Eye, Upload, Phone, Bike, KeyRound, Copy, Smartphone } from "lucide-react"
+import { Plus, X, Pencil, CheckCircle, AlertCircle, Eye, Upload, Phone, Bike, KeyRound, Copy, Smartphone, MessageSquare, Bell, BellOff } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import {
@@ -13,6 +13,7 @@ import {
   resetPartnerPassword,
   removePartnerLogin,
   setPartnerTest,
+  sendPartnerMessage,
   type LoginResult,
 } from "./actions"
 
@@ -36,7 +37,11 @@ export type Partner = {
   user_id?: string | null
   is_test?: boolean
   last_seen_at?: string | null
+  language?: "en" | "hi" | "hinglish"
+  has_push?: boolean
 }
+
+const LANGUAGE_LABEL: Record<string, string> = { en: "English", hi: "हिंदी", hinglish: "Hinglish" }
 
 function lastActive(iso?: string | null) {
   if (!iso) return "Never signed in"
@@ -67,6 +72,7 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null)
   const [uploadingDoc, setUploadingDoc] = useState<DocKey | null>(null)
   const [credentials, setCredentials] = useState<Extract<LoginResult, { ok: true }> | null>(null)
+  const [messageOpen, setMessageOpen] = useState(false)
 
   // Form fields
   const [name, setName]                   = useState("")
@@ -221,13 +227,22 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
             {activeCount} active · {inactiveCount} inactive
           </p>
         </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-1.5 h-9 px-4 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Add Partner
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setMessageOpen(true)}
+            className="flex items-center gap-1.5 h-9 px-4 rounded-lg border border-[#1B5E20]/30 text-[#1B5E20] text-sm font-medium hover:bg-green-50 transition-colors"
+          >
+            <MessageSquare className="w-4 h-4" />
+            Message partners
+          </button>
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 h-9 px-4 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Partner
+          </button>
+        </div>
       </div>
 
       {/* Load error banner */}
@@ -289,6 +304,10 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
                               {p.is_test && <span className="ml-1 px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 text-[10px] font-semibold">TEST</span>}
                             </span>
                             <p className="text-[11px] text-gray-400">{lastActive(p.last_seen_at)}</p>
+                            <p className="text-[11px] text-gray-400 flex items-center gap-1">
+                              {p.has_push ? <Bell className="w-3 h-3 text-green-600" /> : <BellOff className="w-3 h-3" />}
+                              {p.has_push ? "Push on" : "No push yet"} · {LANGUAGE_LABEL[p.language ?? "en"]}
+                            </p>
                           </div>
                         ) : (
                           <span className="text-xs text-gray-400">No login</span>
@@ -496,6 +515,14 @@ export function PartnersClient({ initialPartners, loadError }: { initialPartners
         <CredentialsDialog creds={credentials} onClose={() => setCredentials(null)} />
       )}
 
+      {messageOpen && (
+        <MessageDialog
+          partners={partners.filter((p) => p.user_id && p.status === "active")}
+          onClose={() => setMessageOpen(false)}
+          onSent={(n) => { setMessageOpen(false); showToast("success", `Sent to ${n} partner${n === 1 ? "" : "s"}.`) }}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
         <div className={cn(
@@ -624,6 +651,67 @@ function CredentialsDialog({ creds, onClose }: { creds: Extract<LoginResult, { o
             Send on WhatsApp
           </a>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Office → partners: a push on their phone and a line under the app's bell.
+function MessageDialog({ partners, onClose, onSent }: { partners: Partner[]; onClose: () => void; onSent: (n: number) => void }) {
+  const [target, setTarget] = useState<string>("all")
+  const [text, setText] = useState("")
+  const [error, setError] = useState("")
+  const [isPending, startTransition] = useTransition()
+
+  function send() {
+    setError("")
+    startTransition(async () => {
+      const res = await sendPartnerMessage(target, text)
+      if (!res.ok) return setError(res.error)
+      onSent(res.sent)
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold text-[#1A1A1A]">Message partners</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+        </div>
+        {partners.length === 0 ? (
+          <p className="text-sm text-gray-500">No active partner has an app login yet — create one in a partner&apos;s panel first.</p>
+        ) : (
+          <>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">To</label>
+            <select
+              value={target}
+              onChange={e => setTarget(e.target.value)}
+              className="w-full h-9 rounded-lg border border-[#e2e8d5] px-2 text-sm bg-white"
+            >
+              <option value="all">All partners with the app ({partners.length})</option>
+              {partners.map(p => <option key={p.id} value={p.id}>{p.name}{p.is_test ? " (test)" : ""}</option>)}
+            </select>
+            <label className="block text-xs font-medium text-gray-500 mt-3 mb-1.5">Message</label>
+            <textarea
+              value={text}
+              onChange={e => setText(e.target.value)}
+              rows={4}
+              maxLength={500}
+              placeholder="e.g. Pick up lunch at 11:45 today"
+              className="w-full text-sm rounded-lg border border-[#e2e8d5] px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 resize-none"
+            />
+            <p className="text-xs text-gray-400 mt-1">Sent as you type it. The heading is shown in each partner&apos;s language.</p>
+            {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+            <button
+              onClick={send}
+              disabled={isPending || !text.trim()}
+              className="mt-4 w-full h-10 rounded-xl bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#155116] disabled:opacity-40"
+            >
+              {isPending ? "Sending…" : "Send"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

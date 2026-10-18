@@ -10,7 +10,7 @@ export default async function DeliveryPartnersPage() {
   const { data: partners, error } = await supabaseAdmin
     .from("delivery_partners")
     .select(
-      "id, name, phone, alternate_phone, aadhaar_number, aadhaar_doc_url, pan_number, pan_doc_url, dl_number, dl_doc_url, vehicle_rc_number, vehicle_rc_doc_url, notes, status, created_at, user_id, is_test, last_seen_at"
+      "id, name, phone, alternate_phone, aadhaar_number, aadhaar_doc_url, pan_number, pan_doc_url, dl_number, dl_doc_url, vehicle_rc_number, vehicle_rc_doc_url, notes, status, created_at, user_id, is_test, last_seen_at, language, expo_push_token"
     )
     .order("created_at", { ascending: false })
 
@@ -20,7 +20,11 @@ export default async function DeliveryPartnersPage() {
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
-      <PartnersClient initialPartners={partners ?? []} loadError={error?.message ?? null} />
+      <PartnersClient
+        // The push token itself stays on the server — only whether there is one.
+        initialPartners={(partners ?? []).map(({ expo_push_token, ...p }) => ({ ...p, has_push: !!expo_push_token }))}
+        loadError={error?.message ?? null}
+      />
     </div>
   )
 }
