@@ -3,7 +3,8 @@
 import { useEffect, useState, useTransition } from "react";
 import { X, Loader2, DoorClosed, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { closeKitchen, reopenKitchen, previewKitchenClosure, type MealSlot } from "./actions";
+import { closeKitchen, reopenKitchen, previewKitchenClosure } from "./actions";
+import type { MealSlot } from "@/lib/delivery";
 
 export type KitchenClosure = { closed_on: string; meal_slot: MealSlot; reason: string | null };
 

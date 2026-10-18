@@ -13,9 +13,8 @@ import {
   recordCashReport,
   dismissCashReport,
   deliveryPhotoUrl,
-  type DeliveryStatus,
-  type MealSlot,
 } from "./actions";
+import type { DeliveryStatus, MealSlot } from "@/lib/delivery";
 import { setAddressBatch } from "@/app/(admin)/batches/actions";
 import { recordCashPayment } from "@/app/(admin)/subscribers/[id]/actions";
 import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";

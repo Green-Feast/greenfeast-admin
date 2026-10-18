@@ -216,6 +216,23 @@ export function ProfileClient({
     setTimeout(() => setToast(null), 4000)
   }
 
+  // In production Next replaces a server error's message with a generic one;
+  // the digest is what Vercel's logs print next to the real error.
+  function failure(e: unknown) {
+    const { message, digest } = (e ?? {}) as { message?: unknown; digest?: unknown }
+    const msg = String(message ?? "")
+    if (/was not found on the server/i.test(msg)) {
+      return "The admin was updated since this page opened — refresh the page (Ctrl+R) and save again."
+    }
+    if (/Server Components render/i.test(msg)) {
+      return `Server error${digest ? ` (code ${digest})` : ""} — the Vercel logs have the details.`
+    }
+    if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+      return "Couldn't reach the server — check the connection and try again."
+    }
+    return msg || "Something went wrong. Try again."
+  }
+
   // Old-style actions that throw on failure.
   function run(action: () => Promise<void>, successMsg: string, onSuccess?: () => void) {
     startTransition(async () => {
@@ -224,8 +241,8 @@ export function ProfileClient({
         router.refresh()
         showToast("success", successMsg)
         onSuccess?.()
-      } catch {
-        showToast("error", "Something went wrong. Try again.")
+      } catch (e) {
+        showToast("error", failure(e))
       }
     })
   }
@@ -239,17 +256,8 @@ export function ProfileClient({
         router.refresh()
         showToast("success", res.message ?? "Saved.")
         if (close) { setModal(null); setEditingAddress(null) }
-      } catch (e: any) {
-        // After a new admin deploy, a page opened earlier can't reach the
-        // new server actions — Next only says "error in the Server
-        // Components render". A reload fixes it.
-        const msg = String(e?.message ?? "")
-        showToast(
-          "error",
-          /Server Components render|Server Action|Failed to fetch/i.test(msg)
-            ? "The admin was updated since this page opened — refresh the page (Ctrl+R) and save again."
-            : msg || "Something went wrong. Try again."
-        )
+      } catch (e) {
+        showToast("error", failure(e))
       }
     })
   }

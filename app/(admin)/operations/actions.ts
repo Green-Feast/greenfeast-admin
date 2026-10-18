@@ -7,7 +7,10 @@ import { isTestMode, modeUserIds } from "@/lib/mode"
 import { advanceBatch, advanceOrder, deliverOrders, notifyStatus, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
 import { recordCash } from "@/lib/cash"
 
-export type { DeliveryStatus, MealSlot }
+// No `export type { … }` re-exports here: Next turns every name exported from a
+// "use server" file into a runtime reference, so a type-only name crashes this
+// module on load — and with it every action on each page that imports it.
+// Clients import DeliveryStatus / MealSlot from lib/delivery.
 
 /**
  * Advance every (non-terminal) order in a batch for a given date to `newStatus`.
