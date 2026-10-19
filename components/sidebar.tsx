@@ -19,6 +19,7 @@ import {
   IndianRupee,
   UtensilsCrossed,
   BellRing,
+  Star,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 import { setDataMode } from "@/app/(admin)/mode-actions";
@@ -26,6 +27,7 @@ import { setDataMode } from "@/app/(admin)/mode-actions";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/alerts", label: "Alerts", icon: BellRing },
+  { href: "/feedback", label: "Feedback", icon: Star },
   { href: "/users", label: "Users", icon: UserCog },
   { href: "/subscribers", label: "Subscribers", icon: Users },
   { href: "/operations", label: "Operations", icon: Truck },
@@ -37,7 +39,8 @@ const navItems = [
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
-export function Sidebar({ email, mode, alerts = 0 }: { email: string; mode: "live" | "test"; alerts?: number }) {
+export function Sidebar({ email, mode, alerts = 0, feedback = 0 }: { email: string; mode: "live" | "test"; alerts?: number; feedback?: number }) {
+  const badges: Record<string, number> = { "/alerts": alerts, "/feedback": feedback };
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [switching, startSwitch] = useTransition();
@@ -101,9 +104,9 @@ export function Sidebar({ email, mode, alerts = 0 }: { email: string; mode: "liv
             >
               <Icon className="w-4 h-4 flex-shrink-0" />
               {label}
-              {href === "/alerts" && alerts > 0 && (
+              {(badges[href] ?? 0) > 0 && (
                 <span className="ml-auto min-w-5 h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">
-                  {alerts > 99 ? "99+" : alerts}
+                  {badges[href] > 99 ? "99+" : badges[href]}
                 </span>
               )}
             </Link>
@@ -151,7 +154,7 @@ export function Sidebar({ email, mode, alerts = 0 }: { email: string; mode: "liv
           className="relative text-white p-1"
           aria-label="Toggle menu"
         >
-          {alerts > 0 && !mobileOpen && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-[#1B5E20]" />}
+          {alerts + feedback > 0 && !mobileOpen && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-[#1B5E20]" />}
           {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </div>

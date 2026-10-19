@@ -18,6 +18,8 @@ const KIND_TONE: Record<string, string> = {
   failed_drop: "bg-red-100 text-red-700",
   payment: "bg-green-100 text-green-700",
   refund_failed: "bg-red-100 text-red-700",
+  bad_rating: "bg-red-100 text-red-700",
+  app_feedback: "bg-blue-100 text-blue-700",
   test: "bg-gray-100 text-gray-600",
 }
 const KIND_LABEL: Record<string, string> = {
@@ -28,6 +30,8 @@ const KIND_LABEL: Record<string, string> = {
   failed_drop: "Delivery",
   payment: "Payment",
   refund_failed: "Refund",
+  bad_rating: "Rating",
+  app_feedback: "Feedback",
   test: "Test",
 }
 

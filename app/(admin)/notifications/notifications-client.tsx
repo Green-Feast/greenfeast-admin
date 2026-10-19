@@ -80,6 +80,7 @@ const SAMPLE: Record<string, string> = {
   cash_due: "₹0",
   meals: "30",
   wallet_note: " and ₹7,499 is in your wallet",
+  dish: "Paneer Tikka Bowl",
 };
 
 function render(text: string) {
