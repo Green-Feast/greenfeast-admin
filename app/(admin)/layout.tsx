@@ -1,6 +1,16 @@
 import { Sidebar } from "@/components/sidebar";
 import { requireAdmin } from "@/lib/auth";
 import { getDataMode } from "@/lib/mode";
+import { supabaseAdmin } from "@/lib/supabase-admin";
+
+// Alerts the admin hasn't seen (sidebar badge) — since they last opened
+// Alerts, or the last 7 days.
+async function unseenAlerts(adminId: string) {
+  const { data: me } = await supabaseAdmin.from("admin_users").select("alerts_read_at").eq("user_id", adminId).maybeSingle();
+  const since = me?.alerts_read_at ?? new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const { count } = await supabaseAdmin.from("admin_alerts").select("*", { count: "exact", head: true }).gt("created_at", since);
+  return count ?? 0;
+}
 
 export default async function AdminLayout({
   children,
@@ -8,11 +18,11 @@ export default async function AdminLayout({
   children: React.ReactNode;
 }) {
   const user = await requireAdmin();
-  const mode = await getDataMode();
+  const [mode, alerts] = await Promise.all([getDataMode(), unseenAlerts(user.id)]);
 
   return (
     <div className="min-h-screen bg-[#F9FBF7]">
-      <Sidebar email={user.email ?? ""} mode={mode} />
+      <Sidebar email={user.email ?? ""} mode={mode} alerts={alerts} />
       <main className="md:pl-60">
         <div className="pt-14 md:pt-0 min-h-screen">
           {mode === "test" && (

@@ -10,6 +10,11 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "GreenFeast Admin",
   description: "Admin dashboard for GreenFeast meal subscription service",
+  // Installable (Add to Home Screen) — on iPhone that's what lets alerts
+  // arrive as notifications (Alerts page).
+  manifest: "/admin.webmanifest",
+  appleWebApp: { capable: true, title: "GF Admin", statusBarStyle: "default" },
+  icons: { apple: "/admin-apple-icon.png" },
 };
 
 export default function RootLayout({

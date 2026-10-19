@@ -56,5 +56,6 @@ export async function proxy(request: NextRequest) {
 export const config = {
   // /api/cron/* authenticates itself via CRON_SECRET (Vercel Cron has no
   // session cookie to check here — see app/api/cron/renewal-reminders/route.ts).
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // The alerts service worker and the web app manifest need no session either.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/cron|admin-sw\\.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp|webmanifest)$).*)"],
 };
