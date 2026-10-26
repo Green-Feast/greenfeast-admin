@@ -62,6 +62,8 @@ type Subscription = {
   deliveryDays: string[]
   codDue: number
   onCredit: boolean
+  couponMealPrice: number | null
+  couponCode: string | null
   // Delivery partner app: cash a partner says they collected.
   cashReports: { id: string; amount: number; note: string | null; reportedAt: string; partner: string }[]
 }
@@ -270,11 +272,14 @@ export function ProfileClient({
     : 0
 
   const slotsPerDay = (subscription.mealsLunch ?? 0) + (subscription.mealsDinner ?? 0)
-  const baseMealRate = subscription.mealsTotal > 0
+  const regularMealRate = subscription.mealsTotal > 0
     ? Math.round(subscription.basePrice / Math.max(subscription.mealsTotal, 1))
     : 0
+  // A plan bought with a coupon is billed at its coupon price (migration 066).
+  const baseMealRate = subscription.couponMealPrice ?? regularMealRate
   const addonTotalPerSlot = addons.reduce((s, a) => s + a.price_per_meal, 0)
-  const planPrice = subscription.basePrice + addonTotalPerSlot * subscription.mealsTotal
+  const planPrice = (subscription.couponMealPrice ? subscription.couponMealPrice * subscription.mealsTotal : subscription.basePrice)
+    + addonTotalPerSlot * subscription.mealsTotal
   const perDayCost = (baseMealRate + addonTotalPerSlot) * Math.max(slotsPerDay, 1)
 
   // Weekly rotation, indexed by weekly_menu's Mon=0..Sun=6 convention so it
@@ -460,6 +465,12 @@ export function ProfileClient({
                     {subscription.mealsTotal} meals · {fmtRupees(planPrice)}
                     {subscription.paymentMethod === "cod" && " · cash on delivery"}
                   </p>
+                  {subscription.couponMealPrice != null && (
+                    <p className="text-xs text-[#1B5E20] mt-0.5">
+                      Coupon {subscription.couponCode ?? ""} · {fmtRupees(subscription.couponMealPrice)}/meal
+                      <span className="text-gray-400"> (regular {fmtRupees(regularMealRate)})</span>
+                    </p>
+                  )}
                   {isPendingPlan && (
                     <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-1 mt-2 inline-flex items-center gap-1.5">
                       Not paid yet — no meals are scheduled. Use &quot;Activate plan&quot; once they&apos;ve paid or agreed cash on delivery.

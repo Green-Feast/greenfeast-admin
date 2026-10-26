@@ -24,6 +24,7 @@ export default async function SubscriberProfilePage({
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, meals_lunch, meals_dinner,
       special_notes, meals_per_day, delivery_mode, created_at, cod_due_paise, cod_on_credit,
+      meal_price_paise, coupons ( code ),
       users ( id, name, phone, created_at, customer_code, is_test )
     `)
     .eq("id", id)
@@ -161,6 +162,9 @@ export default async function SubscriberProfilePage({
           deliveryDays: (schedule ?? []).map((r: any) => r.day_of_week as string),
           codDue: (sub as any).cod_due_paise ?? 0,
           onCredit: !!(sub as any).cod_on_credit,
+          // Bought with a coupon (migration 066): its meal price and code.
+          couponMealPrice: (sub as any).meal_price_paise ?? null,
+          couponCode: ((Array.isArray((sub as any).coupons) ? (sub as any).coupons[0] : (sub as any).coupons)?.code ?? null) as string | null,
           cashReports: ((cashReportRows ?? []) as any[]).map((r) => ({
             id: r.id as string,
             amount: r.amount_paise as number,

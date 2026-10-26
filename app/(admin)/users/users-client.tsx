@@ -37,6 +37,7 @@ export type UserRow = {
 }
 
 export type AddonOption = { id: string; name: string; price_per_meal: number }
+export type CouponOption = { id: string; code: string; name: string | null; prices: Record<string, number> }
 
 export type Plan = {
   id: string
@@ -98,12 +99,13 @@ function matchesFilter(u: UserRow, filter: string) {
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export function UsersClient({
-  initialUsers, plans, addons, loadError, isTestMode,
+  initialUsers, plans, addons, coupons, loadError, isTestMode,
 }: {
   isTestMode: boolean
   initialUsers: UserRow[]
   plans: Plan[]
   addons: AddonOption[]
+  coupons: CouponOption[]
   loadError: boolean
 }) {
   const router = useRouter()
@@ -372,6 +374,7 @@ export function UsersClient({
           user={selected}
           plans={plans}
           addons={addons}
+          coupons={coupons}
           isPending={isPending}
           onClose={() => setCreateOpen(false)}
           onSubmit={(input) => run(() => createSubscription(input), "Subscription created.", { closePanel: true })}
@@ -698,11 +701,12 @@ function AddCustomerModal({
 // ─── Create subscription modal ─────────────────────────────────────────────────
 
 function CreateSubModal({
-  user, plans, addons, isPending, onClose, onSubmit,
+  user, plans, addons, coupons, isPending, onClose, onSubmit,
 }: {
   user: UserRow
   plans: Plan[]
   addons: AddonOption[]
+  coupons: CouponOption[]
   isPending: boolean
   onClose: () => void
   onSubmit: (input: CreateSubInput) => void
@@ -723,10 +727,16 @@ function CreateSubModal({
   const [mealsLeft, setMealsLeft] = useState(plans[0]?.meals_total ?? 1)
   const [addonIds, setAddonIds] = useState<string[]>([])
   const [credit, setCredit] = useState("") // ₹, empty = suggested
-  // Billing is per delivered meal: plan price ÷ meals, plus add-ons per meal.
+  // A coupon (admin → Coupons) sets the plan's meal price; only coupons with
+  // a price for this plan are offered.
+  const [couponId, setCouponId] = useState("")
+  const planCoupons = coupons.filter((c) => c.prices[planId])
+  const coupon = planCoupons.find((c) => c.id === couponId) ?? null
+  const regularMeal = plan ? Math.round(plan.base_price / Math.max(plan.meals_total, 1)) : 0
+  const mealPrice = coupon ? coupon.prices[planId] : regularMeal
+  // Billing is per delivered meal: the plan's meal price, plus add-ons per meal.
   const perMeal = plan
-    ? Math.round(plan.base_price / Math.max(plan.meals_total, 1))
-      + addonIds.reduce((s, id) => s + (addons.find((a) => a.id === id)?.price_per_meal ?? 0), 0)
+    ? mealPrice + addonIds.reduce((s, id) => s + (addons.find((a) => a.id === id)?.price_per_meal ?? 0), 0)
     : 0
   const suggestedCredit = perMeal * mealsLeft
   const creditPaise = credit.trim() ? Math.round((parseFloat(credit) || 0) * 100) : suggestedCredit
@@ -769,6 +779,7 @@ function CreateSubModal({
       walletCredit: activation === "active" ? creditPaise : upfrontPaise,
       cashDue: activation === "cod" ? cashDuePaise : undefined,
       addonIds,
+      couponId: coupon?.id,
     })
   }
 
@@ -797,6 +808,7 @@ function CreateSubModal({
             onChange={(e) => {
               setPlanId(e.target.value)
               setMealsLeft(plans.find((p) => p.id === e.target.value)?.meals_total ?? 1)
+              if (couponId && !coupons.find((c) => c.id === couponId)?.prices[e.target.value]) setCouponId("")
             }}
             className={inputCls}
           >
@@ -873,6 +885,24 @@ function CreateSubModal({
                 )
               })}
             </div>
+          </Field>
+        )}
+
+        {planCoupons.length > 0 && (
+          <Field label="Coupon (optional)">
+            <select value={couponId} onChange={(e) => setCouponId(e.target.value)} className={inputCls}>
+              <option value="">No coupon — {fmtRupees(regularMeal)} per meal</option>
+              {planCoupons.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} — {fmtRupees(c.prices[planId])} per meal{c.name ? ` · ${c.name}` : ""}
+                </option>
+              ))}
+            </select>
+            {coupon && (
+              <p className="mt-1 text-xs text-[#1B5E20]">
+                {fmtRupees(mealPrice)} per meal instead of {fmtRupees(regularMeal)} — saves {fmtRupees((regularMeal - mealPrice) * mealsLeft)} on {mealsLeft} meals.
+              </p>
+            )}
           </Field>
         )}
 

@@ -2,6 +2,7 @@ import "server-only";
 import { supabaseAdmin } from "./supabase-admin";
 import { istToday, isSlotLocked } from "./ist";
 import { instantiateOrders } from "./instantiate";
+import { planMealRate } from "./pricing";
 
 // When the admin edits a plan (subscriber profile → Plan), the upcoming meals
 // already scheduled follow the new settings — in place, so anything the
@@ -34,7 +35,34 @@ function weekday(date: string) {
 
 async function rateOf(planId: string) {
   const { data } = await supabaseAdmin.from("plans").select("base_price, meals_total").eq("id", planId).maybeSingle();
-  return data ? Math.round(data.base_price / Math.max(data.meals_total, 1)) : 0;
+  return planMealRate(data);
+}
+
+// What one meal costs before and after the change. A plan bought with a
+// coupon (migration 066) keeps the coupon's price for the new plan when the
+// coupon has one; otherwise it goes back to the regular price and the coupon
+// comes off the plan.
+async function mealRates(subscriptionId: string, before: PlanShape, after: PlanShape): Promise<[number, number]> {
+  const [{ data: sub }, oldPlanRate, newPlanRate] = await Promise.all([
+    supabaseAdmin.from("subscriptions").select("meal_price_paise, coupon_id").eq("id", subscriptionId).maybeSingle(),
+    rateOf(before.planId),
+    rateOf(after.planId),
+  ]);
+  const oldRate = sub?.meal_price_paise || oldPlanRate;
+  if (before.planId === after.planId) return [oldRate, oldRate];
+  let couponPrice: number | null = null;
+  if (sub?.coupon_id) {
+    const { data: cp } = await supabaseAdmin
+      .from("coupon_plans").select("meal_price_paise").eq("coupon_id", sub.coupon_id).eq("plan_id", after.planId).maybeSingle();
+    couponPrice = cp?.meal_price_paise ?? null;
+  }
+  if (sub?.meal_price_paise || sub?.coupon_id) {
+    await supabaseAdmin
+      .from("subscriptions")
+      .update({ meal_price_paise: couponPrice, coupon_id: couponPrice ? sub.coupon_id : null })
+      .eq("id", subscriptionId);
+  }
+  return [oldRate, couponPrice ?? newPlanRate];
 }
 
 export async function syncUpcomingOrders(subscriptionId: string, before: PlanShape, after: PlanShape) {
@@ -81,7 +109,7 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   }
 
   // 3. Per-meal rate (plan change) and plan add-ons.
-  const [oldRate, newRate] = await Promise.all([rateOf(before.planId), rateOf(after.planId)]);
+  const [oldRate, newRate] = await mealRates(subscriptionId, before, after);
   const addedAddons = after.addonIds.filter((id) => !before.addonIds.includes(id));
   const droppedAddons = before.addonIds.filter((id) => !after.addonIds.includes(id));
   const prices = new Map<string, number>();

@@ -40,7 +40,7 @@ export default async function MoneyPage() {
   ] = await Promise.all([
     supabaseAdmin
       .from("payments")
-      .select("id, user_id, subscription_id, amount, status, cf_order_id, cf_payment_id, created_at, users!inner ( name, phone, customer_code, is_test )")
+      .select("id, user_id, subscription_id, amount, status, cf_order_id, cf_payment_id, created_at, discount_paise, coupons ( code ), users!inner ( name, phone, customer_code, is_test )")
       .eq("users.is_test", isTest)
       .order("created_at", { ascending: false })
       .limit(300),
@@ -85,6 +85,9 @@ export default async function MoneyPage() {
       cfOrderId: p.cf_order_id ?? null,
       cfPaymentId: p.cf_payment_id ?? null,
       createdAt: p.created_at,
+      // Bought with a coupon (migration 066).
+      couponCode: (Array.isArray(p.coupons) ? p.coupons[0] : p.coupons)?.code ?? null,
+      discount: p.discount_paise ?? 0,
     };
   });
 

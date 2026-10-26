@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
-import { UsersClient, type UserRow, type Plan, type AddonOption } from "./users-client"
+import { UsersClient, type UserRow, type Plan, type AddonOption, type CouponOption } from "./users-client"
+import { istToday } from "@/lib/ist"
 import { isTestMode } from "@/lib/mode"
 
 export const dynamic = "force-dynamic"
@@ -21,7 +22,8 @@ export default async function UsersPage() {
 
   // Auth accounts (the superset — everyone who has ever signed in) and the
   // app-side profile, subscription, plan and add-on data, all in parallel.
-  const [{ data: authData, error: authErr }, { data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }] = await Promise.all([
+  const today = istToday()
+  const [{ data: authData, error: authErr }, { data: publicUsers }, { data: subs }, { data: plans }, { data: addonRows }, { data: couponRows }] = await Promise.all([
     supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
     supabaseAdmin.from("users").select("id, name, phone, onboarded, created_at, customer_code, is_test"),
     supabaseAdmin
@@ -34,6 +36,14 @@ export default async function UsersPage() {
       .eq("is_active", true)
       .order("base_price"),
     supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
+    // Coupons that work today, for Create subscription (migration 066).
+    supabaseAdmin
+      .from("coupons")
+      .select("id, code, name, coupon_plans ( plan_id, meal_price_paise )")
+      .eq("active", true)
+      .lte("starts_on", today)
+      .gte("ends_on", today)
+      .order("code"),
   ])
 
   const publicById = new Map<string, PublicUser>()
@@ -86,6 +96,12 @@ export default async function UsersPage() {
       isTestMode={isTest}
       plans={planList}
       addons={(addonRows ?? []) as AddonOption[]}
+      coupons={((couponRows ?? []) as { id: string; code: string; name: string | null; coupon_plans: { plan_id: string; meal_price_paise: number }[] }[]).map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        prices: Object.fromEntries((c.coupon_plans ?? []).map((p) => [p.plan_id, p.meal_price_paise])),
+      }))}
       loadError={!!authErr}
     />
   )

@@ -46,7 +46,7 @@ export async function createSubscription(
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, deliveryMode, activation, address,
-    mealsLeft, walletCredit, addonIds, startDate, cashDue,
+    mealsLeft, walletCredit, addonIds, startDate, cashDue, couponId,
   } = input
 
   if (!planId) return { ok: false, error: "Pick a plan." }
@@ -87,6 +87,20 @@ export async function createSubscription(
     .single()
   if (planErr || !plan) return { ok: false, error: "Plan not found." }
 
+  // 2b. A coupon (admin → Coupons): its price for this plan becomes the plan's
+  //     meal price. The admin may use any working coupon, whoever it's for.
+  let coupon: { id: string; mealPrice: number; regular: number } | null = null
+  if (couponId) {
+    const { data: c } = await supabaseAdmin.from("coupons").select("code").eq("id", couponId).maybeSingle()
+    if (!c) return { ok: false, error: "That coupon no longer exists." }
+    const { data: quote, error: quoteErr } = await supabaseAdmin.rpc("coupon_quote", {
+      p_user: userId, p_code: c.code, p_plan: plan.id, p_addon_per_meal: 0, p_kind: "admin", p_exclude_sub: null,
+    })
+    if (quoteErr) return { ok: false, error: quoteErr.message }
+    if (!quote?.ok) return { ok: false, error: `Coupon ${c.code}: ${quote?.error ?? "not valid"}` }
+    coupon = { id: couponId, mealPrice: quote.meal_price_paise, regular: quote.regular_meal_price_paise }
+  }
+
   // 3. Optional default address (needed for orders to carry a delivery address).
   if (address?.line1?.trim()) {
     const { error: addrErr } = await supabaseAdmin.from("addresses").insert({
@@ -122,6 +136,8 @@ export async function createSubscription(
       // Orders start from here (instantiate-orders) — lets the app take over
       // from a chosen day without doubling up with the old process.
       start_date: startDate || null,
+      meal_price_paise: coupon?.mealPrice ?? null,
+      coupon_id: coupon?.id ?? null,
     })
     .select("id")
     .single()
@@ -169,14 +185,20 @@ export async function createSubscription(
   //    delivery and the 8 AM / 1 PM check skips meals it can't cover, so
   //    without this credit every meal of a customer moved over from the
   //    spreadsheet would be skipped (cash-on-delivery plans run on credit).
+  const saved = coupon ? (coupon.regular - coupon.mealPrice) * (mealsLeft as number) : 0
+  let paymentId: string | null = null
   if ((walletCredit as number) > 0) {
-    const { error: payErr } = await supabaseAdmin.from("payments").insert({
+    const { data: payment, error: payErr } = await supabaseAdmin.from("payments").insert({
       user_id: userId,
       subscription_id: sub.id,
       amount: walletCredit,
       status: "paid",
-    })
+      coupon_id: coupon?.id ?? null,
+      meal_price_paise: coupon?.mealPrice ?? null,
+      discount_paise: coupon ? saved : null,
+    }).select("id").single()
     if (payErr) console.error("createSubscription: payment record failed:", payErr.message)
+    paymentId = (payment?.id as string | undefined) ?? null
 
     const { error: creditErr } = await supabaseAdmin.rpc("wallet_credit", {
       p_user: userId,
@@ -185,6 +207,22 @@ export async function createSubscription(
       p_reference_id: sub.id,
     })
     if (creditErr) return { ok: false, error: `Plan created, but the wallet credit failed: ${creditErr.message}` }
+  }
+
+  if (coupon) {
+    const { error: redErr } = await supabaseAdmin.from("coupon_redemptions").insert({
+      coupon_id: coupon.id,
+      user_id: userId,
+      subscription_id: sub.id,
+      payment_id: paymentId,
+      plan_id: plan.id,
+      kind: "admin",
+      meal_price_paise: coupon.mealPrice,
+      regular_meal_price_paise: coupon.regular,
+      meals: mealsLeft as number,
+      discount_paise: saved,
+    })
+    if (redErr) console.error("createSubscription: coupon use not recorded:", redErr.message)
   }
 
   // 8. Generate the next 14 days of orders.

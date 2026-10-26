@@ -23,6 +23,8 @@ export type CreateSubInput = {
   walletCredit?: number // paise
   cashDue?: number // paise, cash on delivery only
   addonIds?: string[]
+  // A coupon (migration 066): sets the plan's meal price; recorded as used.
+  couponId?: string
   address?: {
     label: string
     type: string

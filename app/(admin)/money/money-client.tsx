@@ -22,6 +22,8 @@ export type PaymentRow = {
   cfOrderId: string | null;
   cfPaymentId: string | null;
   createdAt: string;
+  couponCode: string | null;
+  discount: number; // paise saved with the coupon
 };
 
 export type TxRow = {
@@ -456,7 +458,12 @@ export function MoneyClient({
                       <p className="text-xs text-gray-400"><span className="font-mono">{p.code}</span> · {p.phone}</p>
                     </td>
                     <td className="px-5 py-3 whitespace-nowrap text-gray-600 capitalize">{p.kind}</td>
-                    <td className="px-5 py-3 font-semibold text-[#1A1A1A] whitespace-nowrap">{rupees(p.amount)}</td>
+                    <td className="px-5 py-3 font-semibold text-[#1A1A1A] whitespace-nowrap">
+                      {rupees(p.amount)}
+                      {p.couponCode && (
+                        <span className="block text-[11px] font-normal text-[#1B5E20]">{p.couponCode} · −{rupees(p.discount)}</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3">
                       <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium capitalize", PAY_STATUS_STYLES[p.status] ?? "bg-gray-100 text-gray-600")}>
                         {p.status}

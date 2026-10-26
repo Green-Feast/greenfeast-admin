@@ -13,6 +13,7 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { mealRate } from "@/lib/pricing"
 import { requireAdmin } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
 
@@ -92,11 +93,11 @@ function refresh(subscriptionId?: string) {
 async function baseRateFor(subscriptionId: string) {
   const { data } = await supabaseAdmin
     .from("subscriptions")
-    .select("plans ( base_price, meals_total )")
+    .select("meal_price_paise, plans ( base_price, meals_total )")
     .eq("id", subscriptionId)
     .maybeSingle()
   const plan = one((data as any)?.plans) as { base_price: number; meals_total: number } | null
-  return plan ? Math.round(plan.base_price / Math.max(plan.meals_total, 1)) : 0
+  return mealRate(data as any, plan)
 }
 
 type OrderRow = {
@@ -136,7 +137,7 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
   await requireAdmin()
   const { data: sub } = await supabaseAdmin
     .from("subscriptions")
-    .select("id, user_id, cod_on_credit, status, users ( name ), plans ( base_price, meals_total )")
+    .select("id, user_id, cod_on_credit, status, meal_price_paise, users ( name ), plans ( base_price, meals_total )")
     .eq("id", subscriptionId)
     .single()
   if (!sub) throw new Error("Subscription not found.")
@@ -221,7 +222,7 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
     })),
     walletBalance: wallet?.balance ?? 0,
     onCredit: !!(sub as any).cod_on_credit,
-    baseRate: plan ? Math.round(plan.base_price / Math.max(plan.meals_total, 1)) : 0,
+    baseRate: mealRate(sub as any, plan),
     planAddonIds,
     rules: ((rules ?? []) as any[]).map((r) => ({
       id: r.id,

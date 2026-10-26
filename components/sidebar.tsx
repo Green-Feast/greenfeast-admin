@@ -20,6 +20,7 @@ import {
   UtensilsCrossed,
   BellRing,
   Star,
+  TicketPercent,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 import { setDataMode } from "@/app/(admin)/mode-actions";
@@ -36,6 +37,7 @@ const navItems = [
   { href: "/batches", label: "Batches", icon: Package },
   { href: "/delivery-partners", label: "Partners", icon: Bike },
   { href: "/money", label: "Money", icon: IndianRupee },
+  { href: "/coupons", label: "Coupons", icon: TicketPercent },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
