@@ -32,7 +32,7 @@ export default async function UsersPage() {
       .order("created_at", { ascending: false }),
     supabaseAdmin
       .from("plans")
-      .select("id, name, meals_total, days_per_week, base_price")
+      .select("id, name, meals_total, days_per_week, base_price, allow_cod")
       .eq("is_active", true)
       .order("base_price"),
     supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),

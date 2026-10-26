@@ -177,7 +177,11 @@ export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Plan">
               <select value={v.planId} onChange={(e) => set("planId", e.target.value)} className={inputCls}>
-                {plans.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.meals_total} meals</option>)}
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} · {p.meals_total} meals · ₹{(Math.round(p.base_price / Math.max(p.meals_total, 1)) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}/meal
+                  </option>
+                ))}
               </select>
             </Field>
             <Field label="Meals left" hint="What the plan still owes them.">

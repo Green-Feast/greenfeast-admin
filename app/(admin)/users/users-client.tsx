@@ -45,6 +45,7 @@ export type Plan = {
   meals_total: number
   days_per_week: number
   base_price: number
+  allow_cod?: boolean // false = the app doesn't offer cash on delivery (067)
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -814,7 +815,7 @@ function CreateSubModal({
           >
             {plans.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} · {fmtRupees(p.base_price)} · {p.meals_total} meals
+                {p.name} · {fmtRupees(p.base_price)} · {p.meals_total} meals · {fmtRupees(Math.round(p.base_price / Math.max(p.meals_total, 1)))}/meal
               </option>
             ))}
           </select>
@@ -913,6 +914,12 @@ function CreateSubModal({
           </div>
         </Field>
 
+        {activation === "cod" && plan?.allow_cod === false && (
+          <p className="-mb-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+            The app doesn&apos;t offer cash on delivery for the {plan.name} — make sure the rider can collect{" "}
+            {fmtRupees(Math.max(suggestedCredit - upfrontPaise, 0))} in cash.
+          </p>
+        )}
         {activation === "cod" && (
           <div className="grid grid-cols-3 gap-3 p-3 rounded-lg bg-[#F9FBF7] border border-[#e2e8d5]">
             <Field label="Meals">
