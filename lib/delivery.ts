@@ -1,6 +1,7 @@
 import "server-only";
 import { supabaseAdmin } from "./supabase-admin";
 import { notifyEvent, logBroadcast } from "./notifications";
+import { istToday } from "./ist";
 
 // The admin's delivery path (Operations batch and per-customer buttons). The
 // GreenFeast Partner app does the same through the database's partner_*
@@ -64,13 +65,17 @@ export async function advanceBatch(opts: {
   return moved;
 }
 
-/** One order to "preparing" or "out for delivery" (admin's per-customer buttons). */
+/**
+ * One order to "preparing" or "out for delivery" (admin's per-customer
+ * buttons). Not on an earlier day — it's only delivered or skipped then (068).
+ */
 export async function advanceOrder(orderId: string, status: "preparing" | "out_for_delivery", slot: MealSlot): Promise<boolean> {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .update({ status })
     .eq("id", orderId)
     .in("status", PRIOR[status])
+    .gte("delivery_date", istToday())
     .select("id");
   if (error) throw error;
   const moved = (data ?? []).length > 0;
@@ -86,6 +91,10 @@ export async function advanceOrder(orderId: string, status: "preparing" | "out_f
  * customer — migration 036/052), idempotently. The partner who handed them
  * over and the optional photo are stored; billed customers get one
  * "Delivered" message each.
+ *
+ * An earlier day settled late (068): billed the same, but the delivery time
+ * is left empty (it isn't known — the trigger would stamp "now") and no
+ * "Today's lunch has been delivered" message goes out days later.
  */
 export async function deliverOrders(
   orderIds: string[],
@@ -107,9 +116,59 @@ export async function deliverOrders(
     await supabaseAdmin.from("orders").update(patch).in("id", billed);
   }
   if (billed.length > 0) {
-    await notifyStatus(billed, "delivered", slot, opts.rider ?? null, `Orders ${billed.join(", ")}`);
+    const { past, current } = await splitPastDays(billed);
+    if (past.length > 0) await clearDeliveryTime(past);
+    if (current.length > 0) await notifyStatus(current, "delivered", slot, opts.rider ?? null, `Orders ${current.join(", ")}`);
   }
   return results;
+}
+
+// Orders for an earlier day vs today (or later).
+export async function splitPastDays(orderIds: string[]): Promise<{ past: string[]; current: string[] }> {
+  if (orderIds.length === 0) return { past: [], current: [] };
+  const today = istToday();
+  const { data } = await supabaseAdmin.from("orders").select("id, delivery_date").in("id", orderIds);
+  const past = ((data ?? []) as { id: string; delivery_date: string }[]).filter((o) => o.delivery_date < today).map((o) => o.id);
+  return { past, current: orderIds.filter((id) => !past.includes(id)) };
+}
+
+export async function clearDeliveryTime(orderIds: string[]) {
+  if (orderIds.length === 0) return;
+  await supabaseAdmin.from("orders").update({ delivered_at: null }).in("id", orderIds).eq("status", "delivered");
+}
+
+/**
+ * Meals that didn't go out: skipped, nothing charged, the meal stays on the
+ * plan. An earlier day reads "couldn't be delivered" in the customer's
+ * history (not_delivered); today or later "skipped by GreenFeast" (admin).
+ * Only meals not yet delivered / skipped / cancelled.
+ */
+export async function skipUndelivered(orderIds: string[]): Promise<number> {
+  if (orderIds.length === 0) return 0;
+  const { past, current } = await splitPastDays(orderIds);
+  let n = 0;
+  for (const [ids, reason] of [[past, "not_delivered"], [current, "admin"]] as [string[], string][]) {
+    if (ids.length === 0) continue;
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .update({ status: "skipped", skip_reason: reason, updated_at: new Date().toISOString() })
+      .in("id", ids)
+      .not("status", "in", "(delivered,cancelled,skipped)")
+      .select("id");
+    if (error) throw error;
+    n += (data ?? []).length;
+  }
+  return n;
+}
+
+/**
+ * A meal marked delivered that wasn't (068, undo_order_delivered): refunds
+ * exactly what it was charged, puts it back on the plan, tells the customer.
+ */
+export async function undoDelivered(orderId: string): Promise<{ refunded: number; mealsBack: number }> {
+  const { data, error } = await supabaseAdmin.rpc("undo_order_delivered", { p_order: orderId });
+  if (error) throw new Error(error.message);
+  return { refunded: data?.refunded ?? 0, mealsBack: data?.meals_back ?? 0 };
 }
 
 /**

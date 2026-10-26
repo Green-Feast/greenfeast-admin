@@ -4,9 +4,11 @@
 // profile → Upcoming meals): one customer, one day, one slot — dish,
 // portions, add-ons, address, skip / bring back, extra dishes, and the
 // "same dish every day" rule. Server side: app/(admin)/kitchen/order-actions.ts.
+// Any day up to today also gets Delivery: mark delivered, skip with no
+// charge, or undo a wrong "delivered" (068) — for days ops forgot to mark.
 
 import { useEffect, useMemo, useState, useTransition } from "react"
-import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin } from "lucide-react"
+import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { istToday } from "@/lib/ist"
 import {
@@ -19,6 +21,9 @@ import {
   adminUnskipSlot,
   adminAddExtraDish,
   adminRemoveExtraDish,
+  adminDeliverSlot,
+  adminSkipUndelivered,
+  adminUndoDelivered,
   setFixedDish,
   clearFixedDish,
   type SlotContext,
@@ -36,6 +41,7 @@ const SKIP_REASON: Record<string, string> = {
   admin: "skipped by GreenFeast",
   insufficient_balance: "skipped — wallet was short",
   plan_finished: "skipped — plan had finished",
+  not_delivered: "couldn't be delivered",
 }
 
 function rupees(paise: number) {
@@ -132,6 +138,12 @@ export function OrderEditor({
   const dayRule = ctx?.rules.find((r) => r.dayOfWeek === weekday) ?? null
   const everyRule = ctx?.rules.find((r) => r.dayOfWeek === null) ?? null
   const slotLabel = target.slot === "lunch" ? "Lunch" : "Dinner"
+  // Delivery (068): any day up to today.
+  const today = istToday()
+  const deliveryDay = target.date <= today
+  const pastDay = target.date < today
+  const undelivered = ctx?.orders.filter((o) => ["scheduled", "confirmed", "preparing", "out_for_delivery"].includes(o.status)) ?? []
+  const undeliveredCost = undelivered.reduce((s, o) => s + (o.cartTotal ?? 0), 0)
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -180,11 +192,61 @@ export function OrderEditor({
                 <p className={cn("text-sm px-3 py-2 rounded-lg", message.ok ? "bg-green-50 text-[#1B5E20]" : "bg-red-50 text-red-700")}>{message.text}</p>
               )}
 
-              {/* Delivered / on its way: read-only */}
+              {/* Delivery — today or an earlier day ops forgot to mark */}
+              {deliveryDay && undelivered.length > 0 && (
+                <div className={cn("rounded-xl border p-3 space-y-2", pastDay ? "border-amber-300 bg-amber-50/60" : "border-[#1B5E20]/30 bg-green-50/40")}>
+                  <p className={cn("text-xs font-semibold uppercase tracking-wide", pastDay ? "text-amber-800" : "text-[#1B5E20]")}>
+                    {pastDay ? "Not marked yet" : "Delivery"}
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    {pastDay
+                      ? `This ${target.slot} was never marked. If it went out, mark it delivered — the wallet is charged ${rupees(undeliveredCost)} now (no message is sent for an earlier day). If it didn't, skip it — nothing is charged.`
+                      : `Marking it delivered charges the wallet ${rupees(undeliveredCost)} and tells the customer.`}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      disabled={pending}
+                      onClick={() => {
+                        if (!window.confirm(`Mark ${ctx.customerName}'s ${target.slot} on ${dayLabel(target.date)} delivered? ${rupees(undeliveredCost)} is charged to their wallet.`)) return
+                        run(() => adminDeliverSlot(target.subscriptionId, target.date, target.slot))
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1B5E20] text-white text-xs font-medium disabled:opacity-40"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Mark delivered
+                    </button>
+                    <button
+                      disabled={pending}
+                      onClick={() => {
+                        if (!window.confirm(`Skip ${ctx.customerName}'s ${target.slot} on ${dayLabel(target.date)}? Nothing is charged and the meal stays on their plan.`)) return
+                        run(() => adminSkipUndelivered(target.subscriptionId, target.date, target.slot))
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#e2e8d5] bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      <Ban className="w-3.5 h-3.5" /> {pastDay ? "Didn't go — skip, no charge" : "Skip, no charge"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* In the kitchen / on its way / delivered */}
               {settled.map((o) => (
                 <div key={o.id} className="rounded-xl border border-[#e2e8d5] bg-gray-50 p-3 text-sm">
                   <p className="font-medium text-[#1A1A1A]">{o.mealName} {o.quantity > 1 && <span className="text-gray-500">×{o.quantity}</span>}</p>
-                  <p className="text-xs text-gray-500 capitalize mt-0.5">{o.status.replace(/_/g, " ")} — can&apos;t be changed now</p>
+                  <p className="text-xs text-gray-500 capitalize mt-0.5">
+                    {o.status.replace(/_/g, " ")}{o.status === "delivered" ? "" : " — dish and portions can't be changed now"}
+                  </p>
+                  {o.status === "delivered" && (
+                    <button
+                      disabled={pending}
+                      onClick={() => {
+                        if (!window.confirm(`Undo — ${ctx.customerName}'s ${o.mealName} on ${dayLabel(target.date)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return
+                        run(() => adminUndoDelivered(o.id))
+                      }}
+                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
+                    >
+                      <Undo2 className="w-3 h-3" /> Undo — it wasn&apos;t delivered
+                    </button>
+                  )}
                 </div>
               ))}
 

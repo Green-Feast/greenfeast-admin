@@ -586,7 +586,7 @@ export function KitchenClient({
               </tbody>
             </table>
             <p className="mt-3 px-3 pb-3 text-[11px] text-gray-400">
-              ✦ changed from the menu · + extra dish · struck through = skipped · ✓ delivered · <Pin className="inline w-3 h-3" /> fixed dish
+              ✦ changed from the menu · + extra dish · struck through = skipped · ✓ delivered · <span className="text-amber-700">amber = an earlier day not marked — open it to mark delivered or skip</span> · <Pin className="inline w-3 h-3" /> fixed dish
             </p>
           </div>
         )}
@@ -631,12 +631,21 @@ function SlotCell({
       </button>
     )
   }
+  // An earlier day still not delivered / skipped: ops forgot to mark it (068).
+  const unmarked = past && items.some((it) => ["scheduled", "confirmed", "preparing", "out_for_delivery"].includes(it.status))
   return (
     <button
       onClick={onOpen}
-      className="w-full mb-1 text-left px-1.5 py-1 rounded hover:bg-green-50 hover:ring-1 hover:ring-[#1B5E20]/20 transition"
+      title={unmarked ? "Not marked delivered — open to mark it delivered or skip it" : undefined}
+      className={cn(
+        "w-full mb-1 text-left px-1.5 py-1 rounded transition",
+        unmarked ? "bg-amber-50 ring-1 ring-amber-300 hover:bg-amber-100" : "hover:bg-green-50 hover:ring-1 hover:ring-[#1B5E20]/20"
+      )}
     >
-      <span className="font-medium text-[10px] uppercase text-gray-400 block">{label}</span>
+      <span className="font-medium text-[10px] uppercase text-gray-400 block">
+        {label}
+        {unmarked && <span className="ml-1 normal-case text-amber-700">· not marked</span>}
+      </span>
       {items.map((it, i) => {
         const skipped = it.status === "skipped"
         const delivered = it.status === "delivered"

@@ -57,6 +57,7 @@ export default async function SubscriberProfilePage({
     { data: plans },
     { data: authUser },
     { data: cashReportRows },
+    { data: unmarkedRows },
   ] = await Promise.all([
     supabaseAdmin.from("plans").select("name, meals_total, days_per_week, base_price").eq("id", sub.plan_id).maybeSingle(),
     supabaseAdmin.from("subscription_addons").select("addons ( id, name, price_per_meal )").eq("subscription_id", id),
@@ -124,6 +125,17 @@ export default async function SubscriberProfilePage({
       .is("recorded_at", null)
       .is("dismissed_at", null)
       .order("reported_at"),
+    // Earlier days (last 30) never marked delivered or skipped — ops settle
+    // them from the day editor (068).
+    supabaseAdmin
+      .from("orders")
+      .select("id, delivery_date, meal_slot, status, quantity, extra_dish, meal_templates ( name )")
+      .eq("subscription_id", id)
+      .gte("delivery_date", addDaysISO(today, -30))
+      .lt("delivery_date", today)
+      .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
+      .order("delivery_date")
+      .order("meal_slot"),
   ])
 
   const userName = (user as any).name ?? "Unknown"
@@ -199,6 +211,15 @@ export default async function SubscriberProfilePage({
           }
         })}
         walletTransactions={((walletTx as any[]) ?? []) as any}
+        unmarked={((unmarkedRows as any[]) ?? []).map((o) => ({
+          id: o.id as string,
+          date: o.delivery_date as string,
+          slot: o.meal_slot as "lunch" | "dinner",
+          status: o.status as string,
+          quantity: (o.quantity ?? 1) as number,
+          extra: !!o.extra_dish,
+          mealName: (Array.isArray(o.meal_templates) ? o.meal_templates[0] : o.meal_templates)?.name ?? "—",
+        }))}
         upcoming={((upcoming as any[]) ?? []).map((o) => ({
           id: o.id as string,
           date: o.delivery_date as string,

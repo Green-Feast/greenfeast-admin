@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import {
   Phone, Calendar, MapPin, Utensils, StickyNote, Pencil, Mail,
   Pause, Play, X, Plus, CheckCircle, AlertCircle, Pin,
-  Clock, Banknote, Wallet, Star, Trash2, CalendarDays,
+  Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { OrderEditor, type EditorTarget } from "@/components/order-editor"
@@ -180,6 +180,7 @@ export function ProfileClient({
   weeklyMenu,
   walletTransactions,
   upcoming,
+  unmarked,
   rules,
   catalogue,
 }: {
@@ -195,6 +196,7 @@ export function ProfileClient({
   weeklyMenu: WeeklyMenuEntry[]
   walletTransactions: WalletTx[]
   upcoming: Upcoming[]
+  unmarked: { id: string; date: string; slot: "lunch" | "dinner"; status: string; quantity: number; extra: boolean; mealName: string }[]
   rules: Rule[]
   catalogue: Catalogue
 }) {
@@ -543,6 +545,39 @@ export function ProfileClient({
               </div>
             </div>
           </Card>
+
+          {/* Earlier days never marked (068) — open one to mark delivered or skip */}
+          {unmarked.length > 0 && (
+            <Card>
+              <CardHeader title={`Not marked yet — earlier days (${unmarked.length})`} icon={<AlertTriangle className="w-3.5 h-3.5 text-amber-600" />} />
+              <div className="px-5 pb-5">
+                <p className="text-xs text-gray-500 mb-2">
+                  These were never marked delivered, so the wallet wasn&apos;t charged. Open one to mark it delivered, or skip it if it didn&apos;t go.
+                </p>
+                <div className="divide-y divide-amber-200 border border-amber-200 rounded-lg bg-amber-50/40">
+                  {Array.from(new Set(unmarked.map((o) => `${o.date}|${o.slot}`))).map((key) => {
+                    const [date, slot] = key.split("|") as [string, "lunch" | "dinner"]
+                    const items = unmarked.filter((o) => o.date === date && o.slot === slot)
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => setEditing({ subscriptionId, date, slot })}
+                        className="w-full text-left px-3 py-2.5 hover:bg-amber-50 flex items-start justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-amber-800">{fmtDay(date)} · {slot === "lunch" ? "Lunch" : "Dinner"}</p>
+                          <p className="text-sm text-[#1A1A1A] truncate">
+                            {items.map((o) => `${o.extra ? "+ " : ""}${o.mealName}${o.quantity > 1 ? ` ×${o.quantity}` : ""}`).join(", ")}
+                          </p>
+                        </div>
+                        <span className="text-xs font-medium text-amber-800 shrink-0">Settle</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* Upcoming meals — every one editable */}
           <Card>

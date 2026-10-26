@@ -14,8 +14,9 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { mealRate } from "@/lib/pricing"
-import { requireAdmin } from "@/lib/auth"
+import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
+import { deliverOrders, skipUndelivered, undoDelivered } from "@/lib/delivery"
 
 export type Slot = "lunch" | "dinner"
 
@@ -329,6 +330,77 @@ export async function adminSetAddonQty(orderId: string, addonId: string, quantit
   await recompute(orderId)
   refresh(order.subscription_id)
   return { ok: true }
+}
+
+// ── Delivery: settle a slot on any day up to today (068) ─────────────────
+// Ops sometimes forget to mark a day delivered — these work for earlier days
+// too. Delivered = billed like Operations (an earlier day gets no delivery
+// time and no "delivered" message); skip = not charged, meal stays on the
+// plan; undo = a wrong "delivered" refunded and put back on the plan.
+
+const UNDELIVERED = ["scheduled", "confirmed", "preparing", "out_for_delivery"]
+
+async function undeliveredIds(subscriptionId: string, date: string, slot: Slot): Promise<string[]> {
+  const { data } = await supabaseAdmin
+    .from("orders")
+    .select("id")
+    .eq("subscription_id", subscriptionId)
+    .eq("delivery_date", date)
+    .eq("meal_slot", slot)
+    .in("status", UNDELIVERED)
+  return ((data ?? []) as { id: string }[]).map((o) => o.id)
+}
+
+function rupeesText(paise: number) {
+  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+}
+
+export async function adminDeliverSlot(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
+  await requireAdminStrict()
+  if (date > istToday()) return { ok: false, error: "That day hasn't come yet." }
+  const ids = await undeliveredIds(subscriptionId, date, slot)
+  if (ids.length === 0) return { ok: false, error: "Nothing left to deliver here." }
+  const results = Object.values(await deliverOrders(ids, slot))
+  const billed = results.filter((r) => r === "billed").length
+  const short = results.filter((r) => r === "skipped_insufficient").length
+  refresh(subscriptionId)
+  revalidatePath("/operations")
+  if (short > 0) {
+    return { ok: true, message: `${billed} delivered and charged; ${short} skipped — the wallet was short (the customer was told).` }
+  }
+  return {
+    ok: true,
+    message: date < istToday()
+      ? "Marked delivered and charged to the wallet (an earlier day — no message is sent)."
+      : "Marked delivered and charged to the wallet.",
+  }
+}
+
+export async function adminSkipUndelivered(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
+  await requireAdminStrict()
+  const n = await skipUndelivered(await undeliveredIds(subscriptionId, date, slot))
+  if (n === 0) return { ok: false, error: "Nothing to skip here." }
+  refresh(subscriptionId)
+  revalidatePath("/operations")
+  return { ok: true, message: "Skipped — not charged, and the meal stays on the plan." }
+}
+
+export async function adminUndoDelivered(orderId: string): Promise<EditResult> {
+  await requireAdminStrict()
+  const { data: order } = await supabaseAdmin.from("orders").select("subscription_id").eq("id", orderId).maybeSingle()
+  try {
+    const { refunded } = await undoDelivered(orderId)
+    refresh(order?.subscription_id ?? undefined)
+    revalidatePath("/operations")
+    return {
+      ok: true,
+      message: refunded > 0
+        ? `Undone — ${rupeesText(refunded)} back in the wallet and the meal back on the plan.`
+        : "Undone — the meal is back on the plan.",
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
+  }
 }
 
 // ── Skip / bring back ─────────────────────────────────────────────────────

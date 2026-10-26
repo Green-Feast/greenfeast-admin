@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { isTestMode, modeUserIds } from "@/lib/mode"
-import { advanceBatch, advanceOrder, deliverOrders, notifyStatus, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
+import { advanceBatch, advanceOrder, clearDeliveryTime, deliverOrders, notifyStatus, skipUndelivered, undoDelivered, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
+import { istToday } from "@/lib/ist"
 import { recordCash } from "@/lib/cash"
 
 // No `export type { … }` re-exports here: Next turns every name exported from a
@@ -25,6 +26,9 @@ export async function advanceBatchStatus(
   slot: MealSlot
 ) {
   await requireAdminStrict()
+  // An earlier day is settled, not cooked again: no kitchen / "on its way"
+  // step, which would message customers days later (068).
+  if (newStatus !== "delivered" && date < istToday()) throw new Error("An earlier day can only be marked delivered or skipped.")
   // Only the current mode's customers (Live / Test) — a batch can hold both,
   // and marking Live deliveries must never touch (or bill) test accounts.
   const isTest = await isTestMode()
@@ -53,7 +57,10 @@ export async function advanceBatchStatus(
     if (error) throw error
     billingSummary = data
     if (candidateIds.length > 0) {
-      await notifyStatus(candidateIds, "delivered", slot, null, `Batch ${batchId}, ${date} ${slot}`)
+      // An earlier day settled late: no delivery time (unknown), no
+      // "today's lunch has been delivered" message days later (068).
+      if (date < istToday()) await clearDeliveryTime(candidateIds)
+      else await notifyStatus(candidateIds, "delivered", slot, null, `Batch ${batchId}, ${date} ${slot}`)
     }
   } else {
     await advanceBatch({ batchId, date, slot, status: newStatus, userIds })
@@ -81,6 +88,40 @@ export async function advanceOrderStatus(orderId: string, newStatus: DeliverySta
 
   revalidatePath("/operations")
   return result
+}
+
+// A meal that didn't go out: skipped, not charged, stays on the plan (an
+// earlier day shows "couldn't be delivered" to the customer).
+export async function skipOrderNoCharge(orderId: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  await requireAdminStrict()
+  try {
+    const n = await skipUndelivered([orderId])
+    if (n === 0) return { ok: false, error: "This meal is already delivered, skipped or cancelled." }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Could not skip it." }
+  }
+  revalidatePath("/operations")
+  revalidatePath("/dashboard")
+  return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
+}
+
+// A meal marked delivered by mistake (068): the charge goes back to the
+// wallet, the meal back on the plan, and the customer is told.
+export async function undoOrderDelivery(orderId: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  await requireAdminStrict()
+  try {
+    const { refunded } = await undoDelivered(orderId)
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    return {
+      ok: true,
+      message: refunded > 0
+        ? `Undone — ₹${(refunded / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })} back in their wallet, meal back on the plan.`
+        : "Undone — meal back on the plan.",
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

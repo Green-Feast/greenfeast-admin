@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, Undo2, ChevronLeft, ChevronRight, History } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import { generateDailyLists, generateKitchenSheets, generateDeliverySheet } from "./daily-lists";
@@ -13,11 +13,13 @@ import {
   recordCashReport,
   dismissCashReport,
   deliveryPhotoUrl,
+  skipOrderNoCharge,
+  undoOrderDelivery,
 } from "./actions";
 import type { DeliveryStatus, MealSlot } from "@/lib/delivery";
 import { setAddressBatch } from "@/app/(admin)/batches/actions";
 import { recordCashPayment } from "@/app/(admin)/subscribers/[id]/actions";
-import { istHour, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
+import { istHour, addDaysISO, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
 
@@ -62,6 +64,9 @@ export type CashReportRow = {
   partner: string;
   customer: string;
 };
+
+// An earlier day with meals never marked delivered or skipped (068).
+export type EarlierDay = { date: string; lunch: number; dinner: number };
 
 const BATCH_COLORS: Record<string, { light: [number, number, number]; dark: [number, number, number] }> = {
   Nami:    { light: [200, 220, 245], dark: [30, 144, 255] },
@@ -110,6 +115,11 @@ function clock(iso: string | null) {
   return iso ? new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
 }
 
+// "Thu 23 Oct" for a YYYY-MM-DD date.
+function shortDay(date: string) {
+  return new Date(date + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+}
+
 /* ─── Components ────────────────────────────────────────────────────────────── */
 
 function Toast({ message }: { message: string }) {
@@ -132,14 +142,20 @@ export function OperationsClient({
   closures,
   batches,
   cashReports,
+  earlier,
   isToday,
+  isPast,
 }: {
   initialSubscribers: OperationsSubscriber[];
   serverDate: string; // YYYY-MM-DD from URL/server
   closures: KitchenClosure[];
   batches: { id: string; name: string; meal_slot: MealSlot }[];
   cashReports: CashReportRow[];
+  earlier: EarlierDay[];
   isToday: boolean;
+  // An earlier day: only delivered / skip / undo (no kitchen or "on its way"
+  // steps, and no "delivered" message days later — 068).
+  isPast: boolean;
 }) {
   const [showClosure, setShowClosure] = useState(false);
   const router = useRouter();
@@ -173,6 +189,9 @@ export function OperationsClient({
   const unassigned = slotSubs.filter((s) => !s.batchId && s.status !== "delivered").length;
   const slotBatches = batches.filter((b) => b.meal_slot === slot);
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  const earlierTotal = earlier.reduce((n, day) => n + day.lunch + day.dinner, 0);
+  // Meals still open per slot (cancelled/skipped aren't loaded).
+  const openIn = (s: MealSlot) => initialSubscribers.filter((x) => x.mealSlot === s && x.status !== "delivered").length;
 
   // Partners mark deliveries from their app — keep today's view live.
   useEffect(() => {
@@ -246,6 +265,30 @@ export function OperationsClient({
     });
   }
 
+  // Didn't go out: skipped, not charged, stays on the plan (068).
+  function handleSkip(s: OperationsSubscriber) {
+    if (!window.confirm(`${s.name}'s ${slot} on ${shortDay(serverDate)} didn't go? It's skipped — nothing is charged and the meal stays on their plan.`)) return;
+    setBusyRow(s.orderId);
+    startTransition(async () => {
+      const res = await skipOrderNoCharge(s.orderId);
+      setBusyRow(null);
+      showToast(res.ok ? res.message : res.error);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  // Marked delivered by mistake: refunded, back on the plan, customer told (068).
+  function handleUndo(s: OperationsSubscriber) {
+    if (!window.confirm(`Undo — ${s.name}'s ${slot} on ${shortDay(serverDate)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return;
+    setBusyRow(s.orderId);
+    startTransition(async () => {
+      const res = await undoOrderDelivery(s.orderId);
+      setBusyRow(null);
+      showToast(res.ok ? res.message : res.error);
+      if (res.ok) router.refresh();
+    });
+  }
+
   function handleCollect(s: OperationsSubscriber) {
     const answer = window.prompt(`Cash collected from ${s.name} (₹). Still due: ${rupees(s.codDue)}`, String(s.codDue / 100));
     if (!answer) return;
@@ -260,9 +303,13 @@ export function OperationsClient({
     });
   }
 
+  // One timer: a new message gets its full 3 s, not the end of the last one's
+  // (settling an earlier day is many quick clicks).
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   function showToast(msg: string) {
     setToast(msg);
-    setTimeout(() => setToast(""), 3000);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 3000);
   }
 
   // Before a cutoff the lists can still change — the PDF says so.
@@ -305,6 +352,7 @@ export function OperationsClient({
   }
 
   function handleAdvance(batch: string, batchId: string, status: DeliveryStatus) {
+    if (isPast && !window.confirm(`Mark every ${slot} meal still open in ${batch} on ${shortDay(serverDate)} delivered? Each wallet is charged now.`)) return;
     setAdvancing(`${batch}:${status}`);
     startTransition(async () => {
       try {
@@ -371,20 +419,92 @@ export function OperationsClient({
                 )}
               >
                 {s === "lunch" ? "Lunch" : "Dinner"}
+                {isPast && openIn(s) > 0 && (
+                  <span className={cn("ml-1.5 px-1.5 rounded-full text-[11px] font-semibold", slot === s ? "bg-white/25" : "bg-amber-100 text-amber-800")}>
+                    {openIn(s)}
+                  </span>
+                )}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-600">Date:</label>
+          <div className="flex items-center gap-1.5">
+            <label className="text-sm font-medium text-gray-600 mr-0.5">Date:</label>
+            <button
+              onClick={() => router.push(`?date=${addDaysISO(serverDate, -1)}`)}
+              title="Previous day"
+              aria-label="Previous day"
+              className="h-9 w-9 flex items-center justify-center rounded-lg border border-[#e2e8d5] text-gray-600 hover:bg-gray-50"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
             <input
               type="date"
               value={serverDate}
               onChange={(e) => router.push(`?date=${e.target.value}`)}
               className="text-sm border border-[#e2e8d5] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
             />
+            <button
+              onClick={() => router.push(`?date=${addDaysISO(serverDate, 1)}`)}
+              title="Next day"
+              aria-label="Next day"
+              className="h-9 w-9 flex items-center justify-center rounded-lg border border-[#e2e8d5] text-gray-600 hover:bg-gray-50"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            {!isToday && (
+              <button
+                onClick={() => router.push("/operations")}
+                className="h-9 px-3 rounded-lg border border-[#1B5E20]/40 text-sm font-medium text-[#1B5E20] hover:bg-green-50"
+              >
+                Today
+              </button>
+            )}
           </div>
         </div>
       </div>
+
+      {earlierTotal > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+            <History className="w-4 h-4" /> {earlierTotal} meal{earlierTotal === 1 ? "" : "s"} from earlier days never marked
+          </p>
+          <p className="text-xs text-amber-800/80 mt-0.5">
+            Those customers haven&apos;t been charged. Open a day and mark the meals delivered — or skip the ones that didn&apos;t go.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {earlier.map((day) => (
+              <button
+                key={day.date}
+                onClick={() => {
+                  if (day.lunch === 0) setSlot("dinner");
+                  else if (day.dinner === 0) setSlot("lunch");
+                  router.push(`?date=${day.date}`);
+                }}
+                className={cn(
+                  "px-2.5 py-1 rounded-full border text-xs font-medium",
+                  day.date === serverDate ? "bg-amber-600 border-amber-600 text-white" : "bg-white border-amber-300 text-amber-900 hover:bg-amber-100"
+                )}
+              >
+                {shortDay(day.date)}
+                {day.lunch > 0 && ` · lunch ${day.lunch}`}
+                {day.dinner > 0 && ` · dinner ${day.dinner}`}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isPast && (
+        <div className="mb-4 flex items-start gap-2 px-4 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-sm">
+          <History className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            <span className="font-semibold">{shortDay(serverDate)} is an earlier day.</span>{" "}
+            Marking a meal delivered charges the wallet now (no &quot;delivered&quot; message goes out days later).
+            Didn&apos;t go? Skip it with <Ban className="inline w-3.5 h-3.5 -mt-0.5" /> — nothing is charged.
+            Marked delivered by mistake? <Undo2 className="inline w-3.5 h-3.5 -mt-0.5" /> refunds it.
+          </span>
+        </div>
+      )}
 
       {closures
         .filter((c) => c.closed_on === serverDate && c.meal_slot === slot)
@@ -474,7 +594,7 @@ export function OperationsClient({
             </p>
             <p className="text-xs text-white/60">One PDF: master list per batch with tallies · kitchen sheets · delivery sheets with cash to collect</p>
           </div>
-          <div className="flex gap-3 flex-wrap flex-shrink-0">
+          <div className="flex gap-3 flex-wrap flex-shrink-0 max-w-full">
             <button
               onClick={handleGenerateKitchen}
               disabled={loading.kitchen.standalone}
@@ -538,12 +658,12 @@ export function OperationsClient({
                       <CheckCircle2 className="w-4 h-4" /> All delivered
                     </div>
                   ) : (
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className={cn("grid gap-1.5", isPast ? "grid-cols-1" : "grid-cols-3")}>
                       {([
                         { status: "preparing" as const, label: "In Kitchen", Icon: ChefHat },
                         { status: "out_for_delivery" as const, label: "Out", Icon: Truck },
-                        { status: "delivered" as const, label: "Delivered", Icon: CheckCircle2 },
-                      ]).map(({ status, label, Icon }) => {
+                        { status: "delivered" as const, label: isPast ? "Mark all delivered" : "Delivered", Icon: CheckCircle2 },
+                      ]).filter((b) => !isPast || b.status === "delivered").map(({ status, label, Icon }) => {
                         const busy = advancing === `${batch}:${status}`;
                         const isActive = stage === status;
                         return (
@@ -598,7 +718,7 @@ export function OperationsClient({
                         )}
                         {(s.status === "out_for_delivery" || s.status === "delivered") && (s.outAt || s.deliveredAt) && (
                           <p className="mt-0.5 text-[11px] text-gray-500 flex items-center gap-1 flex-wrap">
-                            {s.status === "delivered" ? `Delivered ${clock(s.deliveredAt)}` : `On the way ${clock(s.outAt)}`}
+                            {s.status === "delivered" ? `Delivered${s.deliveredAt ? ` ${clock(s.deliveredAt)}` : ""}` : `On the way ${clock(s.outAt)}`}
                             {s.partnerName && <span>· {s.partnerName}</span>}
                             {s.hasPhoto && (
                               <button onClick={() => handlePhoto(s.orderId)} className="inline-flex items-center gap-0.5 text-[#1B5E20] font-medium hover:underline">
@@ -647,9 +767,20 @@ export function OperationsClient({
                         )}
                       </div>
                       {s.status === "delivered" ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1B5E20] bg-green-50 px-2 py-1 rounded-md shrink-0">
-                          <CheckCircle2 className="w-3.5 h-3.5" />Delivered
-                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1B5E20] bg-green-50 px-2 py-1 rounded-md">
+                            <CheckCircle2 className="w-3.5 h-3.5" />Delivered
+                          </span>
+                          <button
+                            onClick={() => handleUndo(s)}
+                            disabled={busyRow === s.orderId}
+                            title="Undo — it wasn't delivered (refunds the wallet)"
+                            aria-label="Undo delivered"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#e2e8d5] text-gray-400 hover:border-red-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          >
+                            {busyRow === s.orderId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Undo2 className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
                       ) : terminal ? (
                         <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md shrink-0 capitalize">
                           {s.status}
@@ -660,7 +791,7 @@ export function OperationsClient({
                             { status: "preparing" as const, Icon: ChefHat, title: "In Kitchen" },
                             { status: "out_for_delivery" as const, Icon: Truck, title: "Out for Delivery" },
                             { status: "delivered" as const, Icon: CheckCircle2, title: "Delivered" },
-                          ]).map(({ status, Icon, title }) => {
+                          ]).filter((b) => !isPast || b.status === "delivered").map(({ status, Icon, title }) => {
                             const busy = advancingOrder === `${s.orderId}:${status}`;
                             const isActive = s.status === status;
                             return (
@@ -680,6 +811,15 @@ export function OperationsClient({
                               </button>
                             );
                           })}
+                          <button
+                            title="Didn't go — skip, no charge"
+                            aria-label="Skip, no charge"
+                            onClick={() => handleSkip(s)}
+                            disabled={!!advancingOrder || busyRow === s.orderId}
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#e2e8d5] text-gray-400 hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {busyRow === s.orderId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                          </button>
                         </div>
                       )}
                     </div>

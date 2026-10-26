@@ -1,8 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
-import { istToday } from "@/lib/ist";
+import { istToday, addDaysISO } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
-import { OperationsClient, type OperationsSubscriber, type CashReportRow } from "./operations-client";
+import { OperationsClient, type OperationsSubscriber, type CashReportRow, type EarlierDay } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
 
 export const dynamic = "force-dynamic";
@@ -72,8 +72,26 @@ export default async function OperationsPage({
     .eq("users.is_test", isTest)
     .order("reported_at");
 
+  // Earlier days (last 30) with meals never marked delivered or skipped — ops
+  // sometimes forget, and those customers haven't been charged (068).
+  const earlierQuery = supabaseAdmin
+    .from("orders")
+    .select("delivery_date, meal_slot, subscriptions!inner ( users!inner ( is_test ) )")
+    .gte("delivery_date", addDaysISO(istToday(), -30))
+    .lt("delivery_date", istToday())
+    .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
+    .eq("subscriptions.users.is_test", isTest);
+
   // All in one round trip.
-  const [{ data: closureRows }, { data, error }, { data: cashRows }] = await Promise.all([closuresQuery, ordersQuery, cashQuery]);
+  const [{ data: closureRows }, { data, error }, { data: cashRows }, { data: earlierRows }] = await Promise.all([closuresQuery, ordersQuery, cashQuery, earlierQuery]);
+
+  const earlierByDay = new Map<string, EarlierDay>();
+  for (const r of (earlierRows ?? []) as { delivery_date: string; meal_slot: "lunch" | "dinner" }[]) {
+    const day = earlierByDay.get(r.delivery_date) ?? { date: r.delivery_date, lunch: 0, dinner: 0 };
+    day[r.meal_slot] += 1;
+    earlierByDay.set(r.delivery_date, day);
+  }
+  const earlier = [...earlierByDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 
   const cashReports: CashReportRow[] = ((cashRows ?? []) as any[]).map((r) => ({
     id: r.id,
@@ -193,7 +211,9 @@ export default async function OperationsPage({
       closures={(closureRows ?? []) as KitchenClosure[]}
       batches={(batchRows ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}
       cashReports={cashReports}
+      earlier={earlier}
       isToday={date === istToday()}
+      isPast={date < istToday()}
     />
   );
 }
