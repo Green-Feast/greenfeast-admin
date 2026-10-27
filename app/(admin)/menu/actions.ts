@@ -113,9 +113,12 @@ export async function restoreDish(id: string) {
   const { data, error } = await supabaseAdmin
     .from("meal_templates").update({ is_active: true }).eq("id", id).select("category").single()
   if (error) throw error
-  // A restored dish brings back its category if that was deleted (hidden).
-  await supabaseAdmin.from("categories").update({ is_active: true }).eq("id", data.category).eq("is_active", false)
+  // A live dish needs a live category: restoring one brings back its
+  // archived category too.
+  const { data: restored } = await supabaseAdmin.from("categories")
+    .update({ is_active: true }).eq("id", data.category).eq("is_active", false).select("name")
   revalidatePath("/menu")
+  return { restoredCategory: restored?.[0]?.name ?? null }
 }
 
 // ── Dish images ──────────────────────────────────────────────────────────
@@ -206,7 +209,7 @@ export async function upsertCategory(input: CategoryInput) {
   } else {
     let slug = slugify(input.name) || `category-${Date.now()}`
     const { data: clash } = await supabaseAdmin.from("categories").select("id, is_active").eq("id", slug).maybeSingle()
-    // Re-creating a deleted (hidden) category brings the same one back.
+    // Re-creating an archived category brings the same one back.
     if (clash && !clash.is_active) {
       const { error } = await supabaseAdmin.from("categories")
         .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji, is_active: true }).eq("id", slug)
@@ -245,25 +248,56 @@ export async function saveCategoryImage(categoryId: string, path: string) {
   return data
 }
 
-// meal_templates.category → categories(id) is ON DELETE RESTRICT, and
-// archived dishes can never be deleted (see archiveDish), so a category
-// whose dishes are all archived can't be deleted either — it's hidden
-// instead (is_active=false; the app only loads active categories).
-// Returns rather than throws: production masks thrown messages.
-export async function deleteCategory(id: string): Promise<{ ok: true; hidden: boolean } | { ok: false; error: string }> {
+type CategoryResult = { ok: true } | { ok: false; error: string }
+
+function dishList(names: string[]) {
+  return names.slice(0, 3).join(", ") + (names.length > 3 ? ` and ${names.length - 3} more` : "")
+}
+
+// Real delete only for a category no dish points at: meal_templates.category
+// → categories(id) is ON DELETE RESTRICT, and dishes are never deleted (see
+// archiveDish), so a category with any dish — archived ones included, they
+// carry order history — is archived instead. These return rather than throw:
+// production masks thrown messages.
+export async function deleteCategory(id: string): Promise<CategoryResult> {
   await requireAdmin()
   const { data: dishes, error: dishErr } = await supabaseAdmin
     .from("meal_templates").select("name, is_active").eq("category", id)
   if (dishErr) return { ok: false, error: dishErr.message }
-  const live = (dishes ?? []).filter((d) => d.is_active)
+  const live = (dishes ?? []).filter((d) => d.is_active).map((d) => d.name)
   if (live.length > 0) {
-    const names = live.slice(0, 3).map((d) => d.name).join(", ") + (live.length > 3 ? ` and ${live.length - 3} more` : "")
-    return { ok: false, error: `Still used by ${names}. Move or archive ${live.length === 1 ? "it" : "them"} first.` }
+    return { ok: false, error: `Can't delete: ${dishList(live)} ${live.length === 1 ? "is" : "are"} still in this category.` }
   }
-  const { error } = (dishes ?? []).length > 0
-    ? await supabaseAdmin.from("categories").update({ is_active: false }).eq("id", id)
-    : await supabaseAdmin.from("categories").delete().eq("id", id)
+  if ((dishes ?? []).length > 0) {
+    return { ok: false, error: `Can't delete: its ${dishes!.length} archived dish(es) keep their order history. Archive the category instead.` }
+  }
+  const { error } = await supabaseAdmin.from("categories").delete().eq("id", id)
   if (error) return { ok: false, error: error.message }
   revalidatePath("/menu")
-  return { ok: true, hidden: (dishes ?? []).length > 0 }
+  return { ok: true }
+}
+
+// Archived = is_active false: gone from the app (it only loads active
+// categories) and from the admin's pickers, history untouched. Only once its
+// dishes are archived or moved, so no live dish is left without a category.
+export async function archiveCategory(id: string): Promise<CategoryResult> {
+  await requireAdmin()
+  const { data: live, error: dishErr } = await supabaseAdmin
+    .from("meal_templates").select("name").eq("category", id).eq("is_active", true)
+  if (dishErr) return { ok: false, error: dishErr.message }
+  if ((live ?? []).length > 0) {
+    return { ok: false, error: `Archive or move ${dishList(live!.map((d) => d.name))} first.` }
+  }
+  const { error } = await supabaseAdmin.from("categories").update({ is_active: false }).eq("id", id)
+  if (error) return { ok: false, error: error.message }
+  revalidatePath("/menu")
+  return { ok: true }
+}
+
+export async function restoreCategory(id: string): Promise<CategoryResult> {
+  await requireAdmin()
+  const { error } = await supabaseAdmin.from("categories").update({ is_active: true }).eq("id", id)
+  if (error) return { ok: false, error: error.message }
+  revalidatePath("/menu")
+  return { ok: true }
 }

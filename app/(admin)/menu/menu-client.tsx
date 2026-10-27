@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase"
 import {
   upsertDish, archiveDish, restoreDish,
   createDishImageUploadUrls, saveDishImage, deleteDishImage,
-  upsertCategory, deleteCategory, createCategoryImageUploadUrl, saveCategoryImage,
+  upsertCategory, deleteCategory, archiveCategory, restoreCategory, createCategoryImageUploadUrl, saveCategoryImage,
   type DishInput, type CategoryInput,
 } from "./actions"
 
@@ -256,11 +256,11 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
 
   async function handleRestore(id: string) {
     try {
-      await restoreDish(id)
+      const { restoredCategory } = await restoreDish(id)
       const category = dishes.find((d) => d.id === id)?.category
       setDishes((prev) => prev.map((d) => d.id === id ? { ...d, isActive: true } : d))
       setCategories((prev) => prev.map((c) => c.id === category ? { ...c, isActive: true } : c))
-      showToast("success", "Dish restored.")
+      showToast("success", restoredCategory ? `Dish restored, and its ${restoredCategory} category with it.` : "Dish restored.")
     } catch {
       showToast("error", "Could not restore.")
     }
@@ -342,19 +342,41 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
   }
 
   async function handleDeleteCategory(c: Category) {
-    if (!window.confirm(`Delete the ${c.name} category?`)) return
+    // Only ask when it can actually go; otherwise the server explains why not.
+    if (!dishes.some((d) => d.category === c.id) && !window.confirm(`Delete the ${c.name} category?`)) return
     try {
       const res = await deleteCategory(c.id)
       if (!res.ok) { showToast("error", res.error); return }
-      setCategories((prev) => res.hidden
-        ? prev.map((x) => x.id === c.id ? { ...x, isActive: false } : x)
-        : prev.filter((x) => x.id !== c.id))
+      setCategories((prev) => prev.filter((x) => x.id !== c.id))
       if (categoryFilter === c.id) setCategoryFilter("All")
-      showToast("success", res.hidden
-        ? "Category deleted. Its archived dishes keep their order history."
-        : "Category deleted.")
+      showToast("success", "Category deleted.")
     } catch {
       showToast("error", "Could not delete category.")
+    }
+  }
+
+  async function handleArchiveCategory(c: Category) {
+    if (!dishes.some((d) => d.category === c.id && d.isActive)
+      && !window.confirm(`Archive the ${c.name} category? It disappears from the app's menu. You can restore it any time.`)) return
+    try {
+      const res = await archiveCategory(c.id)
+      if (!res.ok) { showToast("error", res.error); return }
+      setCategories((prev) => prev.map((x) => x.id === c.id ? { ...x, isActive: false } : x))
+      if (categoryFilter === c.id) setCategoryFilter("All")
+      showToast("success", "Category archived.")
+    } catch {
+      showToast("error", "Could not archive category.")
+    }
+  }
+
+  async function handleRestoreCategory(c: Category) {
+    try {
+      const res = await restoreCategory(c.id)
+      if (!res.ok) { showToast("error", res.error); return }
+      setCategories((prev) => prev.map((x) => x.id === c.id ? { ...x, isActive: true } : x))
+      showToast("success", "Category restored.")
+    } catch {
+      showToast("error", "Could not restore category.")
     }
   }
 
@@ -377,9 +399,10 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
 
   // ── Derived ──────────────────────────────────────────────────────────
 
-  // Deleted categories that archived dishes still point at stay in state
-  // (for their name), but nowhere to pick from.
+  // Archived categories stay in state (for archived dishes' names and the
+  // Restore list), but nowhere to pick from.
   const liveCategories = useMemo(() => categories.filter((c) => c.isActive), [categories])
+  const archivedCategories = useMemo(() => categories.filter((c) => !c.isActive), [categories])
   const categoryNames = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories])
   const filtered = useMemo(() => dishes.filter((d) => {
     if (!showArchived && !d.isActive) return false
@@ -665,12 +688,29 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
                   <span className="text-sm text-[#1A1A1A] truncate">{c.name}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => openEditCategory(c)} className="p-1.5 rounded-lg text-gray-400 hover:text-[#1B5E20] hover:bg-green-50"><Pencil className="w-3.5 h-3.5" /></button>
-                  <button onClick={() => handleDeleteCategory(c)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => openEditCategory(c)} title="Edit" className="p-1.5 rounded-lg text-gray-400 hover:text-[#1B5E20] hover:bg-green-50"><Pencil className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => handleArchiveCategory(c)} title="Archive" className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50"><Archive className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => handleDeleteCategory(c)} title="Delete" className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
             ))}
           </Section>
+
+          {archivedCategories.length > 0 && (
+            <Section title="Archived categories">
+              {archivedCategories.map((c) => (
+                <div key={c.id} className="flex items-center justify-between gap-2 py-1.5">
+                  <div className="flex items-center gap-2 min-w-0 opacity-50">
+                    {c.imageUrl ? <img src={c.imageUrl} alt="" className="w-7 h-7 rounded-full object-cover" /> : <span className="text-lg">{c.emoji ?? "🍽️"}</span>}
+                    <span className="text-sm text-[#1A1A1A] truncate">{c.name}</span>
+                  </div>
+                  <button onClick={() => handleRestoreCategory(c)} className="flex items-center gap-1 shrink-0 text-xs font-medium text-gray-600 hover:text-white hover:bg-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg transition-all">
+                    <RotateCcw className="w-3 h-3" /> Restore
+                  </button>
+                </div>
+              ))}
+            </Section>
+          )}
         </div>
       </aside>
 
