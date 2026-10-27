@@ -49,10 +49,14 @@ export default async function UsersPage() {
   const publicById = new Map<string, PublicUser>()
   for (const u of (publicUsers ?? []) as PublicUser[]) publicById.set(u.id, u)
 
-  // Most-recent subscription per user (subs already sorted desc by created_at).
+  // One plan per user: the live one if there is one — an unpaid renewal must
+  // not hide a plan that's still running — else the most recent (subs are
+  // already sorted newest first).
+  const LIVE_RANK: Record<string, number> = { active: 0, paused: 1 }
   const subByUser = new Map<string, SubRow>()
   for (const s of (subs ?? []) as SubRow[]) {
-    if (!subByUser.has(s.user_id)) subByUser.set(s.user_id, s)
+    const current = subByUser.get(s.user_id)
+    if (!current || (LIVE_RANK[s.status] ?? 9) < (LIVE_RANK[current.status] ?? 9)) subByUser.set(s.user_id, s)
   }
 
   const rows: UserRow[] = (authData?.users ?? []).map((au) => {

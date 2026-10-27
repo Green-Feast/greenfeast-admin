@@ -9,6 +9,7 @@ import {
   AlertCircle, CheckCircle, ShieldAlert, UserPlus, Copy, FlaskConical, BadgeCheck, KeyRound,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { isPlanFinished } from "@/lib/plan-status"
 import {
   createSubscription, resetUserData, deleteUser, editUserProfile,
   setUserTestFlag, createCustomerAccount, generateCustomerPassword,
@@ -71,6 +72,9 @@ const SUB_STATUS_CLS: Record<string, string> = {
 }
 
 function tierOf(u: UserRow): { key: string; label: string; cls: string } {
+  if (isPlanFinished(u.subStatus, u.deliveriesRemaining)) {
+    return { key: "finished", label: "Finished", cls: "bg-slate-100 text-slate-600 border-slate-200" }
+  }
   if (u.subStatus) {
     return {
       key: u.subStatus,
@@ -88,13 +92,13 @@ function providerLabel(p: string) {
   return p.charAt(0).toUpperCase() + p.slice(1)
 }
 
-const FILTERS = ["All", "Signed in", "Onboarded", "Active", "Paused", "Pending", "Cancelled", "Expired"]
+const FILTERS = ["All", "Signed in", "Onboarded", "Active", "Paused", "Finished", "Pending", "Cancelled", "Expired"]
 
 function matchesFilter(u: UserRow, filter: string) {
   if (filter === "All") return true
   if (filter === "Signed in") return !u.hasPublicRow
   if (filter === "Onboarded") return u.hasPublicRow && !u.subStatus
-  return u.subStatus === filter.toLowerCase()
+  return tierOf(u).key === filter.toLowerCase()
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -159,7 +163,7 @@ export function UsersClient({
     for (const u of initialUsers) {
       if (!u.hasPublicRow) signedIn++
       else if (!u.subStatus) onboarded++
-      if (u.subStatus === "active") active++
+      if (tierOf(u).key === "active") active++
     }
     return { total: initialUsers.length, signedIn, onboarded, active }
   }, [initialUsers])
@@ -493,7 +497,7 @@ function DetailPanel({
             {user.subStatus ? (
               <>
                 <Row label="Plan"><span className="font-medium text-[#1A1A1A]">{user.planName ?? "—"}</span></Row>
-                <Row label="Status"><span className="capitalize text-[#1A1A1A]">{user.subStatus}</span></Row>
+                <Row label="Status"><span className="capitalize text-[#1A1A1A]">{isPlanFinished(user.subStatus, user.deliveriesRemaining) ? "finished" : user.subStatus}</span></Row>
                 <Row label="Deliveries left"><span className="font-medium">{user.deliveriesRemaining ?? "—"}</span></Row>
                 {user.paymentMethod && <Row label="Payment"><span className="uppercase text-gray-600">{user.paymentMethod}</span></Row>}
               </>

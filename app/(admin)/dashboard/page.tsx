@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { istToday } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
+import { isPlanFinished } from "@/lib/plan-status";
 
 export const dynamic = "force-dynamic";
 
@@ -303,7 +304,8 @@ async function getDashboardData(isTest: boolean) {
   }, 0);
 
   return {
-    activeCount: active.length,
+    // Finished plans (0 meals left) are under Needs attention, not active.
+    activeCount: active.filter((s) => !isPlanFinished(s.status, s.deliveries_remaining)).length,
     totalToday: todayBatches.reduce((s, b) => s + b.total, 0),
     deliveredToday: todayBatches.reduce((s, b) => s + b.delivered, 0),
     todayBatches,

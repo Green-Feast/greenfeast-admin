@@ -340,8 +340,11 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
   const plan = one((sub as any).plans) as { meals_total: number; base_price: number } | null
   if (!plan) return { ok: false, error: "Plan not found." }
 
-  // One live plan per customer (049): close a finished one first.
+  // One live plan per customer (049): close the previous one first. A plan
+  // this one renews early passes on its meals (carried_meals, 069) — same as
+  // the payment webhook.
   await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
+  const { data: carry } = await supabaseAdmin.from("subscriptions").select("carried_meals").eq("id", subId).single()
 
   const { data: delivered } = await supabaseAdmin
     .from("orders").select("quantity").eq("subscription_id", subId).eq("status", "delivered")
@@ -351,7 +354,7 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
     .from("subscriptions")
     .update({
       status: "active",
-      deliveries_remaining: Math.max(plan.meals_total - used, 0),
+      deliveries_remaining: Math.max(plan.meals_total - used, 0) + (carry?.carried_meals ?? 0),
       payment_method: cashDuePaise > 0 ? "cod" : sub.payment_method,
       cod_due_paise: cashDuePaise,
       cod_on_credit: cashDuePaise > 0,
@@ -378,7 +381,7 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
 
   await instantiateOrders(subId)
   await notifyEvent("plan_ready", [await recipient(sub.user_id)], {
-    meals: Math.max(plan.meals_total - used, 0),
+    meals: Math.max(plan.meals_total - used, 0) + (carry?.carried_meals ?? 0),
     wallet_note: paidPaise > 0 ? ` and ${rupees(paidPaise)} is in your wallet` : "",
   })
 

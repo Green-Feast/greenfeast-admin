@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
+import { isPlanFinished } from "@/lib/plan-status"
 import { SubscribersClient, type Subscriber, type DeletedAccount } from "./subscribers-client";
 
 export const dynamic = "force-dynamic";
@@ -128,7 +129,9 @@ export default async function SubscribersPage() {
       timing: "",
       notes: s.special_notes ?? "",
       plan: s.plan_name ?? s.plan_id ?? "—",
-      status: (s.status.charAt(0).toUpperCase() + s.status.slice(1)) as Subscriber["status"],
+      status: isPlanFinished(s.status, s.deliveries_remaining)
+        ? "Finished"
+        : (s.status.charAt(0).toUpperCase() + s.status.slice(1)) as Subscriber["status"],
       expiry,
       deliveriesRemaining: s.deliveries_remaining,
       source: "app" as const,

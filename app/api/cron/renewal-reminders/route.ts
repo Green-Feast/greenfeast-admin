@@ -17,6 +17,8 @@ function isAuthorized(req: NextRequest) {
 // audit that led to this feature). Remind once when a subscriber drops to 2
 // or fewer meals left, then not again for 3 days (last_renewal_reminder_sent_at
 // guards this) so they aren't pinged daily while they decide whether to renew.
+// The app's My Plan offers Renew from the same point (RENEW_FROM_MEALS_LEFT in
+// greenfeast-app's subscription.tsx) — keep the two in step.
 const LOW_DELIVERIES_THRESHOLD = 2;
 const REMINDER_COOLDOWN_DAYS = 3;
 

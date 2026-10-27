@@ -8,6 +8,7 @@ import {
   Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { isPlanFinished } from "@/lib/plan-status"
 import { OrderEditor, type EditorTarget } from "@/components/order-editor"
 import { setFixedDish, clearFixedDish } from "@/app/(admin)/kitchen/order-actions"
 import { setAddressBatch } from "@/app/(admin)/batches/actions"
@@ -125,6 +126,7 @@ const STATUS_STYLES: Record<string, string> = {
   cancelled: "bg-red-100 text-red-600 border-red-200",
   pending:   "bg-gray-100 text-gray-600 border-gray-200",
   expired:   "bg-red-100 text-red-600 border-red-200",
+  finished:  "bg-slate-100 text-slate-600 border-slate-200",
 }
 
 const PAY_STATUS_STYLES: Record<string, string> = {
@@ -268,6 +270,7 @@ export function ProfileClient({
   const isPaused      = subscription.status === "paused"
   const isCancelled   = subscription.status === "cancelled"
   const isPendingPlan = subscription.status === "pending"
+  const shownStatus   = isPlanFinished(subscription.status, subscription.deliveriesRemaining) ? "finished" : subscription.status
   const progress    = subscription.mealsTotal > 0
     ? Math.min(100, Math.round((subscription.deliveriesRemaining / subscription.mealsTotal) * 100))
     : 0
@@ -330,9 +333,9 @@ export function ProfileClient({
             )}
             <span className={cn(
               "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border capitalize",
-              STATUS_STYLES[subscription.status] ?? "bg-gray-100 text-gray-600 border-gray-200"
+              STATUS_STYLES[shownStatus] ?? "bg-gray-100 text-gray-600 border-gray-200"
             )}>
-              {subscription.status}
+              {shownStatus}
             </span>
             <button onClick={() => setModal("identity")} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-[#1B5E20]" title="Edit details">
               <Pencil className="w-3.5 h-3.5" />

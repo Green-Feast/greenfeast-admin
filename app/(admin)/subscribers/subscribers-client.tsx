@@ -19,7 +19,7 @@ export type Subscriber = {
   batchLunch: string;
   batchDinner: string;
   plan: string;
-  status: "Active" | "Paused" | "Expired" | "Pending";
+  status: "Active" | "Paused" | "Finished" | "Expired" | "Pending";
   meal: string;
   constraints: string;
   addons: string;
@@ -90,6 +90,7 @@ function StatusBadge({ status }: { status: Subscriber["status"] }) {
   const map = {
     Active:  "bg-green-100 text-green-700 border-green-200",
     Paused:  "bg-yellow-100 text-yellow-700 border-yellow-200",
+    Finished: "bg-slate-100 text-slate-600 border-slate-200",
     Expired: "bg-red-100 text-red-600 border-red-200",
     Pending: "bg-gray-100 text-gray-600 border-gray-200",
   };
@@ -649,7 +650,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
         <FilterSelect
           value={statusFilter}
           onChange={setStatusFilter}
-          options={["All", "Active", "Paused", "Expired"]}
+          options={["All", "Active", "Paused", "Finished", "Expired"]}
           label="Filter by status"
         />
         <FilterSelect
