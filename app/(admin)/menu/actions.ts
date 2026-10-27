@@ -84,7 +84,8 @@ export async function upsertDish(input: DishInput) {
 // Never a hard delete — orders.meal_template_id and subscription_schedule
 // have no ON DELETE clause (NO ACTION), so Postgres would refuse anyway for
 // any dish that's ever been ordered. Archiving is the only safe path.
-export async function archiveDish(id: string) {
+// Returns rather than throws: production masks thrown messages.
+export async function archiveDish(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireAdmin()
 
   const { data: weeklyRows } = await supabaseAdmin
@@ -92,7 +93,7 @@ export async function archiveDish(id: string) {
   if (weeklyRows && weeklyRows.length > 0) {
     const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     const slots = weeklyRows.map((r) => `${DAYS[r.day_of_week]} ${r.meal_slot}`).join(", ")
-    throw new Error(`This dish is in the weekly menu (${slots}). Clear it there first.`)
+    return { ok: false, error: `This dish is in the weekly menu (${slots}). Clear it there first.` }
   }
 
   // daily_specials cascades on delete, but that's silent — clear future
@@ -102,14 +103,18 @@ export async function archiveDish(id: string) {
   await supabaseAdmin.from("daily_specials").delete().eq("meal_template_id", id).gte("for_date", today)
 
   const { error } = await supabaseAdmin.from("meal_templates").update({ is_active: false }).eq("id", id)
-  if (error) throw error
+  if (error) return { ok: false, error: error.message }
   revalidatePath("/menu")
+  return { ok: true }
 }
 
 export async function restoreDish(id: string) {
   await requireAdmin()
-  const { error } = await supabaseAdmin.from("meal_templates").update({ is_active: true }).eq("id", id)
+  const { data, error } = await supabaseAdmin
+    .from("meal_templates").update({ is_active: true }).eq("id", id).select("category").single()
   if (error) throw error
+  // A restored dish brings back its category if that was deleted (hidden).
+  await supabaseAdmin.from("categories").update({ is_active: true }).eq("id", data.category).eq("is_active", false)
   revalidatePath("/menu")
 }
 
@@ -200,7 +205,15 @@ export async function upsertCategory(input: CategoryInput) {
     if (error) throw error
   } else {
     let slug = slugify(input.name) || `category-${Date.now()}`
-    const { data: clash } = await supabaseAdmin.from("categories").select("id").eq("id", slug).maybeSingle()
+    const { data: clash } = await supabaseAdmin.from("categories").select("id, is_active").eq("id", slug).maybeSingle()
+    // Re-creating a deleted (hidden) category brings the same one back.
+    if (clash && !clash.is_active) {
+      const { error } = await supabaseAdmin.from("categories")
+        .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji, is_active: true }).eq("id", slug)
+      if (error) throw error
+      revalidatePath("/menu")
+      return
+    }
     if (clash) slug = `${slug}-${Date.now().toString(36)}`
     const { error } = await supabaseAdmin.from("categories")
       .insert({ id: slug, name: input.name, sort_order: input.sortOrder, emoji: input.emoji })
@@ -232,16 +245,25 @@ export async function saveCategoryImage(categoryId: string, path: string) {
   return data
 }
 
-// Real delete (not archive) — categories carry no order history of their
-// own, only meal_templates.category → categories(id) ON DELETE RESTRICT
-// references them, which Postgres already enforces. This just turns that
-// into a readable message instead of a raw 23503.
-export async function deleteCategory(id: string) {
+// meal_templates.category → categories(id) is ON DELETE RESTRICT, and
+// archived dishes can never be deleted (see archiveDish), so a category
+// whose dishes are all archived can't be deleted either — it's hidden
+// instead (is_active=false; the app only loads active categories).
+// Returns rather than throws: production masks thrown messages.
+export async function deleteCategory(id: string): Promise<{ ok: true; hidden: boolean } | { ok: false; error: string }> {
   await requireAdmin()
-  const { count } = await supabaseAdmin
-    .from("meal_templates").select("*", { count: "exact", head: true }).eq("category", id)
-  if ((count ?? 0) > 0) throw new Error(`${count} dish(es) still use this category. Move or archive them first.`)
-  const { error } = await supabaseAdmin.from("categories").delete().eq("id", id)
-  if (error) throw error
+  const { data: dishes, error: dishErr } = await supabaseAdmin
+    .from("meal_templates").select("name, is_active").eq("category", id)
+  if (dishErr) return { ok: false, error: dishErr.message }
+  const live = (dishes ?? []).filter((d) => d.is_active)
+  if (live.length > 0) {
+    const names = live.slice(0, 3).map((d) => d.name).join(", ") + (live.length > 3 ? ` and ${live.length - 3} more` : "")
+    return { ok: false, error: `Still used by ${names}. Move or archive ${live.length === 1 ? "it" : "them"} first.` }
+  }
+  const { error } = (dishes ?? []).length > 0
+    ? await supabaseAdmin.from("categories").update({ is_active: false }).eq("id", id)
+    : await supabaseAdmin.from("categories").delete().eq("id", id)
+  if (error) return { ok: false, error: error.message }
   revalidatePath("/menu")
+  return { ok: true, hidden: (dishes ?? []).length > 0 }
 }

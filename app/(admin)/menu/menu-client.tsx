@@ -203,7 +203,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
 
   function openCreate() {
     setEditingId(null)
-    setForm({ ...EMPTY_DISH, category: categories[0]?.id ?? "" })
+    setForm({ ...EMPTY_DISH, category: liveCategories[0]?.id ?? "" })
     setPanelOpen(true)
   }
 
@@ -245,18 +245,21 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
 
   async function handleArchive(id: string) {
     try {
-      await archiveDish(id)
+      const res = await archiveDish(id)
+      if (!res.ok) { showToast("error", res.error); return }
       setDishes((prev) => prev.map((d) => d.id === id ? { ...d, isActive: false } : d))
       showToast("success", "Dish archived.")
-    } catch (e) {
-      showToast("error", e instanceof Error ? e.message : "Could not archive.")
+    } catch {
+      showToast("error", "Could not archive.")
     }
   }
 
   async function handleRestore(id: string) {
     try {
       await restoreDish(id)
+      const category = dishes.find((d) => d.id === id)?.category
       setDishes((prev) => prev.map((d) => d.id === id ? { ...d, isActive: true } : d))
+      setCategories((prev) => prev.map((c) => c.id === category ? { ...c, isActive: true } : c))
       showToast("success", "Dish restored.")
     } catch {
       showToast("error", "Could not restore.")
@@ -338,13 +341,20 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
     })
   }
 
-  async function handleDeleteCategory(id: string) {
+  async function handleDeleteCategory(c: Category) {
+    if (!window.confirm(`Delete the ${c.name} category?`)) return
     try {
-      await deleteCategory(id)
-      setCategories((prev) => prev.filter((c) => c.id !== id))
-      showToast("success", "Category deleted.")
-    } catch (e) {
-      showToast("error", e instanceof Error ? e.message : "Could not delete category.")
+      const res = await deleteCategory(c.id)
+      if (!res.ok) { showToast("error", res.error); return }
+      setCategories((prev) => res.hidden
+        ? prev.map((x) => x.id === c.id ? { ...x, isActive: false } : x)
+        : prev.filter((x) => x.id !== c.id))
+      if (categoryFilter === c.id) setCategoryFilter("All")
+      showToast("success", res.hidden
+        ? "Category deleted. Its archived dishes keep their order history."
+        : "Category deleted.")
+    } catch {
+      showToast("error", "Could not delete category.")
     }
   }
 
@@ -367,6 +377,9 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
 
   // ── Derived ──────────────────────────────────────────────────────────
 
+  // Deleted categories that archived dishes still point at stay in state
+  // (for their name), but nowhere to pick from.
+  const liveCategories = useMemo(() => categories.filter((c) => c.isActive), [categories])
   const categoryNames = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories])
   const filtered = useMemo(() => dishes.filter((d) => {
     if (!showArchived && !d.isActive) return false
@@ -387,7 +400,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
           </div>
           <h1 className="text-2xl font-bold text-[#1A1A1A]">Menu</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {dishes.filter((d) => d.isActive).length} active dishes · {categories.length} categories
+            {dishes.filter((d) => d.isActive).length} active dishes · {liveCategories.length} categories
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -415,7 +428,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
         >
           All
         </button>
-        {categories.map((c) => (
+        {liveCategories.map((c) => (
           <button
             key={c.id}
             onClick={() => setCategoryFilter(c.id)}
@@ -512,7 +525,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
                 className="w-full h-9 rounded-lg border border-[#e2e8d5] px-3 text-sm text-[#1A1A1A] bg-white focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 focus:border-[#1B5E20]"
               >
                 <option value="" disabled>Select a category</option>
-                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {categories.filter((c) => c.isActive || c.id === form.category).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
             <Field label="Price (₹) *" hint="This drives the Menu-tab price. An add-on/extra dish in a subscription is still billed at the plan's rate, not this price.">
@@ -645,7 +658,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
           </Section>
 
           <Section title="All categories">
-            {categories.map((c) => (
+            {liveCategories.map((c) => (
               <div key={c.id} className="flex items-center justify-between gap-2 py-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   {c.imageUrl ? <img src={c.imageUrl} alt="" className="w-7 h-7 rounded-full object-cover" /> : <span className="text-lg">{c.emoji ?? "🍽️"}</span>}
@@ -653,7 +666,7 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => openEditCategory(c)} className="p-1.5 rounded-lg text-gray-400 hover:text-[#1B5E20] hover:bg-green-50"><Pencil className="w-3.5 h-3.5" /></button>
-                  <button onClick={() => handleDeleteCategory(c.id)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => handleDeleteCategory(c)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
             ))}
