@@ -716,7 +716,6 @@ function CreateSubModal({
   const [days, setDays] = useState<string[]>(["Mon", "Wed", "Fri"])
   const [mealsLunch, setMealsLunch] = useState(1)
   const [mealsDinner, setMealsDinner] = useState(0)
-  const [deliveryMode, setDeliveryMode] = useState<"opt-in" | "opt-out">("opt-out")
   const [activation, setActivation] = useState<"active" | "cod">("active")
   // First delivery: tomorrow (IST) by default, so a customer moved over today
   // isn't delivered twice by the old process and the app.
@@ -772,7 +771,6 @@ function CreateSubModal({
       days,
       mealsLunch,
       mealsDinner,
-      deliveryMode,
       activation,
       address: line1.trim() ? { label: "Home", type: "home", line1, pincode, landmark } : undefined,
       startDate,
@@ -849,13 +847,6 @@ function CreateSubModal({
 
         <Field label="First delivery date">
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputCls} />
-        </Field>
-
-        <Field label="Delivery mode">
-          <div className="flex gap-2">
-            <RadioPill on={deliveryMode === "opt-out"} onClick={() => setDeliveryMode("opt-out")} label="Opt-out (skip anytime)" />
-            <RadioPill on={deliveryMode === "opt-in"} onClick={() => setDeliveryMode("opt-in")} label="Opt-in" />
-          </div>
         </Field>
 
         <Field label="Delivery address (optional)">

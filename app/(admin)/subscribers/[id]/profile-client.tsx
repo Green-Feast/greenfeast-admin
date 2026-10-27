@@ -53,7 +53,6 @@ type Subscription = {
   pauseUntil: string | null
   specialNotes: string
   createdAt: string
-  deliveryMode: string
   mealsLunch: number
   mealsDinner: number
   // Empty = opt-out (every day, skipped individually from the app). Non-empty
@@ -533,7 +532,6 @@ export function ProfileClient({
 
               <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 pt-1">
                 <InfoRow label="First delivery" value={fmtDate(subscription.startDate)} />
-                <InfoRow label="Delivery mode"  value={subscription.deliveryMode === "opt-in" ? "Opt-in" : "Opt-out"} />
                 <InfoRow label="Wallet balance" value={walletBalance !== null ? fmtRupees(walletBalance) : "—"} />
                 {perDayCost > 0 && <InfoRow label="Default cart/day" value={fmtRupees(perDayCost)} />}
                 {isPaused && (
@@ -1001,7 +999,6 @@ export function ProfileClient({
             addonIds: addons.map((a) => a.id),
             startDate: subscription.startDate,
             mealsLeft: subscription.deliveriesRemaining,
-            deliveryMode: subscription.deliveryMode === "opt-in" ? "opt-in" : "opt-out",
           }}
           plans={catalogue.plans}
           addons={catalogue.addons}

@@ -45,7 +45,7 @@ export async function createSubscription(
   await requireAdminStrict()
   const {
     userId, name, phone, hasPublicRow, planId, days,
-    mealsLunch, mealsDinner, deliveryMode, activation, address,
+    mealsLunch, mealsDinner, activation, address,
     mealsLeft, walletCredit, addonIds, startDate, cashDue, couponId,
   } = input
 
@@ -128,7 +128,9 @@ export async function createSubscription(
       cod_due_paise: due,
       cod_on_credit: isCod && due > 0,
       menu_type: "M1",
-      delivery_mode: deliveryMode,
+      // Every plan runs every chosen day and is skipped day by day — the app
+      // has no opt-in either (delivery_mode is only a label).
+      delivery_mode: "opt-out",
       meals_per_day: mealsLunch + mealsDinner,
       meals_lunch: mealsLunch,
       meals_dinner: mealsDinner,

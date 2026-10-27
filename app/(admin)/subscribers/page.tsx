@@ -23,7 +23,6 @@ export default async function SubscribersPage() {
       end_date,
       meals_lunch,
       meals_dinner,
-      delivery_mode,
       special_notes,
       created_at,
       users!inner ( name, phone, created_at, customer_code, is_test ),
@@ -136,7 +135,6 @@ export default async function SubscribersPage() {
       mealsTotal,
       mealsLunch: s.meals_lunch ?? 0,
       mealsDinner: s.meals_dinner ?? 0,
-      deliveryMode: s.delivery_mode ?? "—",
       walletBalance: walletByUser.get(s.user_id) ?? 0,
       joinedDate: (user as any)?.created_at
         ? new Date((user as any).created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })

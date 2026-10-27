@@ -11,7 +11,6 @@ export type CreateSubInput = {
   days: string[] // ['Mon','Wed','Fri']
   mealsLunch: number
   mealsDinner: number
-  deliveryMode: "opt-in" | "opt-out"
   activation: "active" | "cod"
   // "active" = already paid outside the app (e.g. an existing customer moving
   // over from the spreadsheet): how many meals they still have and how much

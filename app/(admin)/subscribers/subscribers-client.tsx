@@ -34,7 +34,6 @@ export type Subscriber = {
   mealsTotal: number;
   mealsLunch: number;
   mealsDinner: number;
-  deliveryMode: string;
   walletBalance: number;
   joinedDate: string;
   renewalDue: boolean;
@@ -535,7 +534,6 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
     { header: "Dinner Qty", get: (s) => String(s.mealsDinner) },
     { header: "Batch (Lunch)", get: (s) => s.batchLunch },
     { header: "Batch (Dinner)", get: (s) => s.batchDinner },
-    { header: "Delivery Mode", get: (s) => s.deliveryMode },
     { header: "Address", get: (s) => s.address },
     { header: "Dietary / Allergens", get: (s) => s.constraints },
     { header: "Add-ons", get: (s) => s.addons },

@@ -197,7 +197,6 @@ export type PlanInput = {
   addonIds: string[]
   startDate: string | null
   mealsLeft: number
-  deliveryMode: "opt-in" | "opt-out"
 }
 
 export async function updatePlanSettings(subId: string, input: PlanInput): Promise<ActionResult> {
@@ -254,7 +253,6 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
       meals_per_day: after.mealsLunch + after.mealsDinner,
       deliveries_remaining: after.mealsLeft,
       start_date: after.startDate,
-      delivery_mode: input.deliveryMode,
       updated_at: new Date().toISOString(),
     })
     .eq("id", subId)

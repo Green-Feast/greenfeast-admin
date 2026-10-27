@@ -23,7 +23,7 @@ export default async function SubscriberProfilePage({
     .select(`
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, meals_lunch, meals_dinner,
-      special_notes, meals_per_day, delivery_mode, created_at, cod_due_paise, cod_on_credit,
+      special_notes, meals_per_day, created_at, cod_due_paise, cod_on_credit,
       meal_price_paise, coupons ( code ),
       users ( id, name, phone, created_at, customer_code, is_test )
     `)
@@ -168,7 +168,6 @@ export default async function SubscriberProfilePage({
           pauseUntil: sub.pause_until,
           specialNotes: sub.special_notes ?? "",
           createdAt: sub.created_at,
-          deliveryMode: sub.delivery_mode,
           mealsLunch: (sub as any).meals_lunch ?? 1,
           mealsDinner: (sub as any).meals_dinner ?? 0,
           deliveryDays: (schedule ?? []).map((r: any) => r.day_of_week as string),

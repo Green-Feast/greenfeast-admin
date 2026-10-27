@@ -157,7 +157,6 @@ export type PlanFormValue = {
   addonIds: string[]
   startDate: string | null
   mealsLeft: number
-  deliveryMode: "opt-in" | "opt-out"
 }
 
 export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: {
@@ -202,17 +201,9 @@ export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: 
               onChange={(ids) => set("addonIds", ids)}
             />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="First delivery date" hint="Nothing is scheduled before it.">
-              <input type="date" value={v.startDate ?? ""} onChange={(e) => set("startDate", e.target.value || null)} className={inputCls} />
-            </Field>
-            <Field label="Delivery mode">
-              <select value={v.deliveryMode} onChange={(e) => set("deliveryMode", e.target.value as PlanFormValue["deliveryMode"])} className={inputCls}>
-                <option value="opt-out">Opt-out (skip anytime)</option>
-                <option value="opt-in">Opt-in</option>
-              </select>
-            </Field>
-          </div>
+          <Field label="First delivery date" hint="Nothing is scheduled before it.">
+            <input type="date" value={v.startDate ?? ""} onChange={(e) => set("startDate", e.target.value || null)} className={inputCls} />
+          </Field>
           <p className="text-xs text-gray-500 bg-[#F9FBF7] border border-[#e2e8d5] rounded-lg p-3">
             Upcoming meals follow these settings straight away. Days or slots taken off are removed, portions and add-ons
             change, and new days are scheduled. Meals the customer changed for a particular day stay as they set them.
