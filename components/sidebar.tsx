@@ -215,7 +215,7 @@ export function Sidebar({
     <>
       {/* Desktop sidebar */}
       <aside
-        className={`hidden md:flex flex-col min-h-screen bg-[#1B5E20] fixed left-0 top-0 bottom-0 z-30 overflow-y-auto overflow-x-hidden transition-[width] duration-200 ${
+        className={`hidden md:flex flex-col min-h-screen bg-[#1B5E20] fixed left-0 top-0 bottom-0 z-30 overflow-y-auto overflow-x-hidden no-scrollbar transition-[width] duration-200 ${
           collapsed ? "w-16" : "w-60"
         }`}
       >
@@ -249,7 +249,7 @@ export function Sidebar({
             className="absolute inset-0 bg-black/40"
             onClick={() => setMobileOpen(false)}
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-[#1B5E20] flex flex-col overflow-y-auto">
+          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-[#1B5E20] flex flex-col overflow-y-auto no-scrollbar">
             {navContent(false, false)}
           </aside>
         </div>
