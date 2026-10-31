@@ -1,4 +1,6 @@
-import { Sidebar } from "@/components/sidebar";
+import { cookies } from "next/headers";
+import { AdminShell } from "@/components/admin-shell";
+import { SIDEBAR_COOKIE } from "@/lib/sidebar";
 import { requireAdmin } from "@/lib/auth";
 import { getDataMode } from "@/lib/mode";
 import { supabaseAdmin } from "@/lib/supabase-admin";
@@ -33,10 +35,11 @@ export default async function AdminLayout({
   const mode = await getDataMode();
   const [alerts, feedback] = await Promise.all([unseenAlerts(user.id), openFeedback(mode === "test")]);
 
+  const collapsed = (await cookies()).get(SIDEBAR_COOKIE)?.value === "collapsed";
+
   return (
     <div className="min-h-screen bg-[#F9FBF7]">
-      <Sidebar email={user.email ?? ""} mode={mode} alerts={alerts} feedback={feedback} />
-      <main className="md:pl-60">
+      <AdminShell initialCollapsed={collapsed} email={user.email ?? ""} mode={mode} alerts={alerts} feedback={feedback}>
         <div className="pt-14 md:pt-0 min-h-screen">
           {mode === "test" && (
             <div className="sticky top-0 z-20 bg-[#FDD835] text-[#1A1A1A] text-xs font-semibold px-4 py-2 text-center shadow-sm">
@@ -45,7 +48,7 @@ export default async function AdminLayout({
           )}
           {children}
         </div>
-      </main>
+      </AdminShell>
     </div>
   );
 }

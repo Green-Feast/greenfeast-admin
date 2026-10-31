@@ -21,6 +21,8 @@ import {
   BellRing,
   Star,
   TicketPercent,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 import { setDataMode } from "@/app/(admin)/mode-actions";
@@ -41,15 +43,40 @@ const navItems = [
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
-export function Sidebar({ email, mode, alerts = 0, feedback = 0 }: { email: string; mode: "live" | "test"; alerts?: number; feedback?: number }) {
+export function Sidebar({
+  email, mode, alerts = 0, feedback = 0, collapsed = false, onToggle,
+}: {
+  email: string;
+  mode: "live" | "test";
+  alerts?: number;
+  feedback?: number;
+  // Desktop only: icon rail instead of the full sidebar. The mobile drawer is
+  // always full width.
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   const badges: Record<string, number> = { "/alerts": alerts, "/feedback": feedback };
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [switching, startSwitch] = useTransition();
 
   // Live = real customers, Test = test accounts (users.is_test). Every page
-  // filters by this, so it's always visible here.
-  const ModeSwitch = () => (
+  // filters by this, so it's always visible here — collapsed, it's a single
+  // pill showing the current mode that flips to the other one.
+  const modeSwitch = (compact: boolean) => compact ? (
+    <div className="px-2 pt-4">
+      <button
+        disabled={switching}
+        onClick={() => startSwitch(() => setDataMode(mode === "live" ? "test" : "live"))}
+        title={mode === "live" ? "Live data — click to switch to Test" : "Test data — click to switch to Live"}
+        className={`w-full rounded-md py-1.5 text-[10px] font-bold transition-colors ${
+          mode === "live" ? "bg-white text-[#1B5E20]" : "bg-[#FDD835] text-[#1A1A1A]"
+        }`}
+      >
+        {mode === "live" ? "Live" : "Test"}
+      </button>
+    </div>
+  ) : (
     <div className="px-3 pt-4">
       <div className="flex rounded-lg bg-black/20 p-1 text-xs font-semibold">
         {(["live", "test"] as const).map((m) => (
@@ -70,75 +97,129 @@ export function Sidebar({ email, mode, alerts = 0, feedback = 0 }: { email: stri
     </div>
   );
 
-  const NavContent = () => (
+  // `desktop` adds the collapse/expand button (the mobile drawer has its own X).
+  const navContent = (compact: boolean, desktop: boolean) => (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-2 px-5 py-5 border-b border-white/15">
-        <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
-          <Image src="/logo.png" alt="" width={32} height={32} className="w-full h-full object-cover" />
+      {compact ? (
+        <div className="flex flex-col items-center gap-3 px-2 py-5 border-b border-white/15">
+          <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
+            <Image src="/logo.png" alt="GreenFeast" width={32} height={32} className="w-full h-full object-cover" />
+          </div>
+          {desktop && onToggle && (
+            <button
+              onClick={onToggle}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+          )}
         </div>
-        <div className="flex items-baseline gap-1">
-          <span className="text-white font-bold text-lg leading-none tracking-tight">
-            Green
-          </span>
-          <span className="text-[#FDD835] font-bold text-lg leading-none tracking-tight">
-            Feast
-          </span>
+      ) : (
+        <div className="flex items-center gap-2 px-5 py-5 border-b border-white/15">
+          <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0">
+            <Image src="/logo.png" alt="" width={32} height={32} className="w-full h-full object-cover" />
+          </div>
+          <div className="flex items-baseline gap-1">
+            <span className="text-white font-bold text-lg leading-none tracking-tight">
+              Green
+            </span>
+            <span className="text-[#FDD835] font-bold text-lg leading-none tracking-tight">
+              Feast
+            </span>
+          </div>
+          {desktop && onToggle && (
+            <button
+              onClick={onToggle}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="ml-auto -mr-2 p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          )}
         </div>
-      </div>
+      )}
 
-      <ModeSwitch />
+      {modeSwitch(compact)}
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className={`flex-1 py-4 space-y-1 ${compact ? "px-2" : "px-3"}`}>
         {navItems.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
+          const badge = badges[href] ?? 0;
           return (
             <Link
               key={href}
               href={href}
               onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+              title={compact ? (badge > 0 ? `${label} (${badge})` : label) : undefined}
+              className={`relative flex items-center rounded-lg text-sm font-medium transition-all duration-150 ${
+                compact ? "justify-center py-2.5" : "gap-3 px-3 py-2.5"
+              } ${
                 active
                   ? "bg-[#FDD835] text-[#1A1A1A] shadow-sm"
                   : "text-white/80 hover:bg-white/10 hover:text-white"
               }`}
             >
               <Icon className="w-4 h-4 flex-shrink-0" />
-              {label}
-              {(badges[href] ?? 0) > 0 && (
+              {!compact && label}
+              {badge > 0 && (compact ? (
+                <span className="absolute top-1.5 right-2 w-2 h-2 rounded-full bg-red-500 ring-2 ring-[#1B5E20]" />
+              ) : (
                 <span className="ml-auto min-w-5 h-5 px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">
-                  {badges[href] > 99 ? "99+" : badges[href]}
+                  {badge > 99 ? "99+" : badge}
                 </span>
-              )}
+              ))}
             </Link>
           );
         })}
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-white/15 space-y-3">
-        {email && <p className="text-white/60 text-xs truncate">{email}</p>}
-        <form action={logout}>
-          <button
-            type="submit"
-            className="flex items-center gap-2 text-white/70 hover:text-white text-xs font-medium transition-colors"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Log out
-          </button>
-        </form>
-        <p className="text-white/40 text-xs">GreenFeast Admin v1.0</p>
-        <p className="text-white/30 text-xs">Jaipur, Rajasthan</p>
-      </div>
+      {compact ? (
+        <div className="px-2 py-4 border-t border-white/15 flex justify-center">
+          <form action={logout}>
+            <button
+              type="submit"
+              title={email ? `Log out (${email})` : "Log out"}
+              aria-label="Log out"
+              className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
+      ) : (
+        <div className="px-5 py-4 border-t border-white/15 space-y-3">
+          {email && <p className="text-white/60 text-xs truncate">{email}</p>}
+          <form action={logout}>
+            <button
+              type="submit"
+              className="flex items-center gap-2 text-white/70 hover:text-white text-xs font-medium transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Log out
+            </button>
+          </form>
+          <p className="text-white/40 text-xs">GreenFeast Admin v1.0</p>
+          <p className="text-white/30 text-xs">Jaipur, Rajasthan</p>
+        </div>
+      )}
     </>
   );
 
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex flex-col w-60 min-h-screen bg-[#1B5E20] fixed left-0 top-0 bottom-0 z-30">
-        <NavContent />
+      <aside
+        className={`hidden md:flex flex-col min-h-screen bg-[#1B5E20] fixed left-0 top-0 bottom-0 z-30 overflow-y-auto overflow-x-hidden transition-[width] duration-200 ${
+          collapsed ? "w-16" : "w-60"
+        }`}
+      >
+        {navContent(collapsed, true)}
       </aside>
 
       {/* Mobile top bar */}
@@ -168,8 +249,8 @@ export function Sidebar({ email, mode, alerts = 0, feedback = 0 }: { email: stri
             className="absolute inset-0 bg-black/40"
             onClick={() => setMobileOpen(false)}
           />
-          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-[#1B5E20] flex flex-col">
-            <NavContent />
+          <aside className="absolute left-0 top-0 bottom-0 w-60 bg-[#1B5E20] flex flex-col overflow-y-auto">
+            {navContent(false, false)}
           </aside>
         </div>
       )}

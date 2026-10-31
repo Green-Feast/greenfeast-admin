@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useState, useMemo, useEffect, useRef } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef, useTransition } from "react";
 import Link from "next/link";
-import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText, Trash2, ArrowLeft } from "lucide-react";
+import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText, Trash2, ArrowLeft, Pencil } from "lucide-react";
+import { saveNotes } from "@/app/(admin)/subscribers/[id]/actions";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,88 @@ function FilterSelect({
         <option key={o} value={o}>{o}</option>
       ))}
     </select>
+  );
+}
+
+/* ─── Admin notes cell ──────────────────────────────────────────────────────── */
+
+// The same note as the profile's Admin Notes box (subscriptions.special_notes,
+// shown as Note on the Operations sheets), editable in place.
+function NotesCell({ subscriptionId, value, onSaved }: { subscriptionId: string; value: string; onSaved: (notes: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, startSaving] = useTransition();
+
+  function open() {
+    setDraft(value);
+    setError(null);
+    setEditing(true);
+  }
+
+  function save() {
+    const next = draft.trim();
+    if (next === value) return setEditing(false);
+    startSaving(async () => {
+      try {
+        await saveNotes(subscriptionId, next);
+        onSaved(next);
+        setEditing(false);
+      } catch {
+        setError("Couldn't save — try again.");
+      }
+    });
+  }
+
+  if (editing) {
+    return (
+      <div className="w-64 space-y-1.5">
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save();
+          }}
+          rows={3}
+          placeholder="Internal notes, delivery instructions, follow-ups…"
+          className="w-full px-2.5 py-2 text-xs rounded-lg border border-[#1B5E20] bg-white focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30 resize-none placeholder:text-gray-300"
+        />
+        {error && <p className="text-[11px] text-red-600">{error}</p>}
+        <div className="flex gap-1.5">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#1B5E20] text-white hover:bg-[#155116] disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            disabled={saving}
+            className="px-2.5 py-1 text-xs font-medium rounded-md text-gray-500 hover:bg-gray-100"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={open}
+      title={value ? `${value}\n\nClick to edit` : "Add a note"}
+      className="group flex items-start gap-1.5 w-full max-w-[220px] text-left rounded-md -mx-1 px-1 py-0.5 hover:bg-amber-50 transition-colors"
+    >
+      {value ? (
+        <span className="line-clamp-2 text-xs text-amber-800 leading-snug">{value}</span>
+      ) : (
+        <span className="text-xs text-gray-300 group-hover:text-gray-400">+ Add note</span>
+      )}
+      <Pencil className="w-3 h-3 mt-0.5 shrink-0 text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+    </button>
   );
 }
 
@@ -488,6 +571,12 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Subscriber | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Notes saved from the table show (and export) right away.
+  const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
+  const subscribers = useMemo(
+    () => initialSubscribers.map((s) => (s.id in noteEdits ? { ...s, notes: noteEdits[s.id] } : s)),
+    [initialSubscribers, noteEdits]
+  );
 
   const batches = useMemo(() => {
     const seen = new Set<string>();
@@ -502,14 +591,14 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return initialSubscribers.filter((s) => {
+    return subscribers.filter((s) => {
       if (q && !s.name.toLowerCase().includes(q) && !s.phone.includes(q) && !s.code.toLowerCase().includes(q)) return false;
       if (batchFilter !== "All" && s.batchLunch !== batchFilter && s.batchDinner !== batchFilter) return false;
       if (statusFilter !== "All" && s.status !== statusFilter) return false;
       if (planFilter !== "All" && s.plan !== planFilter) return false;
       return true;
     });
-  }, [search, batchFilter, statusFilter, planFilter]);
+  }, [subscribers, search, batchFilter, statusFilter, planFilter]);
 
   // Reset to page 1 on filter change
   useEffect(() => { setPage(1); }, [search, batchFilter, statusFilter, planFilter]);
@@ -675,7 +764,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
-                {["Code", "Name", "Phone", "Lunch Batch", "Dinner Batch", "Plan", "Status", "Meal", "Constraints", "Expiry", "Actions"].map((h) => (
+                {["Code", "Name", "Phone", "Lunch Batch", "Dinner Batch", "Plan", "Status", "Meal", "Constraints", "Admin Notes", "Expiry", "Actions"].map((h) => (
                   <th
                     key={h}
                     className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3 whitespace-nowrap"
@@ -688,7 +777,7 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-gray-400 text-sm">
+                  <td colSpan={12} className="text-center py-12 text-gray-400 text-sm">
                     No subscribers match your filters.
                   </td>
                 </tr>
@@ -735,6 +824,14 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <NotesCell
+                          key={s.id}
+                          subscriptionId={s.id}
+                          value={s.notes}
+                          onSaved={(notes) => setNoteEdits((m) => ({ ...m, [s.id]: notes }))}
+                        />
                       </td>
                       <td className={cn("px-4 py-3 whitespace-nowrap text-sm font-medium", expiryRed ? "text-red-600" : "text-gray-600")}>
                         {formatDate(s.expiry)}
