@@ -108,6 +108,15 @@ export async function archiveDish(id: string): Promise<{ ok: true } | { ok: fals
   return { ok: true }
 }
 
+// One-click Menu / Subscriber tags in the dish table — the same two flags as
+// the editor's "Where this dish appears" toggles.
+export async function setDishVisibility(id: string, field: "menu_visible" | "subscription_valid", value: boolean) {
+  await requireAdmin()
+  const { error } = await supabaseAdmin.from("meal_templates").update({ [field]: value }).eq("id", id)
+  if (error) throw error
+  revalidatePath("/menu")
+}
+
 export async function restoreDish(id: string) {
   await requireAdmin()
   const { data, error } = await supabaseAdmin

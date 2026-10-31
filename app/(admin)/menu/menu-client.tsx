@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/utils"
 import { supabase } from "@/lib/supabase"
 import {
-  upsertDish, archiveDish, restoreDish,
+  upsertDish, archiveDish, restoreDish, setDishVisibility,
   createDishImageUploadUrls, saveDishImage, deleteDishImage,
   upsertCategory, deleteCategory, archiveCategory, restoreCategory, createCategoryImageUploadUrl, saveCategoryImage,
   type DishInput, type CategoryInput,
@@ -251,6 +251,19 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
       showToast("success", "Dish archived.")
     } catch {
       showToast("error", "Could not archive.")
+    }
+  }
+
+  async function handleToggleVisibility(d: Dish, field: "menu_visible" | "subscription_valid") {
+    const key = field === "menu_visible" ? "menuVisible" : "subscriptionValid"
+    const value = !d[key]
+    setDishes((prev) => prev.map((x) => x.id === d.id ? { ...x, [key]: value } : x))
+    try {
+      await setDishVisibility(d.id, field, value)
+      showToast("success", `${d.name}: ${field === "menu_visible" ? "Menu" : "Subscriber"} ${value ? "on" : "off"}.`)
+    } catch {
+      setDishes((prev) => prev.map((x) => x.id === d.id ? { ...x, [key]: !value } : x))
+      showToast("error", "Could not change that. Try again.")
     }
   }
 
@@ -498,12 +511,20 @@ export function MenuClient({ initialDishes, initialCategories }: { initialDishes
                     <td className="px-4 py-3 text-gray-600 whitespace-nowrap">₹{d.priceRupees}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex gap-1.5">
-                        <span className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium", d.menuVisible ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400")}>
-                          {d.menuVisible ? "In menu" : "Hidden"}
-                        </span>
-                        <span className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium", d.subscriptionValid ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-400")}>
-                          {d.subscriptionValid ? "Orderable" : "Takeaway only"}
-                        </span>
+                        <button
+                          onClick={() => handleToggleVisibility(d, "menu_visible")}
+                          title={d.menuVisible ? "Shown in the app's Menu tab — click to hide" : "Hidden from the app's Menu tab — click to show"}
+                          className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors", d.menuVisible ? "bg-green-100 text-green-700 border-green-200 hover:bg-green-200" : "bg-gray-50 text-gray-400 border-gray-200 line-through hover:bg-gray-100")}
+                        >
+                          Menu
+                        </button>
+                        <button
+                          onClick={() => handleToggleVisibility(d, "subscription_valid")}
+                          title={d.subscriptionValid ? "Subscribers can get it in their plan — click to turn off" : "Not in subscriptions (Swiggy/Zomato only) — click to turn on"}
+                          className={cn("px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors", d.subscriptionValid ? "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200" : "bg-gray-50 text-gray-400 border-gray-200 line-through hover:bg-gray-100")}
+                        >
+                          Subscriber
+                        </button>
                       </div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
