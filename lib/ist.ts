@@ -22,6 +22,15 @@ export function addDaysISO(iso: string, n: number): string {
   return d.toISOString().split("T")[0];
 }
 
+// Earlier days are checked for meals never marked delivered (068) over the
+// last 30 days, but not before 2026-11-01: the office left the ones before as
+// they are. Migration 070 starts the 9:30 AM alert from the same day.
+const EARLIER_DAYS_FROM = "2026-11-01";
+export function earlierDaysStart(today: string): string {
+  const d = addDaysISO(today, -30);
+  return d > EARLIER_DAYS_FROM ? d : EARLIER_DAYS_FROM;
+}
+
 // Mirrors src/lib/ist.ts's isSlotLocked() in the mobile app repo exactly —
 // same cutoffs (lunch 8 AM, dinner 1 PM IST, same day). Used here to gate
 // the kitchen/delivery/CRM list downloads and to stamp a PDF

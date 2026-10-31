@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
-import { istToday, addDaysISO } from "@/lib/ist";
+import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
 import { OperationsClient, type OperationsSubscriber, type CashReportRow, type EarlierDay } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
@@ -77,7 +77,7 @@ export default async function OperationsPage({
   const earlierQuery = supabaseAdmin
     .from("orders")
     .select("delivery_date, meal_slot, subscriptions!inner ( users!inner ( is_test ) )")
-    .gte("delivery_date", addDaysISO(istToday(), -30))
+    .gte("delivery_date", earlierDaysStart(istToday()))
     .lt("delivery_date", istToday())
     .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
     .eq("subscriptions.users.is_test", isTest);

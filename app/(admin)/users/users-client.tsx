@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isPlanFinished } from "@/lib/plan-status"
+import { istToday, istHour, addDaysISO, SLOT_CUTOFF_HOUR } from "@/lib/ist"
 import {
   createSubscription, resetUserData, deleteUser, editUserProfile,
   setUserTestFlag, createCustomerAccount, generateCustomerPassword,
@@ -721,12 +722,12 @@ function CreateSubModal({
   const [mealsLunch, setMealsLunch] = useState(1)
   const [mealsDinner, setMealsDinner] = useState(0)
   const [activation, setActivation] = useState<"active" | "cod">("active")
-  // First delivery: tomorrow (IST) by default, so a customer moved over today
-  // isn't delivered twice by the old process and the app.
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date(Date.now() + 5.5 * 3600 * 1000 + 24 * 3600 * 1000)
-    return d.toISOString().slice(0, 10)
-  })
+  // First delivery: the next morning's meals by default — today until the
+  // 8 AM lunch cutoff (a plan set up after midnight starts that same day),
+  // else tomorrow.
+  const [startDate, setStartDate] = useState(() =>
+    istHour() < SLOT_CUTOFF_HOUR.lunch ? istToday() : addDaysISO(istToday(), 1))
+  const startDay = new Date(startDate + "T00:00:00Z")
   const plan = plans.find((p) => p.id === planId)
   const [mealsLeft, setMealsLeft] = useState(plans[0]?.meals_total ?? 1)
   const [addonIds, setAddonIds] = useState<string[]>([])
@@ -851,6 +852,12 @@ function CreateSubModal({
 
         <Field label="First delivery date">
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputCls} />
+          {!Number.isNaN(startDay.getTime()) && (
+            <p className={cn("mt-1 text-xs", startDay.getUTCDay() === 0 ? "text-amber-700" : "text-gray-500")}>
+              {startDay.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" })}
+              {startDay.getUTCDay() === 0 ? " — Sunday is our day off, so meals start on Monday" : ""}
+            </p>
+          )}
         </Field>
 
         <Field label="Delivery address (optional)">

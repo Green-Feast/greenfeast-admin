@@ -3,7 +3,7 @@ import { requireAdmin } from "@/lib/auth"
 import Link from "next/link"
 import { ChevronRight } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { istToday, addDaysISO } from "@/lib/ist"
+import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist"
 import { ProfileClient } from "./profile-client"
 
 export default async function SubscriberProfilePage({
@@ -131,7 +131,7 @@ export default async function SubscriberProfilePage({
       .from("orders")
       .select("id, delivery_date, meal_slot, status, quantity, extra_dish, meal_templates ( name )")
       .eq("subscription_id", id)
-      .gte("delivery_date", addDaysISO(today, -30))
+      .gte("delivery_date", earlierDaysStart(today))
       .lt("delivery_date", today)
       .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
       .order("delivery_date")
