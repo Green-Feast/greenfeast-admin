@@ -723,7 +723,7 @@ function CreateSubModal({
   const [mealsDinner, setMealsDinner] = useState(0)
   const [activation, setActivation] = useState<"active" | "cod">("active")
   // First delivery: the next morning's meals by default — today until the
-  // 8 AM lunch cutoff (a plan set up after midnight starts that same day),
+  // 9 AM lunch cutoff (a plan set up after midnight starts that same day),
   // else tomorrow.
   const [startDate, setStartDate] = useState(() =>
     istHour() < SLOT_CUTOFF_HOUR.lunch ? istToday() : addDaysISO(istToday(), 1))

@@ -178,7 +178,7 @@ export function OrderEditor({
               {ctx.locked && open.length > 0 && (
                 <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-                  <span>Past the {target.slot === "lunch" ? "8 AM" : "1 PM"} cutoff — the kitchen sheet may already be printed. Tell the kitchen about any change.</span>
+                  <span>Past the {target.slot === "lunch" ? "9 AM" : "2 PM"} cutoff — the kitchen sheet may already be printed. Tell the kitchen about any change.</span>
                 </div>
               )}
               {!ctx.onCredit && dayCost > ctx.walletBalance && open.length > 0 && (

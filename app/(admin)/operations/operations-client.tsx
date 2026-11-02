@@ -316,7 +316,7 @@ export function OperationsClient({
   function provisionalNote(slots: MealSlot[]) {
     const open = slots.filter((x) => !isSlotLocked(serverDate, x));
     if (open.length === 0) return null;
-    return `PROVISIONAL — ${open.join(" & ")} can still change (cutoff ${open.map((x) => (x === "lunch" ? "8 AM" : "1 PM")).join(" / ")})`;
+    return `PROVISIONAL — ${open.join(" & ")} can still change (cutoff ${open.map((x) => (x === "lunch" ? "9 AM" : "2 PM")).join(" / ")})`;
   }
 
   // The whole day in one PDF, in the kitchen's daily_lists format: master
@@ -578,7 +578,7 @@ export function OperationsClient({
         <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
           <span className="font-semibold">Provisional</span>
           <span>
-            — {slot} for {displayDate} locks at {slot === "lunch" ? "8:00 AM" : "1:00 PM"}. Menu/order changes are
+            — {slot} for {displayDate} locks at {slot === "lunch" ? "9:00 AM" : "2:00 PM"}. Menu/order changes are
             still possible until then; sheets generated now may not match what's finally cooked.
           </span>
         </div>

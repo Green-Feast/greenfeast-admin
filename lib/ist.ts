@@ -32,13 +32,13 @@ export function earlierDaysStart(today: string): string {
 }
 
 // Mirrors src/lib/ist.ts's isSlotLocked() in the mobile app repo exactly —
-// same cutoffs (lunch 8 AM, dinner 1 PM IST, same day). Used here to gate
+// same cutoffs (lunch 9 AM, dinner 2 PM IST, same day). Used here to gate
 // the kitchen/delivery/CRM list downloads and to stamp a PDF
 // provisional/final, matching what the mobile app and is_slot_locked()
 // (migration 031) already enforce for subscriber-facing edits.
 export const SLOT_CUTOFF_HOUR: Record<"lunch" | "dinner", number> = {
-  lunch: 8,
-  dinner: 13,
+  lunch: 9,
+  dinner: 14,
 };
 
 export function isSlotLocked(dateStr: string, slot: "lunch" | "dinner"): boolean {

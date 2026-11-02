@@ -184,7 +184,7 @@ export async function createSubscription(
 
   // 7. Already paid outside the app (or the cash-on-delivery upfront): record it
   //    and put the money in the wallet. Meals are billed from the wallet at
-  //    delivery and the 8 AM / 1 PM check skips meals it can't cover, so
+  //    delivery and the 9 AM / 2 PM check skips meals it can't cover, so
   //    without this credit every meal of a customer moved over from the
   //    spreadsheet would be skipped (cash-on-delivery plans run on credit).
   const saved = coupon ? (coupon.regular - coupon.mealPrice) * (mealsLeft as number) : 0
@@ -237,6 +237,8 @@ export async function createSubscription(
     [{ user_id: userId, name: who?.name ?? "Customer", phone: who?.phone ?? null }],
     { meals: mealsLeft as number, wallet_note: (walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : "" }
   )
+
+  await supabaseAdmin.rpc("notify_next_meal", { p_sub: sub.id })
 
   revalidatePath("/users")
   return { ok: true }

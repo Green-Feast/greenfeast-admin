@@ -385,6 +385,8 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
     wallet_note: paidPaise > 0 ? ` and ${rupees(paidPaise)} is in your wallet` : "",
   })
 
+  await supabaseAdmin.rpc("notify_next_meal", { p_sub: subId })
+
   revalidatePath(`/subscribers/${subId}`)
   revalidatePath("/dashboard")
   return { ok: true, message: "Plan is live — meals are being scheduled." }
