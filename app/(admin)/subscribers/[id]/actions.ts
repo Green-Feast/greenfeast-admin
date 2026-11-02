@@ -59,8 +59,10 @@ export async function saveNotes(subId: string, notes: string) {
 
 export async function pauseSubscription(subId: string, from: string, until: string) {
   await requireAdmin()
+  // A pause for later leaves the plan active until its first day, when
+  // sync_pauses (076) starts it; the dates alone mark it until then.
   await supabaseAdmin.from("subscriptions")
-    .update({ status: "paused", pause_from: from, pause_until: until })
+    .update({ status: from <= istToday() ? "paused" : "active", pause_from: from, pause_until: until })
     .eq("id", subId)
   const { data: inRange } = await supabaseAdmin.from("orders")
     .select("id, delivery_date, meal_slot")

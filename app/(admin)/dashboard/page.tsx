@@ -373,7 +373,7 @@ export default async function DashboardPage() {
     a.codPending.length + a.notActivated.length + a.noBatch.length + a.couldntDeliver.length + a.cashWithPartners.length +
     a.finishing.length + a.lowWallet.length + a.pendingRefunds + a.stuck;
 
-  const todayLabel = new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const todayLabel = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
   const metricCards = [
     { label: "Active Subscribers", value: String(data.activeCount), icon: Users, iconBg: "bg-emerald-100", iconCls: "text-emerald-700", hint: isTest ? "Test accounts" : "Real customers" },

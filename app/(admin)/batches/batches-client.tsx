@@ -439,7 +439,11 @@ export default function BatchesClient({
 
         <div className="flex-1 p-3 space-y-1.5 overflow-y-auto">
           {slotBatches.map(batch => {
-            const subCount = subs.filter(s => s[batchField] === batch.id).length
+            // The load is addresses with this slot's meals going there; the rest
+            // are parked on the batch and only count once they get a meal.
+            const assigned = subs.filter(s => s[batchField] === batch.id)
+            const subCount = assigned.filter(usedHere).length
+            const standby = assigned.length - subCount
             const TimeIcon = TIME_ICONS[batch.time_window]
             return (
               <div key={batch.id} className="bg-[#F9FBF7] rounded-xl border border-[#e2e8d5] p-3">
@@ -478,7 +482,7 @@ export default function BatchesClient({
                 </div>
                 <div className="mt-2">
                   <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>{subCount} / {BATCH_CAPACITY}</span>
+                    <span>{subCount} / {BATCH_CAPACITY}{standby > 0 && ` · +${standby} on standby`}</span>
                     <span>{Math.min(100, Math.round((subCount / BATCH_CAPACITY) * 100))}%</span>
                   </div>
                   <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">

@@ -268,6 +268,8 @@ export function ProfileClient({
   }
 
   const isPaused      = subscription.status === "paused"
+  // A pause set for later: the plan stays active until its first day (076).
+  const pauseForLater = !isPaused && subscription.status === "active" && !!subscription.pauseFrom
   const isCancelled   = subscription.status === "cancelled"
   const isPendingPlan = subscription.status === "pending"
   const shownStatus   = isPlanFinished(subscription.status, subscription.deliveriesRemaining) ? "finished" : subscription.status
@@ -376,6 +378,14 @@ export function ProfileClient({
                     color="green"
                     disabled={isPending}
                     onClick={() => run(() => resumeSubscription(subscriptionId), "Subscription resumed.")}
+                  />
+                ) : pauseForLater ? (
+                  <ActionBtn
+                    icon={<Play className="w-3.5 h-3.5" />}
+                    label="Cancel pause"
+                    color="green"
+                    disabled={isPending}
+                    onClick={() => run(() => resumeSubscription(subscriptionId), "Pause cancelled.")}
                   />
                 ) : (
                   <ActionBtn
@@ -541,6 +551,12 @@ export function ProfileClient({
                   <>
                     <InfoRow label="Paused from"  value={fmtDate(subscription.pauseFrom)} />
                     <InfoRow label="Paused until" value={fmtDate(subscription.pauseUntil)} highlight />
+                  </>
+                )}
+                {pauseForLater && (
+                  <>
+                    <InfoRow label="Pausing from"  value={fmtDate(subscription.pauseFrom)} highlight />
+                    <InfoRow label="Pausing until" value={fmtDate(subscription.pauseUntil)} />
                   </>
                 )}
               </div>
