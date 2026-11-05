@@ -706,7 +706,7 @@ export function ProfileClient({
 
           {/* Wallet ledger */}
           <Card>
-            <CardHeader title="Wallet History" icon={<Wallet className="w-3.5 h-3.5" />} action={{ label: "Adjust wallet", onClick: () => setModal("wallet") }} />
+            <CardHeader title="Wallet History" icon={<Wallet className="w-3.5 h-3.5" />} />
             <div className="px-5 pb-3 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
               <div>
                 <span className="text-gray-400">Balance </span>
