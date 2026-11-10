@@ -297,7 +297,10 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
   revalidatePath("/kitchen")
   return {
     ok: true,
-    message: `Plan saved. Upcoming meals: ${sync.updated} updated, ${sync.removed} removed` +
+    message: (sync.couponDropped
+      ? `Heads up: the coupon price (₹${(sync.couponDropped / 100).toFixed(2)} a meal) has no price for this plan, so it came off — meals are now ₹${(sync.newRate / 100).toFixed(2)}. `
+      : "") +
+      `Plan saved. Upcoming meals: ${sync.updated} updated, ${sync.removed} removed` +
       (sync.kept ? `, ${sync.kept} the customer changed left as they are` : "") + ".",
   }
 }

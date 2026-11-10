@@ -42,14 +42,14 @@ async function rateOf(planId: string) {
 // coupon (migration 066) keeps the coupon's price for the new plan when the
 // coupon has one; otherwise it goes back to the regular price and the coupon
 // comes off the plan.
-async function mealRates(subscriptionId: string, before: PlanShape, after: PlanShape): Promise<[number, number]> {
+async function mealRates(subscriptionId: string, before: PlanShape, after: PlanShape): Promise<[number, number, number | null]> {
   const [{ data: sub }, oldPlanRate, newPlanRate] = await Promise.all([
     supabaseAdmin.from("subscriptions").select("meal_price_paise, coupon_id").eq("id", subscriptionId).maybeSingle(),
     rateOf(before.planId),
     rateOf(after.planId),
   ]);
   const oldRate = sub?.meal_price_paise || oldPlanRate;
-  if (before.planId === after.planId) return [oldRate, oldRate];
+  if (before.planId === after.planId) return [oldRate, oldRate, null];
   let couponPrice: number | null = null;
   if (sub?.coupon_id) {
     const { data: cp } = await supabaseAdmin
@@ -62,7 +62,10 @@ async function mealRates(subscriptionId: string, before: PlanShape, after: PlanS
       .update({ meal_price_paise: couponPrice, coupon_id: couponPrice ? sub.coupon_id : null })
       .eq("id", subscriptionId);
   }
-  return [oldRate, couponPrice ?? newPlanRate];
+  // A coupon with no price for the new plan comes off: say so (third value =
+  // the coupon meal price that was dropped), so the office can set it right.
+  const dropped = (sub?.meal_price_paise && couponPrice == null) ? sub.meal_price_paise : null;
+  return [oldRate, couponPrice ?? newPlanRate, dropped];
 }
 
 export async function syncUpcomingOrders(subscriptionId: string, before: PlanShape, after: PlanShape) {
@@ -109,7 +112,7 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   }
 
   // 3. Per-meal rate (plan change) and plan add-ons.
-  const [oldRate, newRate] = await mealRates(subscriptionId, before, after);
+  const [oldRate, newRate, couponDropped] = await mealRates(subscriptionId, before, after);
   const addedAddons = after.addonIds.filter((id) => !before.addonIds.includes(id));
   const droppedAddons = before.addonIds.filter((id) => !after.addonIds.includes(id));
   const prices = new Map<string, number>();
@@ -175,5 +178,5 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   // 5. New days / slots / meals from the new settings.
   await instantiateOrders(subscriptionId);
 
-  return { removed: removed.length + trimmed.length, updated: touched.size, kept };
+  return { removed: removed.length + trimmed.length, updated: touched.size, kept, couponDropped, newRate };
 }
