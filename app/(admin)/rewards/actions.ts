@@ -47,7 +47,7 @@ export async function refundToWallet(userId: string, amountPaise: number, reason
 
   await notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() })
 
-  revalidatePath("/money")
+  revalidatePath("/rewards")
   return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
 }
 
@@ -70,17 +70,43 @@ export async function refundToBank(paymentId: string, amountPaise: number, reaso
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok || !body?.ok) {
-    revalidatePath("/money")
+    revalidatePath("/rewards")
     return { ok: false, error: body?.error ?? `Refund failed (${res.status}).` }
   }
 
   await notifyEvent("refund_bank_started", [await recipient(body.user_id)], { amount: rupees(amountPaise) })
 
-  revalidatePath("/money")
+  revalidatePath("/rewards")
   return {
     ok: true,
     message: body.status === "completed"
       ? `${rupees(amountPaise)} refunded to the customer's bank.`
       : `${rupees(amountPaise)} refund sent to Cashfree — it shows as completed once the bank confirms.`,
   }
+}
+
+// ── Gifts (081) ─────────────────────────────────────────────────────────────
+
+// What one meal's worth is for this customer: their live plan's meal price +
+// default add-ons, or the 30-meal plan's meal price with no live plan.
+export async function mealWorth(userId: string): Promise<number | null> {
+  await requireAdmin()
+  const { data, error } = await supabaseAdmin.rpc("meal_worth", { p_user: userId })
+  if (error) return null
+  return (data as number | null) ?? null
+}
+
+// Gift meals: a meal's worth × meals into the wallet, recorded and messaged
+// (template meal_gift) by gift_meals().
+export async function giftMeals(userId: string, meals: number, reason: string): Promise<RefundResult> {
+  const admin = await requireAdminStrict()
+  if (!Number.isInteger(meals) || meals < 1 || meals > 30) return { ok: false, error: "Gift between 1 and 30 meals." }
+  if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
+  const { data, error } = await supabaseAdmin.rpc("gift_meals", {
+    p_user: userId, p_meals: meals, p_reason: reason.trim(), p_admin: admin.email ?? admin.id,
+  })
+  if (error) return { ok: false, error: error.message }
+  revalidatePath("/rewards")
+  const amount = (data as { amount?: number } | null)?.amount ?? 0
+  return { ok: true, message: `${meals} meal${meals === 1 ? "" : "s"} (${rupees(amount)}) added to their wallet — they've been told.` }
 }

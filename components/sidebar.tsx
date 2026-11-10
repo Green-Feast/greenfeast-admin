@@ -21,6 +21,7 @@ import {
   BellRing,
   Star,
   TicketPercent,
+  Gift,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -39,6 +40,7 @@ const navItems = [
   { href: "/batches", label: "Batches", icon: Package },
   { href: "/delivery-partners", label: "Partners", icon: Bike },
   { href: "/money", label: "Money", icon: IndianRupee },
+  { href: "/rewards", label: "Referrals, refunds & gifts", icon: Gift },
   { href: "/coupons", label: "Coupons", icon: TicketPercent },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];

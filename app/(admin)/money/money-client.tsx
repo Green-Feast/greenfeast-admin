@@ -3,10 +3,9 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Wallet, TrendingUp, TrendingDown, AlertCircle, Download, Search, X, IndianRupee, Undo2,
+  Wallet, TrendingUp, TrendingDown, AlertCircle, Download, Search, X, IndianRupee, Gift,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { RefundDialog, type RefundCustomer, type RefundablePayment } from "./refund-dialog";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -48,23 +47,6 @@ export type BalanceRow = {
   updatedAt: string;
 };
 
-export type RefundRow = {
-  id: string;
-  name: string;
-  code: string;
-  kind: "wallet" | "bank";
-  amount: number;
-  reason: string;
-  status: "pending" | "completed" | "failed";
-  failureNote: string | null;
-  createdAt: string;
-};
-
-/* ─── Helpers ────────────────────────────────────────────────────────────── */
-
-function rupees(paise: number) {
-  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
 
 function fmtDateTime(iso: string) {
   return new Date(iso).toLocaleString("en-IN", {
@@ -96,33 +78,27 @@ function downloadCsv(filename: string, headers: string[], rows: string[][]) {
 
 /* ─── Component ──────────────────────────────────────────────────────────── */
 
-type Tab = "payments" | "transactions" | "balances" | "refunds";
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
 
-const REFUND_STATUS_STYLES: Record<string, string> = {
-  completed: "bg-green-100 text-green-700",
-  pending: "bg-yellow-100 text-yellow-700",
-  failed: "bg-red-100 text-red-600",
-};
+function rupees(paise: number) {
+  return `₹${(paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+}
+
+type Tab = "payments" | "transactions" | "balances";
+
 
 export function MoneyClient({
   payments,
   transactions,
   balances,
-  refunds,
-  customers,
-  refundablePayments,
   monthStart,
 }: {
   payments: PaymentRow[];
   transactions: TxRow[];
   balances: BalanceRow[];
-  refunds: RefundRow[];
-  customers: RefundCustomer[];
-  refundablePayments: RefundablePayment[];
   monthStart: string;
 }) {
   const [tab, setTab] = useState<Tab>("transactions");
-  const [showRefund, setShowRefund] = useState(false);
   const [search, setSearch] = useState("");
   const [payStatus, setPayStatus] = useState("All");
   const [txType, setTxType] = useState("All");
@@ -173,9 +149,6 @@ export function MoneyClient({
     return true;
   }), [balances, q]);
 
-  const filteredRefunds = useMemo(() => refunds.filter((r) =>
-    !q || r.name.toLowerCase().includes(q) || r.code.toLowerCase().includes(q) || r.reason.toLowerCase().includes(q)
-  ), [refunds, q]);
 
   const kpis = [
     {
@@ -220,7 +193,6 @@ export function MoneyClient({
     { key: "transactions", label: "Wallet Transactions", count: transactions.length },
     { key: "payments", label: "Payments", count: payments.length },
     { key: "balances", label: "Customer Balances", count: balances.length },
-    { key: "refunds", label: "Refunds", count: refunds.length },
   ];
 
   function exportCurrent() {
@@ -238,13 +210,6 @@ export function MoneyClient({
           fmtDateTime(t.createdAt), t.name, t.type,
           (t.amount / 100).toFixed(2), t.reason, t.referenceId ?? "",
         ]));
-    } else if (tab === "refunds") {
-      downloadCsv("greenfeast-refunds.csv",
-        ["Date", "Customer ID", "Name", "To", "Amount", "Reason", "Status"],
-        filteredRefunds.map((r) => [
-          fmtDateTime(r.createdAt), r.code, r.name, r.kind,
-          (r.amount / 100).toFixed(2), r.reason, r.status,
-        ]));
     } else {
       downloadCsv("greenfeast-wallet-balances.csv",
         ["Name", "Phone", "Balance", "Deliveries Remaining", "Last Activity"],
@@ -258,9 +223,6 @@ export function MoneyClient({
   return (
     <div className="p-6 md:p-8 max-w-6xl">
       {/* Header */}
-      {showRefund && (
-        <RefundDialog customers={customers} payments={refundablePayments} onClose={() => setShowRefund(false)} />
-      )}
 
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
@@ -273,12 +235,12 @@ export function MoneyClient({
           Payments, wallet ledger, and outstanding customer balances
         </p>
         </div>
-        <button
-          onClick={() => setShowRefund(true)}
-          className="h-9 px-4 flex items-center gap-2 rounded-lg bg-[#1B5E20] text-white text-sm font-medium hover:bg-[#0D3F12] transition-colors shrink-0"
+        <Link
+          href="/rewards"
+          className="h-9 px-4 flex items-center gap-2 rounded-lg border border-[#1B5E20] text-[#1B5E20] text-sm font-medium hover:bg-green-50 transition-colors shrink-0"
         >
-          <Undo2 className="w-4 h-4" /> Refund
-        </button>
+          <Gift className="w-4 h-4" /> Refunds &amp; gifts
+        </Link>
       </div>
 
       {/* KPIs */}
@@ -471,42 +433,6 @@ export function MoneyClient({
                     </td>
                     <td className="px-5 py-3 font-mono text-xs text-gray-400 truncate max-w-[180px]" title={p.cfPaymentId ?? p.cfOrderId ?? ""}>
                       {p.cfPaymentId ?? p.cfOrderId ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {tab === "refunds" && (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#e2e8d5] bg-[#F9FBF7]">
-                  {["Date", "Customer", "To", "Amount", "Reason", "Status"].map((h) => (
-                    <th key={h} className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 py-3 whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRefunds.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center py-12 text-gray-400">No refunds yet.</td></tr>
-                ) : filteredRefunds.map((r, i) => (
-                  <tr key={r.id} className={cn("border-b border-[#e2e8d5] last:border-0", i % 2 === 1 && "bg-[#fafcf8]")}>
-                    <td className="px-5 py-3 whitespace-nowrap text-gray-500">{fmtDateTime(r.createdAt)}</td>
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      <p className="font-medium text-[#1A1A1A]">{r.name}</p>
-                      <p className="font-mono text-xs text-gray-400">{r.code}</p>
-                    </td>
-                    <td className="px-5 py-3 whitespace-nowrap text-gray-600">{r.kind === "bank" ? "Bank / UPI" : "Wallet"}</td>
-                    <td className="px-5 py-3 font-semibold text-[#1A1A1A] whitespace-nowrap">{rupees(r.amount)}</td>
-                    <td className="px-5 py-3 text-gray-600 max-w-[280px] truncate" title={r.reason}>{r.reason}</td>
-                    <td className="px-5 py-3">
-                      <span
-                        className={cn("px-2 py-0.5 rounded-full text-xs font-medium capitalize", REFUND_STATUS_STYLES[r.status] ?? "bg-gray-100 text-gray-600")}
-                        title={r.failureNote ?? undefined}
-                      >
-                        {r.status}
-                      </span>
                     </td>
                   </tr>
                 ))}

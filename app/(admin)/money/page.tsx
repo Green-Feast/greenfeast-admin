@@ -2,30 +2,13 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
 import { istToday } from "@/lib/ist";
-import { MoneyClient, type PaymentRow, type TxRow, type BalanceRow, type RefundRow } from "./money-client";
-import type { RefundCustomer, RefundablePayment } from "./refund-dialog";
+import { MoneyClient, type PaymentRow, type TxRow, type BalanceRow } from "./money-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function MoneyPage() {
   await requireAdmin()
   const isTest = await isTestMode()
-
-  // Settle pending bank refunds by asking Cashfree (refund events aren't
-  // available on our webhook settings). Only when one is actually pending —
-  // calling the edge function on every load cost a second or more.
-  const { count: pendingBank } = await supabaseAdmin
-    .from("refunds").select("id", { count: "exact", head: true }).eq("kind", "bank").eq("status", "pending");
-  if (pendingBank) await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/admin-refund`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
-      apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ action: "sync" }),
-    signal: AbortSignal.timeout(6000),
-  }).catch(() => {});
 
   const today = istToday();
   const monthStart = today.slice(0, 8) + "01";
@@ -35,8 +18,6 @@ export default async function MoneyPage() {
     { data: txRows },
     { data: walletRows },
     { data: subRows },
-    { data: refundRows },
-    { data: userRows },
   ] = await Promise.all([
     supabaseAdmin
       .from("payments")
@@ -61,14 +42,6 @@ export default async function MoneyPage() {
       .from("subscriptions")
       .select("user_id, deliveries_remaining, plan_name, status")
       .in("status", ["active", "paused", "pending"]),
-    supabaseAdmin
-      .from("refunds")
-      .select("id, user_id, payment_id, kind, amount, reason, status, failure_note, created_at, users!inner ( name, customer_code, is_test )")
-      .eq("users.is_test", isTest)
-      .order("created_at", { ascending: false })
-      .limit(300),
-    // Everyone, for the refund dialog's customer picker.
-    supabaseAdmin.from("users").select("id, name, phone, customer_code").eq("is_test", isTest).order("customer_code"),
   ]);
 
   const payments: PaymentRow[] = (paymentRows ?? []).map((p: any) => {
@@ -124,57 +97,11 @@ export default async function MoneyPage() {
     };
   });
 
-  const refunds: RefundRow[] = (refundRows ?? []).map((r: any) => {
-    const u = Array.isArray(r.users) ? r.users[0] : r.users;
-    return {
-      id: r.id,
-      name: u?.name ?? "Unknown",
-      code: u?.customer_code ?? "",
-      kind: r.kind,
-      amount: r.amount,
-      reason: r.reason,
-      status: r.status,
-      failureNote: r.failure_note ?? null,
-      createdAt: r.created_at,
-    };
-  });
-
-  // What's still refundable to the bank on each paid Cashfree payment.
-  const bankRefunded = new Map<string, number>();
-  for (const r of (refundRows ?? []) as any[]) {
-    if (r.kind === "bank" && r.payment_id && r.status !== "failed") {
-      bankRefunded.set(r.payment_id, (bankRefunded.get(r.payment_id) ?? 0) + r.amount);
-    }
-  }
-  const refundablePayments: RefundablePayment[] = payments
-    .filter((p) => p.status === "paid" && p.cfOrderId && p.cfPaymentId)
-    .map((p) => ({
-      id: p.id,
-      userId: p.userId,
-      amount: p.amount,
-      refundable: p.amount - (bankRefunded.get(p.id) ?? 0),
-      kind: p.kind,
-      createdAt: p.createdAt,
-      cfPaymentId: p.cfPaymentId,
-    }));
-
-  const balanceByUser = new Map(balances.map((b) => [b.userId, b.balance]));
-  const customers: RefundCustomer[] = (userRows ?? []).map((u: any) => ({
-    id: u.id,
-    name: u.name ?? "Unnamed",
-    phone: u.phone ?? "",
-    code: u.customer_code ?? "",
-    balance: balanceByUser.get(u.id) ?? 0,
-  }));
-
   return (
     <MoneyClient
       payments={payments}
       transactions={transactions}
       balances={balances}
-      refunds={refunds}
-      customers={customers}
-      refundablePayments={refundablePayments}
       monthStart={monthStart}
     />
   );
