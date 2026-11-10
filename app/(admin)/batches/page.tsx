@@ -75,6 +75,8 @@ export default async function BatchesPage() {
           .select("address_id, meal_slot")
           .in("user_id", userIds)
           .gte("delivery_date", today)
+          // Pickups / dine-ins (082) don't go to an address.
+          .eq("fulfilment", "delivery")
           .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"]),
       ])
     : [{ data: [] as any[] }, { data: [] as any[] }]

@@ -22,6 +22,7 @@ import {
   Star,
   TicketPercent,
   Gift,
+  Store,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -35,6 +36,7 @@ const navItems = [
   { href: "/users", label: "Users", icon: UserCog },
   { href: "/subscribers", label: "Subscribers", icon: Users },
   { href: "/operations", label: "Operations", icon: Truck },
+  { href: "/counter", label: "Counter", icon: Store },
   { href: "/menu", label: "Menu", icon: UtensilsCrossed },
   { href: "/kitchen", label: "Kitchen", icon: ChefHat },
   { href: "/batches", label: "Batches", icon: Package },

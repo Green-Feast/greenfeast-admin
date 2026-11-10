@@ -71,6 +71,7 @@ function phone10(p: string) {
 }
 
 function sectionTitle(batch: string) {
+  if (/^pickup/i.test(batch.trim())) return batch.trim()
   return /batch$/i.test(batch.trim()) ? batch.trim() : `${batch.trim()} Batch`
 }
 

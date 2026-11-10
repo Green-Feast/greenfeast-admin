@@ -31,6 +31,10 @@ export type OperationsSubscriber = {
   quantity: number;
   codDue: number;
   batchId: string | null;
+  // Pickup / dine-in (082): no batch, handed over at the Counter; cooksOwn =
+  // cooked at that place, so not on the main kitchen sheet.
+  pickup: boolean;
+  cooksOwn: boolean;
   status: string;
   mealSlot: MealSlot;
   batch: string;
@@ -186,7 +190,7 @@ export function OperationsClient({
     a === "Unassigned" ? -1 : b === "Unassigned" ? 1 : a.localeCompare(b)
   );
   const totalDeliveries = slotSubs.length;
-  const unassigned = slotSubs.filter((s) => !s.batchId && s.status !== "delivered").length;
+  const unassigned = slotSubs.filter((s) => !s.batchId && !s.pickup && s.status !== "delivered").length;
   const slotBatches = batches.filter((b) => b.meal_slot === slot);
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const earlierTotal = earlier.reduce((n, day) => n + day.lunch + day.dinner, 0);
@@ -334,7 +338,8 @@ export function OperationsClient({
   async function handleGenerateKitchen() {
     setLoading((l) => ({ ...l, kitchen: { ...l.kitchen, standalone: true } }));
     try {
-      generateKitchenSheets(initialSubscribers, serverDate, slot, provisionalNote([slot]));
+      // Places that cook their own pickups (the QSR) aren't on this kitchen's sheet.
+      generateKitchenSheets(initialSubscribers.filter((s) => !s.cooksOwn), serverDate, slot, provisionalNote([slot]));
       showToast("Kitchen sheets downloaded");
     } finally {
       setLoading((l) => ({ ...l, kitchen: { ...l.kitchen, standalone: false } }));
@@ -627,6 +632,7 @@ export function OperationsClient({
           const batchSubs = slotSubs.filter((s) => s.batch === batch);
           const colors = getBatchColors(batch);
           const batchId = batchSubs.find((s) => s.batchId)?.batchId ?? null;
+          const isPickup = batchSubs.some((s) => s.pickup);
           const counts = statusCounts(batchSubs);
           const allDelivered = batchSubs.length > 0 && counts.delivered === batchSubs.length;
           const stage = batchCurrentStage(counts);
@@ -652,7 +658,11 @@ export function OperationsClient({
                   {counts.delivered > 0 && <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700">{counts.delivered} delivered</span>}
                 </div>
 
-                {batchId ? (
+                {isPickup ? (
+                  <p className="text-xs text-gray-500 text-center py-1.5">
+                    Handed over at the <a href="/counter" className="font-medium text-[#1B5E20] hover:underline">Counter</a> with the customer&apos;s code.
+                  </p>
+                ) : batchId ? (
                   allDelivered ? (
                     <div className="flex items-center justify-center gap-1.5 py-2 text-sm font-medium text-[#1B5E20] bg-green-50 rounded-lg">
                       <CheckCircle2 className="w-4 h-4" /> All delivered
@@ -705,7 +715,7 @@ export function OperationsClient({
                           {s.quantity > 1 && <span className="ml-1 text-xs font-semibold text-[#1B5E20]">×{s.quantity}</span>}
                         </p>
                         <p className="text-xs text-gray-400 truncate"><span className="font-medium text-gray-500">{s.addressLabel}</span> · {s.address}</p>
-                        {!s.batchId && s.addressId && (
+                        {!s.batchId && !s.pickup && s.addressId && (
                           <select
                             defaultValue=""
                             disabled={busyRow === s.orderId}

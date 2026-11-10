@@ -36,6 +36,10 @@ export default async function OperationsPage({
       quantity,
       extra_dish,
       address_id,
+      fulfilment,
+      walk_in,
+      pickup_code,
+      pickup_locations ( name, cooks_own ),
       out_for_delivery_at,
       delivered_at,
       delivery_issue,
@@ -143,9 +147,15 @@ export default async function OperationsPage({
     const addons = (o.order_addons ?? []) as { kind: string; quantity: number | null; unit_price: number | null; addons: { name: string } | { name: string }[] | null }[];
     const qty = ((o as any).quantity ?? 1) as number;
 
-    const batchName: string = (batch as any)?.name ?? "Unassigned";
+    // Pickup / dine-in (082): no batch — grouped by place, handed over at the Counter.
+    const fulfilment = ((o as any).fulfilment ?? "delivery") as string;
+    const pickup = fulfilment !== "delivery";
+    const placeRow = Array.isArray((o as any).pickup_locations) ? (o as any).pickup_locations[0] : (o as any).pickup_locations;
+    const batchName: string = pickup ? `Pickup — ${placeRow?.name ?? "counter"}` : (batch as any)?.name ?? "Unassigned";
     // Jaipur is implied on the sheets — street address and landmark.
-    const address = addr ? [(addr as any).line1, (addr as any).landmark].filter(Boolean).join(", ") : "—";
+    const address = pickup
+      ? `${(o as any).walk_in ? "Walk-in" : "Booked"} · code ${(o as any).pickup_code ?? "—"}`
+      : addr ? [(addr as any).line1, (addr as any).landmark].filter(Boolean).join(", ") : "—";
 
     // Everything the customer told us (app or admin → Food preferences), in
     // the kitchen's own wording. Allergies / vegan / no paneer print in red.
@@ -176,7 +186,9 @@ export default async function OperationsPage({
       orderId: o.id as string,
       subscriptionId: (sub as any)?.id as string,
       addressId: ((o as any).address_id ?? null) as string | null,
-      addressLabel: addr ? ((addr as any).label || (addr as any).type || "Address") : "No address",
+      addressLabel: pickup ? (fulfilment === "dine_in" ? "Dine-in" : "Takeaway") : addr ? ((addr as any).label || (addr as any).type || "Address") : "No address",
+      pickup,
+      cooksOwn: pickup && !!placeRow?.cooks_own,
       quantity: qty,
       codDue: ((sub as any)?.cod_due_paise ?? 0) as number,
       batchId: ((batch as any)?.id ?? null) as string | null,
