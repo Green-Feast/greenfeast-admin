@@ -119,13 +119,13 @@ export default async function KitchenPage({
   if (userIds.length) {
     const { data: rules } = await supabaseAdmin
       .from("customer_meal_rules")
-      .select("user_id, meal_slot, day_of_week, meal_templates ( name )")
+      .select("user_id, meal_slot, day_of_week, set_by, meal_templates ( name )")
       .in("user_id", userIds)
     const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     for (const row of subMap.values()) {
       row.fixed = ((rules ?? []) as any[])
         .filter((r) => r.user_id === row.userId)
-        .map((r) => `${r.meal_slot === "lunch" ? "L" : "D"}${r.day_of_week === null ? "" : ` ${DAY[r.day_of_week]}`}: ${(Array.isArray(r.meal_templates) ? r.meal_templates[0] : r.meal_templates)?.name ?? "?"}`)
+        .map((r) => `${r.meal_slot === "lunch" ? "L" : "D"}${r.day_of_week === null ? "" : ` ${DAY[r.day_of_week]}`}: ${(Array.isArray(r.meal_templates) ? r.meal_templates[0] : r.meal_templates)?.name ?? "?"}${r.set_by === "customer" ? " (their pick)" : ""}`)
     }
   }
 

@@ -242,7 +242,7 @@ export async function adminSetOrderDish(orderId: string, mealTemplateId: string)
   if (typeof order === "string") return { ok: false, error: order }
   const { error } = await supabaseAdmin
     .from("orders")
-    .update({ meal_template_id: mealTemplateId, is_customized: true, updated_at: new Date().toISOString() })
+    .update({ meal_template_id: mealTemplateId, is_customized: true, cart_edited: true, updated_at: new Date().toISOString() })
     .eq("id", orderId)
   if (error) return { ok: false, error: error.message }
   await supabaseAdmin.from("order_addons").delete().eq("order_id", orderId).eq("kind", "fee")
@@ -260,7 +260,7 @@ export async function adminSetOrderQuantity(orderId: string, quantity: number): 
   const order = await editableOrder(orderId)
   if (typeof order === "string") return { ok: false, error: order }
   const { error } = await supabaseAdmin
-    .from("orders").update({ quantity, updated_at: new Date().toISOString() }).eq("id", orderId)
+    .from("orders").update({ quantity, cart_edited: true, updated_at: new Date().toISOString() }).eq("id", orderId)
   if (error) return { ok: false, error: error.message }
   await recompute(orderId)
   refresh(order.subscription_id)
@@ -327,6 +327,8 @@ export async function adminSetAddonQty(orderId: string, addonId: string, quantit
     if (error) return { ok: false, error: error.message }
   }
 
+  // Changed by hand: the customer's plan-default changes leave this day alone (080).
+  await supabaseAdmin.from("orders").update({ cart_edited: true }).eq("id", orderId)
   await recompute(orderId)
   refresh(order.subscription_id)
   return { ok: true }
@@ -550,8 +552,11 @@ export async function setFixedDish(
   let del = supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot)
   del = dayOfWeek === null ? del.is("day_of_week", null) : del.eq("day_of_week", dayOfWeek)
   await del
+  // The office's dish wins: the customer's own picks for this slot go (080),
+  // and the app shows the slot as set by GreenFeast while this rule exists.
+  await supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot).eq("set_by", "customer")
   const { error } = await supabaseAdmin.from("customer_meal_rules").insert({
-    user_id: userId, meal_slot: slot, day_of_week: dayOfWeek, meal_template_id: mealTemplateId, created_by: admin.email,
+    user_id: userId, meal_slot: slot, day_of_week: dayOfWeek, meal_template_id: mealTemplateId, created_by: admin.email, set_by: "admin",
   })
   if (error) return { ok: false, error: error.message }
 

@@ -104,7 +104,7 @@ export default async function SubscriberProfilePage({
       .order("slot_seq"),
     supabaseAdmin
       .from("customer_meal_rules")
-      .select("id, meal_slot, day_of_week, meal_template_id, meal_templates ( name )")
+      .select("id, meal_slot, day_of_week, meal_template_id, set_by, meal_templates ( name )")
       .eq("user_id", userId)
       .order("meal_slot"),
     supabaseAdmin
@@ -242,6 +242,7 @@ export default async function SubscriberProfilePage({
           slot: r.meal_slot as "lunch" | "dinner",
           dayOfWeek: r.day_of_week as number | null,
           mealName: (Array.isArray(r.meal_templates) ? r.meal_templates[0] : r.meal_templates)?.name ?? r.meal_template_id,
+          setBy: (r.set_by ?? "admin") as "admin" | "customer",
         }))}
         catalogue={{
           meals: (meals ?? []) as { id: string; name: string; category: string }[],

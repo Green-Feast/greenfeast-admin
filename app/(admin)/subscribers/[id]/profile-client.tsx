@@ -93,7 +93,7 @@ type Upcoming = {
   addons: string[]
 }
 
-type Rule = { id: string; slot: "lunch" | "dinner"; dayOfWeek: number | null; mealName: string }
+type Rule = { id: string; slot: "lunch" | "dinner"; dayOfWeek: number | null; mealName: string; setBy: "admin" | "customer" }
 
 type Catalogue = {
   meals: { id: string; name: string; category: string }[]
@@ -607,6 +607,7 @@ export function ProfileClient({
                   <span key={r.id} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#E8F5E9] text-[#1B5E20] text-xs">
                     <Pin className="w-3 h-3" />
                     {r.slot === "lunch" ? "Lunch" : "Dinner"} {r.dayOfWeek === null ? "every day" : `on ${DAY_NAMES[r.dayOfWeek]}`}: <b>{r.mealName}</b>
+                    {r.setBy === "customer" && <span className="text-[#1B5E20]/60">(their pick)</span>}
                     <button
                       disabled={isPending}
                       title="Remove (upcoming meals go back to the weekly menu)"
