@@ -183,8 +183,8 @@ export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: 
                 ))}
               </select>
             </Field>
-            <Field label="Meals left" hint="What the plan still owes them.">
-              <input type="number" min={0} value={v.mealsLeft} onChange={(e) => set("mealsLeft", Math.max(0, parseInt(e.target.value || "0", 10)))} className={inputCls} />
+            <Field label="Meals left" hint="Follows their wallet — use Add meals to give more.">
+              <p className="px-3 py-2 text-sm text-gray-600">about {v.mealsLeft}</p>
             </Field>
           </div>
           <Field label="Delivery days">

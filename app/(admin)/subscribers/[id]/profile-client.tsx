@@ -398,7 +398,7 @@ export function ProfileClient({
                 )}
                 <ActionBtn
                   icon={<Plus className="w-3.5 h-3.5" />}
-                  label="Extend"
+                  label="Add meals"
                   color="blue"
                   disabled={isPending}
                   onClick={() => setModal("extend")}
@@ -492,8 +492,8 @@ export function ProfileClient({
                   )}
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="text-2xl font-bold text-[#1B5E20]">{subscription.deliveriesRemaining}</p>
-                  <p className="text-xs text-gray-400">meals left</p>
+                  <p className="text-2xl font-bold text-[#1B5E20]">≈ {subscription.deliveriesRemaining}</p>
+                  <p className="text-xs text-gray-400">meals left (from wallet)</p>
                 </div>
               </div>
 
@@ -957,23 +957,25 @@ export function ProfileClient({
 
       {modal === "extend" && (
         <ModalOverlay onClose={() => setModal(null)}>
-          <ModalCard title="Extend plan" onClose={() => setModal(null)}>
+          <ModalCard title="Add meals" onClose={() => setModal(null)}>
             <div className="space-y-4">
               <Field label="Meals to add">
                 <input type="number" min={1} max={90} value={extendMeals} onChange={(e) => setExtendMeals(Number(e.target.value))} className={inputCls} />
               </Field>
               <p className="text-sm text-gray-500">
-                Current: <strong>{subscription.deliveriesRemaining}</strong> → New total:{" "}
-                <strong>{subscription.deliveriesRemaining + extendMeals}</strong>
+                Adds {extendMeals} default meal{extendMeals === 1 ? "" : "s"}&apos; worth of money to their wallet
+                (their plan&apos;s meal price plus default add-ons). Meals left goes from about{" "}
+                <strong>{subscription.deliveriesRemaining}</strong> to about{" "}
+                <strong>{subscription.deliveriesRemaining + extendMeals}</strong>.
               </p>
             </div>
             <ModalFooter>
               <GhostBtn onClick={() => setModal(null)}>Cancel</GhostBtn>
               <PrimaryBtn
                 disabled={extendMeals < 1 || isPending}
-                onClick={() => run(() => extendSubscription(subscriptionId, extendMeals), `Added ${extendMeals} meals.`, () => setModal(null))}
+                onClick={() => run(() => extendSubscription(subscriptionId, extendMeals), `Added ${extendMeals} meals' worth to the wallet.`, () => setModal(null))}
               >
-                Confirm Extension
+                Add meals
               </PrimaryBtn>
             </ModalFooter>
           </ModalCard>

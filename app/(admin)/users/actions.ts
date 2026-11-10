@@ -231,11 +231,13 @@ export async function createSubscription(
   await instantiateOrders(sub.id)
 
   const { data: who } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
+  // Meals left follows the wallet + cash due (079), not the number typed in.
+  const { data: live } = await supabaseAdmin.from("subscriptions").select("deliveries_remaining").eq("id", sub.id).single()
   const rupees = `₹${((walletCredit as number) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
   await notifyEvent(
     "plan_ready",
     [{ user_id: userId, name: who?.name ?? "Customer", phone: who?.phone ?? null }],
-    { meals: mealsLeft as number, wallet_note: (walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : "" }
+    { meals: live?.deliveries_remaining ?? (mealsLeft as number), wallet_note: (walletCredit as number) > 0 ? ` and ${rupees} is in your wallet` : "" }
   )
 
   await supabaseAdmin.rpc("notify_next_meal", { p_sub: sub.id })
@@ -332,17 +334,6 @@ export async function cancelSub(subId: string) {
   await supabaseAdmin.from("orders").update({ status: "cancelled" })
     .eq("subscription_id", subId)
     .in("status", ["scheduled", "confirmed"])
-  revalidatePath("/users")
-}
-
-export async function extendSub(subId: string, meals: number) {
-  await requireAdminStrict()
-  const { data } = await supabaseAdmin
-    .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
-  if (!data) return
-  await supabaseAdmin.from("subscriptions")
-    .update({ deliveries_remaining: data.deliveries_remaining + meals })
-    .eq("id", subId)
   revalidatePath("/users")
 }
 

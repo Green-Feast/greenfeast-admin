@@ -119,14 +119,23 @@ export async function cancelSubscription(subId: string) {
   revalidatePath(`/subscribers/${subId}`)
 }
 
+// The wallet is the plan (079): adding meals means adding that many default
+// meals' worth of money (meals left follows the wallet).
 export async function extendSubscription(subId: string, meals: number) {
   await requireAdminStrict()
-  const { data } = await supabaseAdmin
-    .from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
-  if (!data) return
-  await supabaseAdmin.from("subscriptions")
-    .update({ deliveries_remaining: data.deliveries_remaining + meals })
-    .eq("id", subId)
+  if (!Number.isInteger(meals) || meals < 1 || meals > 90) throw new Error("Add between 1 and 90 meals.")
+  const { data: sub } = await supabaseAdmin
+    .from("subscriptions").select("user_id").eq("id", subId).single()
+  if (!sub) throw new Error("Subscription not found.")
+  const { data: cost, error: costErr } = await supabaseAdmin.rpc("default_meal_cost", { p_sub: subId })
+  if (costErr || !cost) throw new Error(`Could not price a meal: ${costErr?.message ?? "no price"}`)
+  const { error } = await supabaseAdmin.rpc("wallet_credit", {
+    p_user: sub.user_id,
+    p_amount: meals * cost,
+    p_reason: `${meals} meal${meals === 1 ? "" : "s"} added by GreenFeast`,
+    p_reference_id: `addmeals_${randomUUID()}`,
+  })
+  if (error) throw new Error(`Wallet credit failed: ${error.message}`)
   await instantiateOrders(subId)
   revalidatePath(`/subscribers/${subId}`)
 }
@@ -342,21 +351,15 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
   const plan = one((sub as any).plans) as { meals_total: number; base_price: number } | null
   if (!plan) return { ok: false, error: "Plan not found." }
 
-  // One live plan per customer (049): close the previous one first. A plan
-  // this one renews early passes on its meals (carried_meals, 069) — same as
-  // the payment webhook.
+  // One live plan per customer (049): close the previous one first; it hands
+  // over its meals still to come (079) — same as the payment webhook.
   await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
-  const { data: carry } = await supabaseAdmin.from("subscriptions").select("carried_meals").eq("id", subId).single()
 
-  const { data: delivered } = await supabaseAdmin
-    .from("orders").select("quantity").eq("subscription_id", subId).eq("status", "delivered")
-  const used = ((delivered as { quantity: number | null }[]) ?? []).reduce((s, o) => s + (o.quantity ?? 1), 0)
-
+  // Meals left is set by the database from the wallet + cash due (079).
   const { error: actErr } = await supabaseAdmin
     .from("subscriptions")
     .update({
       status: "active",
-      deliveries_remaining: Math.max(plan.meals_total - used, 0) + (carry?.carried_meals ?? 0),
       payment_method: cashDuePaise > 0 ? "cod" : sub.payment_method,
       cod_due_paise: cashDuePaise,
       cod_on_credit: cashDuePaise > 0,
@@ -382,8 +385,9 @@ export async function activatePendingPlan(subId: string, paidPaise: number, cash
   }
 
   await instantiateOrders(subId)
+  const { data: live } = await supabaseAdmin.from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
   await notifyEvent("plan_ready", [await recipient(sub.user_id)], {
-    meals: Math.max(plan.meals_total - used, 0) + (carry?.carried_meals ?? 0),
+    meals: live?.deliveries_remaining ?? plan.meals_total,
     wallet_note: paidPaise > 0 ? ` and ${rupees(paidPaise)} is in your wallet` : "",
   })
 
