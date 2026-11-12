@@ -147,11 +147,11 @@ export default async function OperationsPage({
     const addons = (o.order_addons ?? []) as { kind: string; quantity: number | null; unit_price: number | null; addons: { name: string } | { name: string }[] | null }[];
     const qty = ((o as any).quantity ?? 1) as number;
 
-    // Pickup / dine-in (082): no batch — grouped by place, handed over at the Counter.
+    // Walk-ins (082, 087): no batch — grouped by place, handed over at the Counter.
     const fulfilment = ((o as any).fulfilment ?? "delivery") as string;
     const pickup = fulfilment !== "delivery";
     const placeRow = Array.isArray((o as any).pickup_locations) ? (o as any).pickup_locations[0] : (o as any).pickup_locations;
-    const batchName: string = pickup ? `Pickup — ${placeRow?.name ?? "counter"}` : (batch as any)?.name ?? "Unassigned";
+    const batchName: string = pickup ? `Walk-in — ${placeRow?.name ?? "counter"}` : (batch as any)?.name ?? "Unassigned";
     // Jaipur is implied on the sheets — street address and landmark.
     const address = pickup
       ? `${(o as any).walk_in ? "Walk-in" : "Booked"} · code ${(o as any).pickup_code ?? "—"}`

@@ -6,7 +6,7 @@ import { CounterClient, type CounterOrder, type Place } from "./counter-client"
 
 export const dynamic = "force-dynamic"
 
-// Counter (082): today's pickups and dine-ins at one place — what to cook
+// Counter (082, 087): today's walk-ins at one place — what to cook
 // (places that cook their own), codes to hand over, and who didn't come.
 export default async function CounterPage({
   searchParams,

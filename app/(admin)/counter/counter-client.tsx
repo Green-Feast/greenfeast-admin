@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { Store, ChefHat, CheckCircle2, AlertCircle, Loader2, Settings, X, Footprints, ShoppingBag, UtensilsCrossed } from "lucide-react"
+import { Store, ChefHat, CheckCircle2, AlertCircle, Loader2, Settings, X, Footprints, UtensilsCrossed } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { handOver, savePlace, type PlaceInput } from "./actions"
 
@@ -77,7 +77,6 @@ export function CounterClient({ places, place, slot, orders, today }: {
   }
 
   const slotOrders = orders.filter((o) => o.slot === slot)
-  const toCollect = slotOrders.filter((o) => OPEN.includes(o.status) && !o.walkIn)
   const walkIns = slotOrders.filter((o) => OPEN.includes(o.status) && o.walkIn)
   const collected = slotOrders.filter((o) => o.status === "delivered" && !o.missed)
   const missed = slotOrders.filter((o) => o.missed || o.skipReason === "walk_in_expired")
@@ -120,7 +119,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Store className="w-4 h-4 text-[#1B5E20]" />
-            <span className="text-xs font-medium text-[#1B5E20] uppercase tracking-wider">Pickup &amp; dine-in</span>
+            <span className="text-xs font-medium text-[#1B5E20] uppercase tracking-wider">Walk-in</span>
           </div>
           <h1 className="text-2xl font-bold text-[#1A1A1A]">Counter</h1>
           <p className="text-sm text-gray-500 mt-0.5">
@@ -174,7 +173,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
                   {match.addons.length > 0 && ` + ${match.addons.map((a) => (a.qty > 1 ? `${a.name} ×${a.qty}` : a.name)).join(", ")}`}
                 </p>
                 <p className="text-xs text-gray-500 mt-1 capitalize">
-                  {match.slot} · {match.mode === "dine_in" ? "dine-in" : "takeaway"}{match.walkIn ? " · walk-in" : " · booked"}
+                  {match.slot} · {match.mode === "dine_in" ? "dine-in" : "takeaway"}{match.walkIn ? " · walk-in" : " · booked before walk-in"}
                 </p>
               </div>
               {OPEN.includes(match.status) ? (
@@ -201,7 +200,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
       <div className="grid gap-4 lg:grid-cols-3">
         {place.cooks_own && (
           <Panel title={`To cook — ${slot}`} icon={<ChefHat className="w-4 h-4" />} count={toCook.dishes.reduce((n, [, q]) => n + q, 0)}>
-            {toCook.dishes.length === 0 ? <Empty text="Nothing booked yet." /> : (
+            {toCook.dishes.length === 0 ? <Empty text="No walk-ins yet." /> : (
               <div className="space-y-1.5 text-sm">
                 {toCook.dishes.map(([d, q]) => (
                   <div key={d} className="flex justify-between"><span>{d}</span><b>{q}</b></div>
@@ -211,14 +210,11 @@ export function CounterClient({ places, place, slot, orders, today }: {
                     {toCook.addons.map(([a, q]) => `${a} ×${q}`).join(" · ")}
                   </div>
                 )}
-                <p className="pt-2 text-xs text-gray-400">Booked meals plus walk-ins started so far. Walk-ins keep coming until {hhmm(slot === "lunch" ? place.lunch_until : place.closes_at)}.</p>
+                <p className="pt-2 text-xs text-gray-400">Walk-ins started so far. Customers can walk in until {hhmm(place.closes_at)}.</p>
               </div>
             )}
           </Panel>
         )}
-        <Panel title="Booked — to collect" icon={<ShoppingBag className="w-4 h-4" />} count={toCollect.length}>
-          <OrderList orders={toCollect} onPick={(o) => setCode(o.code)} />
-        </Panel>
         <Panel title="Walk-ins waiting" icon={<Footprints className="w-4 h-4" />} count={walkIns.length}>
           <OrderList orders={walkIns} onPick={(o) => setCode(o.code)} />
         </Panel>
@@ -226,7 +222,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
           <OrderList orders={collected} done />
         </Panel>
         <Panel title="Didn't come" icon={<UtensilsCrossed className="w-4 h-4" />} count={missed.length}>
-          {missed.length === 0 ? <Empty text={`Booked meals not collected by ${hhmm(slot === "lunch" ? place.lunch_until : place.closes_at)} are charged and listed here.`} /> : (
+          {missed.length === 0 ? <Empty text={`Walk-in codes not used by ${hhmm(place.closes_at)} are cancelled, uncharged, and listed here.`} /> : (
             <OrderList orders={missed} done />
           )}
         </Panel>
@@ -324,7 +320,7 @@ function PlaceEditor({ place, onClose }: { place: Place; onClose: () => void }) 
             <label className="flex items-center gap-2"><input type="checkbox" checked={v.cooksOwn} onChange={(e) => set("cooksOwn", e.target.checked)} /> Cooks its own meals</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={v.isActive} onChange={(e) => set("isActive", e.target.checked)} /> Open to customers</label>
           </div>
-          <p className="text-xs text-gray-400">Booked pickups not collected by &quot;Lunch until&quot; (lunch) or &quot;Closes&quot; (dinner) are charged.</p>
+          <p className="text-xs text-gray-400">Walk-ins made before &quot;Lunch until&quot; count as lunch, after as dinner. A walk-in code works until &quot;Closes&quot;; unused ones are cancelled, uncharged.</p>
           {err && <p className="text-sm text-red-600">{err}</p>}
           <button onClick={save} disabled={pending} className="h-10 w-full rounded-lg bg-[#1B5E20] text-white font-medium disabled:opacity-50">
             {pending ? "Saving…" : "Save"}
