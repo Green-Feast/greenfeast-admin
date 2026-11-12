@@ -868,9 +868,10 @@ export function ProfileClient({
                               await setAddressBatch(addr.id, slot, e.target.value || null)
                               return { ok: true as const, message: `${slot === "lunch" ? "Lunch" : "Dinner"} batch saved — upcoming meals to this address moved.` }
                             }, false)}
-                            className={cn("mt-1 w-full h-8 rounded-lg border bg-white px-2 text-xs", !current ? "border-red-300 text-red-700" : "border-[#e2e8d5] text-[#1A1A1A]")}
+                            // Only a slot the plan actually has needs a batch.
+                            className={cn("mt-1 w-full h-8 rounded-lg border bg-white px-2 text-xs", !current && (slot === "lunch" ? subscription.mealsLunch : subscription.mealsDinner) > 0 ? "border-red-300 text-red-700" : "border-[#e2e8d5] text-[#1A1A1A]")}
                           >
-                            <option value="">Needs a batch</option>
+                            <option value="">{(slot === "lunch" ? subscription.mealsLunch : subscription.mealsDinner) > 0 ? "Needs a batch" : `None (no ${slot})`}</option>
                             {list.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                           </select>
                         </label>
