@@ -106,7 +106,7 @@ export async function createSubscription(
     const { error: addrErr } = await supabaseAdmin.from("addresses").insert({
       user_id: userId,
       label: address.label || "Home",
-      type: address.type || "home",
+      type: address.type === "work" ? "office" : address.type || "home",
       line1: address.line1.trim(),
       city: "Jaipur",
       pincode: address.pincode || null,

@@ -439,7 +439,8 @@ export async function saveCustomerAddress(subId: string, userId: string, input: 
   if (!input.line1.trim()) return { ok: false, error: "Enter the address." }
   const fields = {
     label: input.label.trim() || "Home",
-    type: input.type || "home",
+    // The table allows home / office / other (the app uses the same three).
+    type: input.type === "work" ? "office" : ["home", "office", "other"].includes(input.type) ? input.type : "home",
     line1: input.line1.trim(),
     landmark: input.landmark.trim() || null,
     pincode: input.pincode.trim() || "",

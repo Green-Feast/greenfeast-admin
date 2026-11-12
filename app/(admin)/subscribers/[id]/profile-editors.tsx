@@ -359,7 +359,7 @@ export function AddressModal({ initial, pending, onClose, onSave }: {
             <Field label="Type">
               <select value={v.type} onChange={(e) => set("type", e.target.value)} className={inputCls}>
                 <option value="home">Home</option>
-                <option value="work">Work</option>
+                <option value="office">Office / Work</option>
                 <option value="other">Other</option>
               </select>
             </Field>
