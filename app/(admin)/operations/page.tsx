@@ -53,9 +53,10 @@ export default async function OperationsPage({
         cod_due_paise,
         users!inner ( name, phone, is_test )
       ),
+      drink_template_id,
       meal_templates ( name ),
       addresses ( label, type, line1, landmark, city, time_window ),
-      order_addons ( kind, quantity, unit_price, addons ( name ) )
+      order_addons ( kind, quantity, unit_price, sub_option, addons ( name, is_drink ) )
     `)
     .eq("delivery_date", date)
     .not("status", "in", "(cancelled,skipped)")
@@ -86,8 +87,17 @@ export default async function OperationsPage({
     .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
     .eq("subscriptions.users.is_test", isTest);
 
+  // Drinks are meal_templates rows (smoothie / coffee); orders.drink_template_id
+  // has no FK (088), so the dish can't be embedded in the orders query. Fetch
+  // the drink dishes alongside and map by id.
+  const drinksQuery = supabaseAdmin
+    .from("meal_templates")
+    .select("id, name")
+    .in("category", ["smoothie", "coffee"]);
+
   // All in one round trip.
-  const [{ data: closureRows }, { data, error }, { data: cashRows }, { data: earlierRows }] = await Promise.all([closuresQuery, ordersQuery, cashQuery, earlierQuery]);
+  const [{ data: closureRows }, { data, error }, { data: cashRows }, { data: earlierRows }, { data: drinkRows }] = await Promise.all([closuresQuery, ordersQuery, cashQuery, earlierQuery, drinksQuery]);
+  const drinkNameById = new Map(((drinkRows ?? []) as { id: string; name: string }[]).map((d) => [d.id, d.name]));
 
   const earlierByDay = new Map<string, EarlierDay>();
   for (const r of (earlierRows ?? []) as { delivery_date: string; meal_slot: "lunch" | "dinner" }[]) {
@@ -144,7 +154,8 @@ export default async function OperationsPage({
     const batch = Array.isArray(o.batches) ? o.batches[0] : o.batches;
     const meal = Array.isArray(o.meal_templates) ? o.meal_templates[0] : o.meal_templates;
     const addr = Array.isArray(o.addresses) ? o.addresses[0] : o.addresses;
-    const addons = (o.order_addons ?? []) as { kind: string; quantity: number | null; unit_price: number | null; addons: { name: string } | { name: string }[] | null }[];
+    type AddonRef = { name: string; is_drink: boolean | null };
+    const addons = (o.order_addons ?? []) as { kind: string; quantity: number | null; unit_price: number | null; sub_option: string | null; addons: AddonRef | AddonRef[] | null }[];
     const qty = ((o as any).quantity ?? 1) as number;
 
     // Walk-ins (082, 087): no batch — grouped by place, handed over at the Counter.
@@ -173,14 +184,29 @@ export default async function OperationsPage({
     ].filter(Boolean) as string[];
 
     // A plan add-on is included once per portion; others carry their own count.
-    const addonList = addons
+    // The drink line (addon.is_drink) is split off: it prints as the drink dish,
+    // not as an add-on, and the kitchen tallies it per drink (088).
+    const lines = addons
       .filter((a) => a.kind === "addon")
       .map((a) => {
-        const name = Array.isArray(a.addons) ? a.addons[0]?.name : a.addons?.name;
-        if (!name) return null;
-        return { name, qty: (a.quantity ?? 1) * (a.unit_price == null && !(o as any).extra_dish ? qty : 1) };
+        const ref = Array.isArray(a.addons) ? a.addons[0] : a.addons;
+        if (!ref?.name) return null;
+        return {
+          name: ref.name,
+          isDrink: !!ref.is_drink,
+          subOption: a.sub_option,
+          qty: (a.quantity ?? 1) * (a.unit_price == null && !(o as any).extra_dish ? qty : 1),
+        };
       })
-      .filter(Boolean) as { name: string; qty: number }[];
+      .filter(Boolean) as { name: string; isDrink: boolean; subOption: string | null; qty: number }[];
+    const addonList = lines.filter((l) => !l.isDrink).map((l) => ({ name: l.name, qty: l.qty }));
+    // The dish the order's drink id points at; else the line's sub_option (the
+    // drink's name, or an old free-text flavour); else the chef decides.
+    const drinkId = (o as unknown as { drink_template_id: string | null }).drink_template_id;
+    const drinkDish = drinkId ? drinkNameById.get(drinkId) : undefined;
+    const drinkList = lines
+      .filter((l) => l.isDrink)
+      .map((l) => ({ name: drinkDish ?? (l.subOption?.trim() || "Chef's choice"), qty: l.qty }));
 
     return {
       orderId: o.id as string,
@@ -204,6 +230,8 @@ export default async function OperationsPage({
       constraints: constraintParts.join(", "),
       addons: addonList.map((a) => (a.qty > 1 ? `${a.name} ×${a.qty}` : a.name)).join(", "),
       addonList,
+      drinkList,
+      drink: drinkList.map((d) => (d.qty > 1 ? `${d.name} ×${d.qty}` : d.name)).join(", "),
       timing: (addr as any)?.time_window ?? "",
       note: (sub as any)?.special_notes ?? "",
       // Delivery partner app (057): who took it, when, problems, photo.

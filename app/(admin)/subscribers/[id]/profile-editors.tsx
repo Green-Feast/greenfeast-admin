@@ -159,15 +159,18 @@ export type PlanFormValue = {
   mealsLeft: number
 }
 
-export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: {
+export function PlanModal({ initial, noDeliveryDays, plans, addons, pending, onClose, onSave }: {
   initial: PlanFormValue
+  // The plan has chosen no delivery days (089): no days selected, instead of
+  // the every-day display an empty schedule gets.
+  noDeliveryDays: boolean
   plans: { id: string; name: string; base_price: number; meals_total: number }[]
   addons: { id: string; name: string; price_per_meal: number }[]
   pending: boolean
   onClose: () => void
   onSave: (v: PlanFormValue) => void
 }) {
-  const [v, setV] = useState<PlanFormValue>({ ...initial, days: initial.days.length ? initial.days : [...DAYS] })
+  const [v, setV] = useState<PlanFormValue>({ ...initial, days: initial.days.length || noDeliveryDays ? initial.days : [...DAYS] })
   const set = <K extends keyof PlanFormValue>(k: K, val: PlanFormValue[K]) => setV((p) => ({ ...p, [k]: val }))
   return (
     <ModalOverlay onClose={onClose} wide>
@@ -187,7 +190,12 @@ export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: 
               <p className="px-3 py-2 text-sm text-gray-600">about {v.mealsLeft}</p>
             </Field>
           </div>
-          <Field label="Delivery days">
+          <Field
+            label="Delivery days"
+            hint={v.days.length === 0
+              ? "No delivery days: upcoming deliveries are removed and none are scheduled. The customer can still walk in or add a meal on any day."
+              : undefined}
+          >
             <Chips options={opts(DAYS)} value={v.days} onChange={(d) => set("days", DAYS.filter((x) => d.includes(x)))} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -212,7 +220,7 @@ export function PlanModal({ initial, plans, addons, pending, onClose, onSave }: 
         </div>
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending || v.days.length === 0 || v.mealsLunch + v.mealsDinner < 1} onClick={() => onSave(v)}>
+          <PrimaryBtn disabled={pending || v.mealsLunch + v.mealsDinner < 1} onClick={() => onSave(v)}>
             {pending ? "Saving…" : "Save plan"}
           </PrimaryBtn>
         </ModalFooter>

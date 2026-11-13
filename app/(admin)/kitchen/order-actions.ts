@@ -17,6 +17,7 @@ import { mealRate } from "@/lib/pricing"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
 import { deliverOrders, skipUndelivered, undoDelivered } from "@/lib/delivery"
+import { DRINK_CATEGORIES, DRINK_AS_MEAL_ERROR, isDrinkCategory } from "@/lib/drinks"
 
 export type Slot = "lunch" | "dinner"
 
@@ -29,6 +30,19 @@ export type SlotOrderAddon = {
   unitPrice: number | null
   included: boolean
 }
+
+// The order's drink (088): the add-on line whose addon is a drink, plus the
+// dish it stands for. templateId null = chef's choice.
+export type SlotOrderDrink = {
+  lineId: string
+  templateId: string | null
+  name: string
+  edited: boolean
+}
+
+// A drink dish the editor can offer. deliverable = active + subscription_valid;
+// anything else is dine-in / pickup only.
+export type SlotDrinkOption = { id: string; name: string; category: string; deliverable: boolean }
 
 export type SlotOrder = {
   id: string
@@ -43,7 +57,9 @@ export type SlotOrder = {
   mealName: string
   addressId: string | null
   batchName: string | null
+  fulfilment: string
   addons: SlotOrderAddon[]
+  drink: SlotOrderDrink | null
 }
 
 export type SlotAddress = {
@@ -70,6 +86,9 @@ export type SlotContext = {
   onCredit: boolean
   baseRate: number
   planAddonIds: string[]
+  // Which add-ons are the drink (addons.is_drink), and the drink dishes to pick from.
+  drinkAddonIds: string[]
+  drinks: SlotDrinkOption[]
   rules: FixedRule[]
 }
 
@@ -79,6 +98,12 @@ const EDITABLE = ["scheduled", "confirmed"]
 
 function one<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : (v ?? null)
+}
+
+// A drink (smoothie / coffee) comes with the meal; it is never the meal itself.
+async function isDrinkDish(mealTemplateId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin.from("meal_templates").select("category").eq("id", mealTemplateId).maybeSingle()
+  return isDrinkCategory(data?.category)
 }
 
 function dowMon0(date: string) {
@@ -145,14 +170,17 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
   const userId = sub.user_id as string
   const plan = one((sub as any).plans) as { base_price: number; meals_total: number } | null
 
-  const [{ data: orders }, { data: addrs }, { data: wallet }, { data: subAddons }, { data: rules }] = await Promise.all([
+  const [
+    { data: orders }, { data: addrs }, { data: wallet }, { data: subAddons }, { data: rules },
+    { data: drinkDishes }, { data: drinkAddons },
+  ] = await Promise.all([
     supabaseAdmin
       .from("orders")
       .select(`
         id, status, skip_reason, quantity, unit_price, cart_total, extra_dish, is_customized,
-        meal_template_id, address_id, slot_seq,
+        meal_template_id, address_id, slot_seq, fulfilment, drink_template_id, drink_edited,
         meal_templates ( name ), batches ( name ),
-        order_addons ( id, addon_id, kind, quantity, unit_price, addons ( name ) )
+        order_addons ( id, addon_id, kind, quantity, unit_price, sub_option, addons ( name, is_drink ) )
       `)
       .eq("subscription_id", subscriptionId)
       .eq("delivery_date", date)
@@ -173,7 +201,20 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
       .select("id, day_of_week, meal_template_id, meal_templates ( name )")
       .eq("user_id", userId)
       .eq("meal_slot", slot),
+    // Drinks are meal_templates rows. orders.drink_template_id has no FK (088),
+    // so the dish can't be embedded: fetch the drink dishes and map by id.
+    supabaseAdmin
+      .from("meal_templates")
+      .select("id, name, category, is_active, subscription_valid")
+      .in("category", DRINK_CATEGORIES)
+      .order("category")
+      .order("name"),
+    supabaseAdmin.from("addons").select("id").eq("is_drink", true),
   ])
+
+  type DrinkDish = { id: string; name: string; category: string; is_active: boolean; subscription_valid: boolean }
+  const drinkById = new Map(((drinkDishes ?? []) as DrinkDish[]).map((d) => [d.id, d]))
+  const drinkAddonIds = ((drinkAddons ?? []) as { id: string }[]).map((a) => a.id)
 
   const planAddonIds = ((subAddons ?? []) as { addon_id: string }[]).map((a) => a.addon_id)
   const { data: batches } = await supabaseAdmin.from("batches").select("id, name")
@@ -199,6 +240,21 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
       mealName: (one(o.meal_templates) as any)?.name ?? "—",
       addressId: o.address_id ?? null,
       batchName: (one(o.batches) as any)?.name ?? null,
+      fulfilment: (o.fulfilment ?? "delivery") as string,
+      drink: (() => {
+        type Ref = { is_drink: boolean | null }
+        const line = ((o.order_addons ?? []) as { id: string; kind: string; sub_option: string | null; addons: Ref | Ref[] | null }[])
+          .find((l) => l.kind === "addon" && one(l.addons)?.is_drink)
+        if (!line) return null
+        const templateId = (o.drink_template_id ?? null) as string | null
+        return {
+          lineId: line.id as string,
+          templateId,
+          // The dish's own name first; the line's sub_option (the same name) is what name-only readers print.
+          name: (templateId ? drinkById.get(templateId)?.name : undefined) ?? line.sub_option ?? "Chef's choice",
+          edited: !!o.drink_edited,
+        }
+      })(),
       addons: ((o.order_addons ?? []) as any[])
         .filter((l) => l.kind === "addon" && l.addon_id)
         .map((l) => {
@@ -225,6 +281,10 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
     onCredit: !!(sub as any).cod_on_credit,
     baseRate: mealRate(sub as any, plan),
     planAddonIds,
+    drinkAddonIds,
+    drinks: [...drinkById.values()]
+      .filter((d) => d.is_active)
+      .map((d) => ({ id: d.id, name: d.name, category: d.category, deliverable: d.subscription_valid })),
     rules: ((rules ?? []) as any[]).map((r) => ({
       id: r.id,
       dayOfWeek: r.day_of_week,
@@ -240,6 +300,7 @@ export async function adminSetOrderDish(orderId: string, mealTemplateId: string)
   await requireAdmin()
   const order = await editableOrder(orderId)
   if (typeof order === "string") return { ok: false, error: order }
+  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
   const { error } = await supabaseAdmin
     .from("orders")
     .update({ meal_template_id: mealTemplateId, is_customized: true, cart_edited: true, updated_at: new Date().toISOString() })
@@ -282,6 +343,67 @@ export async function adminSetOrderAddress(orderId: string, addressId: string): 
   return { ok: true }
 }
 
+// ── Drink (088) ───────────────────────────────────────────────────────────
+
+// Swaps the drink on one meal: orders.drink_template_id plus the drink add-on
+// line's sub_option, which is what name-only readers print (Operations, the
+// partner app, the Counter). null = the chef's choice. drink_edited keeps the
+// weekly menu's drink from overwriting it; cart_edited keeps the customer's
+// plan-default changes off this day (080). No price change: the drink is
+// already a line on the meal. Like the other edits here, past the slot's cutoff
+// it still goes through but says so, since the kitchen sheet may be printed.
+export async function adminSetOrderDrink(orderId: string, drinkTemplateId: string | null): Promise<EditResult> {
+  await requireAdmin()
+  const order = await editableOrder(orderId)
+  if (typeof order === "string") return { ok: false, error: order }
+
+  const [{ data: row }, { data: drinkAddons }] = await Promise.all([
+    supabaseAdmin.from("orders").select("fulfilment").eq("id", orderId).maybeSingle(),
+    supabaseAdmin.from("addons").select("id").eq("is_drink", true),
+  ])
+  const drinkAddonIds = ((drinkAddons ?? []) as { id: string }[]).map((a) => a.id)
+  const { data: lines } = drinkAddonIds.length
+    ? await supabaseAdmin
+        .from("order_addons").select("id")
+        .eq("order_id", orderId).eq("kind", "addon").in("addon_id", drinkAddonIds)
+    : { data: [] as { id: string }[] }
+  if (!lines?.length) return { ok: false, error: "This meal has no drink. Add the Drink under Add-ons first." }
+
+  let name: string | null = null
+  if (drinkTemplateId) {
+    const { data: dish } = await supabaseAdmin
+      .from("meal_templates")
+      .select("id, name, category, is_active, subscription_valid")
+      .eq("id", drinkTemplateId)
+      .maybeSingle()
+    if (!dish || !dish.is_active || !DRINK_CATEGORIES.includes(dish.category)) {
+      return { ok: false, error: "That isn't an active smoothie or coffee." }
+    }
+    // Delivery only carries deliverable drinks; a pickup / dine-in booking can take a coffee.
+    if ((row?.fulfilment ?? "delivery") === "delivery" && !dish.subscription_valid) {
+      return { ok: false, error: `${dish.name} is dine-in only, so it can't go out on a delivery. Pick another drink or the chef's choice.` }
+    }
+    name = dish.name
+  }
+
+  const { error } = await supabaseAdmin
+    .from("orders")
+    .update({ drink_template_id: drinkTemplateId, drink_edited: true, cart_edited: true, updated_at: new Date().toISOString() })
+    .eq("id", orderId)
+  if (error) return { ok: false, error: error.message }
+  const { error: lineError } = await supabaseAdmin
+    .from("order_addons")
+    .update({ sub_option: name })
+    .in("id", (lines as { id: string }[]).map((l) => l.id))
+  if (lineError) return { ok: false, error: lineError.message }
+
+  refresh(order.subscription_id)
+  if (isSlotLocked(order.delivery_date, order.meal_slot)) {
+    return { ok: true, message: `Drink changed. Past the ${order.meal_slot === "lunch" ? "9 AM" : "2 PM"} cutoff, so tell the kitchen.` }
+  }
+  return { ok: true, message: name ? `Drink is now ${name}.` : "Drink is now the chef's choice." }
+}
+
 // ── Add-ons ───────────────────────────────────────────────────────────────
 
 // quantity = how many go out with this meal. A plan add-on is normally
@@ -295,7 +417,7 @@ export async function adminSetAddonQty(orderId: string, addonId: string, quantit
   if (typeof order === "string") return { ok: false, error: order }
 
   const [{ data: addon }, { data: line }] = await Promise.all([
-    supabaseAdmin.from("addons").select("id, price_per_meal").eq("id", addonId).maybeSingle(),
+    supabaseAdmin.from("addons").select("id, price_per_meal, is_drink").eq("id", addonId).maybeSingle(),
     supabaseAdmin
       .from("order_addons").select("id, quantity, unit_price")
       .eq("order_id", orderId).eq("addon_id", addonId).eq("kind", "addon").maybeSingle(),
@@ -321,8 +443,18 @@ export async function adminSetAddonQty(orderId: string, addonId: string, quantit
     await supabaseAdmin.from("order_addons")
       .update({ quantity, unit_price: line.unit_price ?? addon.price_per_meal }).eq("id", line.id)
   } else {
+    // A drink put back on a meal keeps that meal's drink: name it on the line,
+    // since the line's sub_option is what name-only readers print.
+    let subOption: string | null = null
+    if (addon.is_drink) {
+      const { data: o } = await supabaseAdmin.from("orders").select("drink_template_id").eq("id", orderId).maybeSingle()
+      if (o?.drink_template_id) {
+        const { data: dish } = await supabaseAdmin.from("meal_templates").select("name").eq("id", o.drink_template_id).maybeSingle()
+        subOption = dish?.name ?? null
+      }
+    }
     const { error } = await supabaseAdmin.from("order_addons").insert({
-      order_id: orderId, addon_id: addonId, kind: "addon", quantity, unit_price: addon.price_per_meal,
+      order_id: orderId, addon_id: addonId, kind: "addon", quantity, unit_price: addon.price_per_meal, sub_option: subOption,
     })
     if (error) return { ok: false, error: error.message }
   }
@@ -478,6 +610,7 @@ export async function adminAddExtraDish(
 ): Promise<EditResult> {
   await requireAdmin()
   if (date < istToday()) return { ok: false, error: "That day has passed." }
+  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
   const { data: sub } = await supabaseAdmin
     .from("subscriptions").select("id, user_id, status, batch_id_lunch, batch_id_dinner").eq("id", subscriptionId).single()
   if (!sub || !["active", "paused"].includes(sub.status)) return { ok: false, error: "The plan isn't active." }
@@ -545,6 +678,7 @@ export async function setFixedDish(
   subscriptionId: string, slot: Slot, dayOfWeek: number | null, mealTemplateId: string
 ): Promise<EditResult> {
   const admin = await requireAdmin()
+  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
   const { data: sub } = await supabaseAdmin.from("subscriptions").select("user_id").eq("id", subscriptionId).single()
   if (!sub) return { ok: false, error: "Subscription not found." }
   const userId = sub.user_id as string

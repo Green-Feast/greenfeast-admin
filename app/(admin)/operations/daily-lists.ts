@@ -26,6 +26,10 @@ export type ListRow = {
   constraints: string
   addons: string
   addonList: { name: string; qty: number }[]
+  // The meal's drink, apart from add-ons: "Blue Mind", "Chef's choice", or ""
+  // when the plan has no drink. drinkList feeds the per-drink tally.
+  drink: string
+  drinkList: { name: string; qty: number }[]
   timing: string
   note?: string
   codDue: number
@@ -98,19 +102,21 @@ export function buildSections(rows: ListRow[], slots: Slot[]): Section[] {
   return out
 }
 
-// "Burrito Bowl: 28 | Italian Harvest: 1 | Smoothie: 1" — portions per dish,
-// then smoothies (made separately; other add-ons go on the bowl).
+// "Burrito Bowl: 28 | Italian Harvest: 1 | Drinks: Blue Mind ×12, Avo Clarity ×4"
+// — portions per dish, then the drinks per drink (made separately; other
+// add-ons go on the bowl). A drink line with no dish picked tallies as "Chef's choice".
 function tally(rows: ListRow[]) {
   const meals = new Map<string, number>()
-  let smoothies = 0
+  const drinks = new Map<string, number>()
   for (const r of rows) {
     meals.set(r.meal, (meals.get(r.meal) ?? 0) + (r.quantity || 1))
-    for (const a of r.addonList) if (/smoothie/i.test(a.name)) smoothies += a.qty
+    for (const d of r.drinkList) drinks.set(d.name, (drinks.get(d.name) ?? 0) + d.qty)
   }
-  const parts = [...meals.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([m, n]) => `${m}: ${n}`)
-  if (smoothies > 0) parts.push(`Smoothie: ${smoothies}`)
+  const byCountThenName = (a: [string, number], b: [string, number]) => b[1] - a[1] || a[0].localeCompare(b[0])
+  const parts = [...meals.entries()].sort(byCountThenName).map(([m, n]) => `${m}: ${n}`)
+  if (drinks.size > 0) {
+    parts.push(`Drinks: ${[...drinks.entries()].sort(byCountThenName).map(([d, n]) => `${d} ×${n}`).join(", ")}`)
+  }
   return parts.join("  |  ")
 }
 
@@ -256,23 +262,25 @@ function labelLine(doc: jsPDF, y: number, label: string, text: string) {
 const MASTER_COLS: Col[] = [
   { header: "Code", width: 17, text: (r) => r.code, bold: true, tint: true },
   { header: "R/C", width: 8, text: (r) => r.rc, bold: true, tint: true },
-  { header: "Name", width: 32, text: (r) => r.name },
-  { header: "Phone", width: 25, text: (r) => phone10(r.phone) },
-  { header: "Address", width: 52, text: (r) => r.address },
+  { header: "Name", width: 30, text: (r) => r.name },
+  { header: "Phone", width: 24, text: (r) => phone10(r.phone) },
+  { header: "Address", width: 46, text: (r) => r.address },
   { header: "Meal", width: 27, rich: mealSegs },
-  { header: "Constraints", width: 44, rich: (r) => constraintSegs(r.constraints) },
-  { header: "Add-ons", width: 22, text: (r) => r.addons },
+  { header: "Drink", width: 22, text: (r) => r.drink },
+  { header: "Constraints", width: 40, rich: (r) => constraintSegs(r.constraints) },
+  { header: "Add-ons", width: 20, text: (r) => r.addons },
   { header: "Timing", width: 19, text: (r) => r.timing, bold: true },
-  { header: "Note", width: 31, text: (r) => r.note ?? "" },
+  { header: "Note", width: 24, text: (r) => r.note ?? "" },
 ]
 
 const KITCHEN_COLS: Col[] = [
   { header: "Code", width: 22, text: (r) => r.code, bold: true, tint: true },
   { header: "R/C", width: 12, text: (r) => r.rc, bold: true, tint: true },
-  { header: "Name", width: 48, text: (r) => r.name },
-  { header: "Meal", width: 48, rich: mealSegs },
-  { header: "Constraints", width: 104, rich: (r) => constraintSegs(r.constraints) },
-  { header: "Add-ons", width: 43, text: (r) => r.addons },
+  { header: "Name", width: 44, text: (r) => r.name },
+  { header: "Meal", width: 46, rich: mealSegs },
+  { header: "Drink", width: 36, text: (r) => r.drink },
+  { header: "Constraints", width: 76, rich: (r) => constraintSegs(r.constraints) },
+  { header: "Add-ons", width: 41, text: (r) => r.addons },
 ]
 
 const DELIVERY_COLS: Col[] = [

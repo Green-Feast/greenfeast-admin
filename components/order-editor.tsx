@@ -3,20 +3,22 @@
 // The drawer behind every editable meal cell (Kitchen calendar, subscriber
 // profile → Upcoming meals): one customer, one day, one slot — dish,
 // portions, add-ons, address, skip / bring back, extra dishes, and the
-// "same dish every day" rule. Server side: app/(admin)/kitchen/order-actions.ts.
+// "same dish every day" rule, and the meal's drink (swap it, or put it back). Server side: app/(admin)/kitchen/order-actions.ts.
 // Any day up to today also gets Delivery: mark delivered, skip with no
 // charge, or undo a wrong "delivered" (068) — for days ops forgot to mark.
 
 import { useEffect, useMemo, useState, useTransition } from "react"
-import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2 } from "lucide-react"
+import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2, CupSoda } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { istToday } from "@/lib/ist"
+import { isDrinkCategory } from "@/lib/drinks"
 import {
   getSlotContext,
   adminSetOrderDish,
   adminSetOrderQuantity,
   adminSetOrderAddress,
   adminSetAddonQty,
+  adminSetOrderDrink,
   adminSkipSlot,
   adminUnskipSlot,
   adminAddExtraDish,
@@ -75,6 +77,8 @@ export function OrderEditor({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   // Dish picker: which order it changes, or "new" for an extra dish.
   const [picking, setPicking] = useState<string | "new" | null>(null)
+  // Drink picker: the order whose drink is being swapped.
+  const [pickingDrink, setPickingDrink] = useState<string | null>(null)
   const [query, setQuery] = useState("")
   const [newAddress, setNewAddress] = useState<string>("")
   const [backToMenu, setBackToMenu] = useState(true)
@@ -116,6 +120,7 @@ export function OrderEditor({
       }
       if (res.message) setMessage({ ok: true, text: res.message })
       setPicking(null)
+      setPickingDrink(null)
       setQuery("")
       await load()
       onChanged()
@@ -124,7 +129,8 @@ export function OrderEditor({
 
   const filteredMeals = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return meals.filter((m) => !q || m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q))
+    // A drink comes with the meal; it is picked in the drink card, never as the dish.
+    return meals.filter((m) => !isDrinkCategory(m.category) && (!q || m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q)))
   }, [meals, query])
 
   if (!target) return null
@@ -144,6 +150,12 @@ export function OrderEditor({
   const pastDay = target.date < today
   const undelivered = ctx?.orders.filter((o) => ["scheduled", "confirmed", "preparing", "out_for_delivery"].includes(o.status)) ?? []
   const undeliveredCost = undelivered.reduce((s, o) => s + (o.cartTotal ?? 0), 0)
+  // The drink picker lists what this order can actually get: a delivery only
+  // carries deliverable drinks, a pickup / dine-in booking can take a coffee.
+  const drinkOrder = pickingDrink ? ctx?.orders.find((o) => o.id === pickingDrink) ?? null : null
+  const deliveryOnly = (drinkOrder?.fulfilment ?? "delivery") === "delivery"
+  const drinkOptions = (ctx?.drinks ?? []).filter((d) => !deliveryOnly || d.deliverable)
+  const drinksHidden = (ctx?.drinks.length ?? 0) - drinkOptions.length
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -232,6 +244,9 @@ export function OrderEditor({
               {settled.map((o) => (
                 <div key={o.id} className="rounded-xl border border-[#e2e8d5] bg-gray-50 p-3 text-sm">
                   <p className="font-medium text-[#1A1A1A]">{o.mealName} {o.quantity > 1 && <span className="text-gray-500">×{o.quantity}</span>}</p>
+                  {o.drink && (
+                    <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1"><CupSoda className="w-3 h-3" /> {o.drink.name}</p>
+                  )}
                   <p className="text-xs text-gray-500 capitalize mt-0.5">
                     {o.status.replace(/_/g, " ")}{o.status === "delivered" ? "" : " — dish and portions can't be changed now"}
                   </p>
@@ -259,6 +274,7 @@ export function OrderEditor({
                   addons={addons}
                   pending={pending}
                   onPickDish={() => { setPicking(o.id); setQuery("") }}
+                  onPickDrink={() => setPickingDrink(o.id)}
                   run={run}
                 />
               ))}
@@ -361,6 +377,47 @@ export function OrderEditor({
           )}
         </div>
 
+        {/* Drink picker */}
+        {pickingDrink && ctx && (
+          <div className="absolute inset-0 z-20 bg-white flex flex-col">
+            <div className="px-5 py-4 border-b border-[#e2e8d5] flex items-center gap-2">
+              <CupSoda className="w-4 h-4 text-gray-400" />
+              <p className="flex-1 text-sm font-semibold text-[#1A1A1A]">Choose a drink</p>
+              <button onClick={() => setPickingDrink(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+              <button
+                disabled={pending}
+                onClick={() => run(() => adminSetOrderDrink(pickingDrink, null))}
+                className="w-full text-left px-5 py-2.5 text-sm hover:bg-green-50 disabled:opacity-40 flex items-center justify-between"
+              >
+                <span>Chef&apos;s choice <span className="text-xs text-gray-400">(the kitchen decides)</span></span>
+                {drinkOrder && !drinkOrder.drink?.templateId && <span className="text-[10px] font-semibold uppercase text-[#1B5E20]">current</span>}
+              </button>
+              {drinkOptions.map((d) => (
+                <button
+                  key={d.id}
+                  disabled={pending}
+                  onClick={() => run(() => adminSetOrderDrink(pickingDrink, d.id))}
+                  className="w-full text-left px-5 py-2.5 text-sm hover:bg-green-50 disabled:opacity-40 flex items-center justify-between gap-2"
+                >
+                  <span>
+                    {d.name} <span className="text-xs text-gray-400">({d.category})</span>
+                    {!d.deliverable && <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">Dine-in only</span>}
+                  </span>
+                  {drinkOrder?.drink?.templateId === d.id
+                    ? <span className="text-[10px] font-semibold uppercase text-[#1B5E20]">current</span>
+                    : pending && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+                </button>
+              ))}
+              {drinkOptions.length === 0 && <p className="p-5 text-sm text-gray-400">No drinks on the menu.</p>}
+              {drinksHidden > 0 && (
+                <p className="p-5 text-[11px] text-gray-400">{drinksHidden} dine-in-only drink{drinksHidden === 1 ? "" : "s"} not shown: a delivery can&apos;t carry {drinksHidden === 1 ? "it" : "them"}.</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Dish picker */}
         {picking && ctx && (
           <div className="absolute inset-0 z-20 bg-white flex flex-col">
@@ -401,13 +458,14 @@ export function OrderEditor({
 }
 
 function OrderCard({
-  order, ctx, addons, pending, onPickDish, run,
+  order, ctx, addons, pending, onPickDish, onPickDrink, run,
 }: {
   order: SlotOrder
   ctx: SlotContext
   addons: EditorAddon[]
   pending: boolean
   onPickDish: () => void
+  onPickDrink: () => void
   run: (action: () => Promise<EditResult>) => void
 }) {
   const lines = new Map(order.addons.map((l) => [l.addonId, l]))
@@ -418,6 +476,12 @@ function OrderCard({
       .filter((l) => !addons.some((a) => a.id === l.addonId))
       .map((l) => ({ id: l.addonId, name: l.name, price_per_meal: l.unitPrice ?? 0 })),
   ]
+  // The drink add-on is shown as its own "Drink" block (with the dish it stands
+  // for), not in the add-ons list.
+  const drinkAddon = shown.find((a) => ctx.drinkAddonIds.includes(a.id)) ?? null
+  const drinkLine = drinkAddon ? lines.get(drinkAddon.id) : undefined
+  const drinkQty = drinkLine?.quantity ?? 0
+  const otherAddons = shown.filter((a) => !ctx.drinkAddonIds.includes(a.id))
   const batchFor = (a: SlotContext["addresses"][number]) => (ctx.slot === "lunch" ? a.batchLunch : a.batchDinner)
 
   return (
@@ -467,11 +531,48 @@ function OrderCard({
         </div>
       </div>
 
+      {/* Drink (088): the dish chosen for this meal; the stepper still adds or removes the drink line */}
+      {drinkAddon && (
+        <div className="space-y-1.5">
+          <span className="text-xs text-gray-500 flex items-center gap-1"><CupSoda className="w-3 h-3" /> Drink</span>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className={cn("min-w-0", drinkQty > 0 ? "text-[#1A1A1A]" : "text-gray-400")}>
+              {drinkQty > 0 ? (order.drink?.name ?? "Chef's choice") : "No drink"}
+              {drinkQty > 0 && order.drink?.edited && <span className="ml-1.5 text-[10px] font-bold uppercase text-amber-600">changed</span>}
+              {drinkLine?.included && <span className="ml-1 text-[10px] text-[#1B5E20] font-semibold">with plan</span>}
+              <span className="ml-1 text-xs text-gray-400">{rupees(drinkAddon.price_per_meal)}</span>
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {drinkQty > 0 && (
+                <button onClick={onPickDrink} disabled={pending} className="mr-1 text-xs font-medium text-[#1B5E20] hover:underline disabled:opacity-40">
+                  Change drink
+                </button>
+              )}
+              <button
+                disabled={pending || drinkQty === 0}
+                onClick={() => run(() => adminSetAddonQty(order.id, drinkAddon.id, drinkQty - 1))}
+                className="w-6 h-6 rounded-md border border-[#e2e8d5] flex items-center justify-center disabled:opacity-30"
+              >
+                <Minus className="w-3 h-3" />
+              </button>
+              <span className="w-5 text-center text-xs font-semibold">{drinkQty}</span>
+              <button
+                disabled={pending}
+                onClick={() => run(() => adminSetAddonQty(order.id, drinkAddon.id, drinkQty + 1))}
+                className="w-6 h-6 rounded-md border border-[#e2e8d5] flex items-center justify-center disabled:opacity-30"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add-ons */}
-      {shown.length > 0 && (
+      {otherAddons.length > 0 && (
         <div className="space-y-1.5">
           <span className="text-xs text-gray-500">Add-ons</span>
-          {shown.map((a) => {
+          {otherAddons.map((a) => {
             const line = lines.get(a.id)
             const qty = line?.quantity ?? 0
             return (

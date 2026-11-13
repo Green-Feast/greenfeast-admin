@@ -7,6 +7,7 @@ import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { isTestMode } from "@/lib/mode"
 import { tempPassword } from "@/lib/temp-password"
+import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 import type { CreateSubInput, NewCustomer } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +163,7 @@ export async function createSubscription(
     .select("id")
     .eq("is_active", true)
     .eq("subscription_valid", true)
+    .not("category", "in", DRINK_CATEGORY_LIST) // a drink comes with the meal, it isn't one
     .order("category")
     .limit(1)
     .single()

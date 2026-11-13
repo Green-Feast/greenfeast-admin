@@ -20,7 +20,8 @@ export type PlanShape = {
   planId: string;
   mealsLunch: number;
   mealsDinner: number;
-  days: string[]; // Mon..Sun; empty = every day
+  days: string[]; // Mon..Sun; empty = every day, unless noDeliveryDays
+  noDeliveryDays: boolean; // 089: empty days = nothing is delivered
   addonIds: string[];
   startDate: string | null;
   mealsLeft: number;
@@ -72,7 +73,7 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   const today = istToday();
   const { data: rows } = await supabaseAdmin
     .from("orders")
-    .select("id, delivery_date, meal_slot, quantity, unit_price, extra_dish, is_customized, status, order_addons ( id, addon_id, kind, unit_price )")
+    .select("id, delivery_date, meal_slot, quantity, unit_price, extra_dish, is_customized, status, drink_template_id, order_addons ( id, addon_id, kind, unit_price )")
     .eq("subscription_id", subscriptionId)
     .gte("delivery_date", today)
     .in("status", ["scheduled", "confirmed"])
@@ -85,7 +86,8 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   let kept = 0;
 
   const perDay = (shape: PlanShape, slot: Slot) => (slot === "lunch" ? shape.mealsLunch : shape.mealsDinner);
-  const takesDay = (shape: PlanShape, date: string) => shape.days.length === 0 || shape.days.includes(weekday(date));
+  const takesDay = (shape: PlanShape, date: string) =>
+    shape.days.length === 0 ? !shape.noDeliveryDays : shape.days.includes(weekday(date));
 
   // 1. Slots / days / start date no longer on the plan.
   for (const o of open) {
@@ -116,9 +118,28 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
   const addedAddons = after.addonIds.filter((id) => !before.addonIds.includes(id));
   const droppedAddons = before.addonIds.filter((id) => !after.addonIds.includes(id));
   const prices = new Map<string, number>();
+  const drinkAddons = new Set<string>();
   if (addedAddons.length || droppedAddons.length) {
-    const { data } = await supabaseAdmin.from("addons").select("id, price_per_meal").in("id", [...addedAddons, ...droppedAddons]);
-    for (const a of (data ?? []) as { id: string; price_per_meal: number }[]) prices.set(a.id, a.price_per_meal);
+    const { data } = await supabaseAdmin.from("addons").select("id, price_per_meal, is_drink").in("id", [...addedAddons, ...droppedAddons]);
+    for (const a of (data ?? []) as { id: string; price_per_meal: number; is_drink: boolean | null }[]) {
+      prices.set(a.id, a.price_per_meal);
+      if (a.is_drink) drinkAddons.add(a.id);
+    }
+  }
+  // A line added to an open meal carries the plan's option (cheese etc.). The
+  // drink line (088) carries the name of that meal's own drink instead; the
+  // order has no FK to the drink dish, so the names are fetched by id.
+  const subOptions = new Map<string, string | null>();
+  const drinkNames = new Map<string, string>();
+  if (addedAddons.length) {
+    const { data } = await supabaseAdmin
+      .from("subscription_addons").select("addon_id, sub_option").eq("subscription_id", subscriptionId).in("addon_id", addedAddons);
+    for (const r of (data ?? []) as { addon_id: string; sub_option: string | null }[]) subOptions.set(r.addon_id, r.sub_option);
+    const drinkIds = [...new Set(remaining.map((o) => o.drink_template_id as string | null).filter((id): id is string => !!id))];
+    if (addedAddons.some((id) => drinkAddons.has(id)) && drinkIds.length) {
+      const { data: dishes } = await supabaseAdmin.from("meal_templates").select("id, name").in("id", drinkIds);
+      for (const d of (dishes ?? []) as { id: string; name: string }[]) drinkNames.set(d.id, d.name);
+    }
   }
 
   for (const o of remaining) {
@@ -141,7 +162,10 @@ export async function syncUpcomingOrders(subscriptionId: string, before: PlanSha
       }
       for (const id of addedAddons) {
         if (lines.some((l) => l.kind === "addon" && l.addon_id === id)) continue;
-        await supabaseAdmin.from("order_addons").insert({ order_id: o.id, addon_id: id, kind: "addon", quantity: 1 });
+        const drinkName = drinkAddons.has(id) && o.drink_template_id ? drinkNames.get(o.drink_template_id) : undefined;
+        await supabaseAdmin.from("order_addons").insert({
+          order_id: o.id, addon_id: id, kind: "addon", quantity: 1, sub_option: drinkName ?? subOptions.get(id) ?? null,
+        });
         price += prices.get(id) ?? 0;
         changed = true;
       }

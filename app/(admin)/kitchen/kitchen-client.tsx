@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, ChevronDown, X, ChevronLeft, ChevronRight, Pin, Plus } from "lucide-react"
+import { Loader2, ChevronDown, X, ChevronLeft, ChevronRight, Pin, Plus, CupSoda, AlertTriangle } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { istToday, addDaysISO } from "@/lib/ist"
 import { cn } from "@/lib/utils"
+import { isDrinkCategory } from "@/lib/drinks"
 import { OrderEditor, type EditorTarget } from "@/components/order-editor"
 import {
   updateWeeklyMenu,
@@ -21,6 +22,20 @@ export type WeeklyMenuRow = {
   mealSlot: "lunch" | "dinner"
   mealTemplateId: string | null
   mealName: string | null
+  // The slot's drink (088): a smoothie or coffee dish. Independent of the dish,
+  // so a row can hold either, both, or (until Save deletes it) neither.
+  drinkTemplateId: string | null
+  drinkName: string | null
+}
+
+// A drink dish from the menu (meal_templates, category smoothie / coffee).
+export type DrinkDish = {
+  id: string
+  name: string
+  category: string
+  active: boolean
+  // false = dine-in only: delivery subscribers get the chef's choice instead.
+  subscriptionValid: boolean
 }
 
 export type CellItem = {
@@ -31,6 +46,9 @@ export type CellItem = {
   extra: boolean
   customized: boolean
   addons: string[]
+  // The order's drink (its drink add-on line); null when the order has none.
+  drink: string | null
+  drinkEdited: boolean
 }
 
 export type WeeklyOverviewRow = {
@@ -75,7 +93,11 @@ export function KitchenClient({
   initialRows: WeeklyMenuRow[]
   weeklyOverview: WeeklyOverviewRow[]
   week: { start: string; end: string; today: string }
-  catalogue: { meals: { id: string; name: string; category: string }[]; addons: { id: string; name: string; price_per_meal: number }[] }
+  catalogue: {
+    meals: { id: string; name: string; category: string }[]
+    addons: { id: string; name: string; price_per_meal: number }[]
+    drinks: DrinkDish[]
+  }
 }) {
   const router = useRouter()
   const [rows, setRows] = useState(initialRows)
@@ -187,7 +209,7 @@ export function KitchenClient({
     setOpenPicker(null)
     const updated = existing
       ? rows.map((r) => r.id === existing.id ? { ...r, mealTemplateId: mealId, mealName } : r)
-      : [...rows, { id: `temp-${Date.now()}`, dayOfWeek, mealSlot: slot, mealTemplateId: mealId, mealName } as WeeklyMenuRow]
+      : [...rows, { id: `temp-${Date.now()}`, dayOfWeek, mealSlot: slot, mealTemplateId: mealId, mealName, drinkTemplateId: null, drinkName: null } as WeeklyMenuRow]
     setRows(updated)
   }
 
@@ -199,12 +221,31 @@ export function KitchenClient({
     setRows(rows.map((r) => r.id === existing.id ? { ...r, mealTemplateId: null, mealName: null } : r))
   }
 
+  function handleSelectDrink(dayOfWeek: number, slot: "lunch" | "dinner", drink: DrinkDish) {
+    const existing = getRow(dayOfWeek, slot)
+    setOpenPicker(null)
+    if (existing && existing.drinkTemplateId === drink.id) return
+    setRows(
+      existing
+        ? rows.map((r) => r.id === existing.id ? { ...r, drinkTemplateId: drink.id, drinkName: drink.name } : r)
+        : [...rows, { id: `temp-${crypto.randomUUID()}`, dayOfWeek, mealSlot: slot, mealTemplateId: null, mealName: null, drinkTemplateId: drink.id, drinkName: drink.name }]
+    )
+  }
+
+  // Same as clearing the dish: the row stays in state so Save can delete it
+  // once it has neither a dish nor a drink.
+  function handleClearDrink(dayOfWeek: number, slot: "lunch" | "dinner") {
+    const existing = getRow(dayOfWeek, slot)
+    if (!existing) return
+    setRows(rows.map((r) => r.id === existing.id ? { ...r, drinkTemplateId: null, drinkName: null } : r))
+  }
+
   async function handleSave() {
     setSaving(true)
     try {
       await updateWeeklyMenu(rows)
       const { frozen } = await propagateMenuChanges(rows)
-      setRows((prev) => prev.filter((r) => r.mealTemplateId))
+      setRows((prev) => prev.filter((r) => r.mealTemplateId || r.drinkTemplateId))
       router.refresh()
       showToast(
         frozen > 0
@@ -265,6 +306,8 @@ export function KitchenClient({
   }
 
   const days = DOW_NAMES.map((_, i) => addDaysISO(week.start, i))
+  const drinkOptions = catalogue.drinks.filter((d) => d.active)
+  const drinkById = new Map(catalogue.drinks.map((d) => [d.id, d]))
 
   return (
     <>
@@ -284,41 +327,99 @@ export function KitchenClient({
                 const pickerKey = rowKey(dayOfWeek, slot)
                 const isOpen = openPicker === pickerKey
 
+                const drinkKey = `drink-${pickerKey}`
+                const drinkOpen = openPicker === drinkKey
+                const drink = row?.drinkTemplateId ? drinkById.get(row.drinkTemplateId) : undefined
+                const drinkDeliverable = !!drink && drink.active && drink.subscriptionValid
+
                 return (
-                  <div key={dow} className="relative flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 bg-gray-50">
-                    <span className="w-8 shrink-0 text-xs font-semibold text-gray-600">{dow}</span>
+                  <div key={dow} className="relative p-2.5 rounded-lg border border-gray-100 bg-gray-50">
+                    <div className="flex items-center gap-3">
+                      <span className="w-8 shrink-0 text-xs font-semibold text-gray-600">{dow}</span>
 
-                    <div className="flex-1 min-w-0">
-                      {row?.mealTemplateId ? (
-                        <span className="text-sm font-medium text-gray-900 truncate block">{row.mealName}</span>
-                      ) : (
-                        <span className="text-sm text-gray-400">— not set —</span>
-                      )}
-                    </div>
+                      <div className="flex-1 min-w-0">
+                        {row?.mealTemplateId ? (
+                          <span className="text-sm font-medium text-gray-900 truncate block">{row.mealName}</span>
+                        ) : (
+                          <span className="text-sm text-gray-400">— not set —</span>
+                        )}
+                      </div>
 
-                    <div className="flex gap-1 shrink-0">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
-                        className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
-                      >
-                        <ChevronDown size={13} />
-                      </button>
-                      {row?.mealTemplateId && (
+                      <div className="flex gap-1 shrink-0">
                         <button
-                          onClick={() => handleClear(dayOfWeek, slot)}
-                          className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
+                          onClick={(e) => { e.stopPropagation(); setOpenPicker(isOpen ? null : pickerKey) }}
+                          className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
                         >
-                          <X size={13} />
+                          <ChevronDown size={13} />
                         </button>
-                      )}
+                        {row?.mealTemplateId && (
+                          <button
+                            onClick={() => handleClear(dayOfWeek, slot)}
+                            className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Drink: one per meal, a smoothie or coffee dish (088) */}
+                    <div className="mt-1.5 flex items-center gap-3">
+                      <span className="w-8 shrink-0 text-gray-400 flex items-center" title="Drink">
+                        <CupSoda className="w-3.5 h-3.5" aria-label="Drink" />
+                      </span>
+
+                      <div className="flex-1 min-w-0">
+                        {row?.drinkTemplateId ? (
+                          <span className="text-sm text-gray-900 flex items-center gap-1.5 min-w-0">
+                            <span className="truncate">{row.drinkName ?? drink?.name ?? "Unknown drink"}</span>
+                            {drink && !drink.active && (
+                              <span className="shrink-0 rounded bg-gray-200 px-1.5 py-px text-[10px] font-semibold text-gray-600">Inactive</span>
+                            )}
+                            {drink && drink.active && !drink.subscriptionValid && (
+                              <span className="shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">Dine-in only</span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-gray-400">— chef&apos;s choice —</span>
+                        )}
+                      </div>
+
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setOpenPicker(drinkOpen ? null : drinkKey) }}
+                          title="Pick the drink"
+                          className="p-1.5 rounded border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-900 transition"
+                        >
+                          <ChevronDown size={13} />
+                        </button>
+                        {row?.drinkTemplateId && (
+                          <button
+                            onClick={() => handleClearDrink(dayOfWeek, slot)}
+                            title="Clear the drink"
+                            className="p-1.5 rounded border border-gray-300 hover:border-red-300 text-gray-600 hover:text-red-600 transition"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {row?.drinkTemplateId && drink && !drinkDeliverable && (
+                      <p className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-snug text-amber-800">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                        <span>
+                          {drink.active ? "Dine-in only" : "Inactive"}: delivery subscribers get the chef&apos;s choice on this meal. Only dine-in and walk-in orders get {drink.name}.
+                        </span>
+                      </p>
+                    )}
 
                     {isOpen && (
                       <div
                         className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {meals.filter((m) => m.subscriptionValid).map((meal) => (
+                        {meals.filter((m) => m.subscriptionValid && !isDrinkCategory(m.category)).map((meal) => (
                           <button
                             key={meal.id}
                             onClick={() => handleSelectMeal(dayOfWeek, slot, meal.id, meal.name)}
@@ -330,6 +431,30 @@ export function KitchenClient({
                         ))}
                         {meals.length === 0 && (
                           <div className="px-3 py-2 text-sm text-gray-400">No meal templates found</div>
+                        )}
+                      </div>
+                    )}
+
+                    {drinkOpen && (
+                      <div
+                        className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-20 max-h-52 overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {drinkOptions.map((d) => (
+                          <button
+                            key={d.id}
+                            onClick={() => handleSelectDrink(dayOfWeek, slot, d)}
+                            className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-green-50 border-b border-gray-100 last:border-0 flex items-center gap-2"
+                          >
+                            <span>{d.name}</span>
+                            <span className="text-gray-400 text-xs">({d.category})</span>
+                            {!d.subscriptionValid && (
+                              <span className="ml-auto shrink-0 rounded bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">Dine-in only</span>
+                            )}
+                          </button>
+                        ))}
+                        {drinkOptions.length === 0 && (
+                          <div className="px-3 py-2 text-sm text-gray-400">No smoothies or coffees found</div>
                         )}
                       </div>
                     )}
@@ -658,6 +783,15 @@ function SlotCell({
             {delivered && <span className="ml-1 text-[#1B5E20]">✓</span>}
             {it.addons.length > 0 && !skipped && (
               <span className="block text-[10px] text-gray-400 leading-tight">{it.addons.join(", ")}</span>
+            )}
+            {it.drink && !skipped && (
+              <span
+                className={cn("flex items-center gap-0.5 text-[10px] leading-tight", it.drinkEdited ? "text-amber-600" : "text-sky-700")}
+                title={it.drinkEdited ? "Drink changed from the menu" : "Drink"}
+              >
+                <CupSoda className="w-2.5 h-2.5 shrink-0" />
+                <span>{it.drink}</span>
+              </span>
             )}
           </span>
         )

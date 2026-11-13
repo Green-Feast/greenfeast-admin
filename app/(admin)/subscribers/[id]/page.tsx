@@ -4,6 +4,7 @@ import Link from "next/link"
 import { ChevronRight } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist"
+import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 import { ProfileClient } from "./profile-client"
 
 export default async function SubscriberProfilePage({
@@ -24,7 +25,7 @@ export default async function SubscriberProfilePage({
       id, user_id, status, payment_method, plan_name, plan_id, deliveries_remaining,
       start_date, end_date, pause_from, pause_until, meals_lunch, meals_dinner,
       special_notes, meals_per_day, created_at, cod_due_paise, cod_on_credit,
-      meal_price_paise, coupons ( code ),
+      meal_price_paise, no_delivery_days, coupons ( code ),
       users ( id, name, phone, created_at, customer_code, is_test )
     `)
     .eq("id", id)
@@ -80,6 +81,7 @@ export default async function SubscriberProfilePage({
     // Opt-in subscribers have one row per day they actually take delivery;
     // opt-out subscribers have none here (they get every day and skip
     // individually from the app instead) — see instantiate-orders' hasScheduleDays.
+    // Unless subscriptions.no_delivery_days is set (089): then no rows = no deliveries.
     supabaseAdmin.from("subscription_schedule").select("day_of_week").eq("subscription_id", id),
     // The one weekly menu (Mon=0..Sun=6, the Kitchen admin's convention).
     supabaseAdmin
@@ -112,6 +114,7 @@ export default async function SubscriberProfilePage({
       .select("id, name, category")
       .eq("is_active", true)
       .eq("subscription_valid", true)
+      .not("category", "in", DRINK_CATEGORY_LIST) // a drink comes with the meal, it isn't one
       .order("category")
       .order("name"),
     supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
@@ -171,6 +174,7 @@ export default async function SubscriberProfilePage({
           mealsLunch: (sub as any).meals_lunch ?? 1,
           mealsDinner: (sub as any).meals_dinner ?? 0,
           deliveryDays: (schedule ?? []).map((r: any) => r.day_of_week as string),
+          noDeliveryDays: !!(sub as any).no_delivery_days,
           codDue: (sub as any).cod_due_paise ?? 0,
           onCredit: !!(sub as any).cod_on_credit,
           // Bought with a coupon (migration 066): its meal price and code.

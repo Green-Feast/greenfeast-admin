@@ -60,6 +60,9 @@ type Subscription = {
   // = opt-in — delivery only happens on these days. See instantiate-orders'
   // hasScheduleDays for the exact rule this mirrors.
   deliveryDays: string[]
+  // "No delivery days" (089): with no schedule rows this means nothing is
+  // delivered, instead of the every-day fallback above.
+  noDeliveryDays: boolean
   codDue: number
   onCredit: boolean
   couponMealPrice: number | null
@@ -296,7 +299,8 @@ export function ProfileClient({
     day[e.slot] = e
     menuByDay.set(e.dayOfWeek, day)
   }
-  const takesEveryDay = subscription.deliveryDays.length === 0
+  const takesEveryDay = subscription.deliveryDays.length === 0 && !subscription.noDeliveryDays
+  const takesNoDelivery = subscription.deliveryDays.length === 0 && subscription.noDeliveryDays
   const takesDelivery = (dayIdx: number) => takesEveryDay || subscription.deliveryDays.includes(DOW_ORDER[dayIdx])
 
   const walletCredited = walletTransactions.filter(t => t.type === "credit").reduce((s, t) => s + t.amount, 0)
@@ -529,6 +533,8 @@ export function ProfileClient({
                 <label className="text-xs text-gray-400 uppercase tracking-wide block mb-2">Delivery Days</label>
                 {takesEveryDay ? (
                   <span className="text-sm text-[#1A1A1A]">All days <span className="text-xs text-gray-400">(no fixed schedule set)</span></span>
+                ) : takesNoDelivery ? (
+                  <span className="text-sm text-[#1A1A1A]">No delivery days <span className="text-xs text-gray-400">(walk-in / orders added day by day)</span></span>
                 ) : (
                   <div className="flex gap-1.5">
                     {DOW_ORDER.map((d) => {
@@ -1023,6 +1029,7 @@ export function ProfileClient({
             startDate: subscription.startDate,
             mealsLeft: subscription.deliveriesRemaining,
           }}
+          noDeliveryDays={subscription.noDeliveryDays}
           plans={catalogue.plans}
           addons={catalogue.addons}
           pending={isPending}

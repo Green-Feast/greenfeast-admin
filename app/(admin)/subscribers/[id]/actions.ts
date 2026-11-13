@@ -9,6 +9,7 @@ import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { syncUpcomingOrders, type PlanShape } from "@/lib/plan-sync"
 import { recordCash } from "@/lib/cash"
+import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 
 type OrderRef = { id: string; delivery_date: string; meal_slot: "lunch" | "dinner" }
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string }
@@ -216,7 +217,8 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
     return { ok: false, error: "Meals per day must be whole numbers." }
   }
   if (input.mealsLunch + input.mealsDinner < 1) return { ok: false, error: "Set at least one meal per day." }
-  if (input.days.length === 0) return { ok: false, error: "Pick at least one delivery day." }
+  // No delivery days is allowed (089): the plan's no_delivery_days flag is set
+  // and nothing is delivered — an EMPTY schedule alone would mean every day.
   if (!Number.isInteger(input.mealsLeft) || input.mealsLeft < 0 || input.mealsLeft > 500) {
     return { ok: false, error: "Meals left must be between 0 and 500." }
   }
@@ -225,11 +227,11 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
   const [{ data: sub }, { data: schedule }, { data: subAddons }, { data: plan }] = await Promise.all([
     supabaseAdmin
       .from("subscriptions")
-      .select("id, plan_id, meals_lunch, meals_dinner, deliveries_remaining, start_date")
+      .select("id, plan_id, meals_lunch, meals_dinner, deliveries_remaining, start_date, no_delivery_days")
       .eq("id", subId)
       .single(),
     supabaseAdmin.from("subscription_schedule").select("day_of_week, meal_template_id").eq("subscription_id", subId),
-    supabaseAdmin.from("subscription_addons").select("addon_id").eq("subscription_id", subId),
+    supabaseAdmin.from("subscription_addons").select("addon_id, sub_option").eq("subscription_id", subId),
     supabaseAdmin.from("plans").select("id, name").eq("id", input.planId).maybeSingle(),
   ])
   if (!sub) return { ok: false, error: "Subscription not found." }
@@ -240,7 +242,8 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
     mealsLunch: sub.meals_lunch ?? 0,
     mealsDinner: sub.meals_dinner ?? 0,
     days: ((schedule ?? []) as { day_of_week: string }[]).map((r) => r.day_of_week),
-    addonIds: ((subAddons ?? []) as { addon_id: string }[]).map((a) => a.addon_id),
+    noDeliveryDays: !!sub.no_delivery_days,
+    addonIds: ((subAddons ?? []) as { addon_id: string; sub_option: string | null }[]).map((a) => a.addon_id),
     startDate: sub.start_date ?? null,
     mealsLeft: sub.deliveries_remaining ?? 0,
   }
@@ -249,6 +252,7 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
     mealsLunch: input.mealsLunch,
     mealsDinner: input.mealsDinner,
     days: DOW.filter((d) => input.days.includes(d)),
+    noDeliveryDays: input.days.length === 0,
     addonIds: Array.from(new Set(input.addonIds)),
     startDate: input.startDate || null,
     mealsLeft: input.mealsLeft,
@@ -264,21 +268,26 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
       meals_per_day: after.mealsLunch + after.mealsDinner,
       deliveries_remaining: after.mealsLeft,
       start_date: after.startDate,
+      no_delivery_days: after.noDeliveryDays,
       updated_at: new Date().toISOString(),
     })
     .eq("id", subId)
   if (error) return { ok: false, error: error.message }
 
-  // Delivery days live in subscription_schedule (one row per day).
+  // Delivery days live in subscription_schedule (one row per day). No days =
+  // no rows plus the no_delivery_days flag set above (an empty schedule alone
+  // would mean every day).
   if (after.days.join() !== before.days.join()) {
     let starter = ((schedule ?? []) as { meal_template_id: string | null }[]).find((r) => r.meal_template_id)?.meal_template_id ?? null
     if (!starter) {
       const { data: m } = await supabaseAdmin
-        .from("meal_templates").select("id").eq("is_active", true).eq("subscription_valid", true).limit(1).maybeSingle()
+        .from("meal_templates").select("id").eq("is_active", true).eq("subscription_valid", true)
+        .not("category", "in", DRINK_CATEGORY_LIST) // a drink comes with the meal, it isn't one
+        .limit(1).maybeSingle()
       starter = m?.id ?? null
     }
     await supabaseAdmin.from("subscription_schedule").delete().eq("subscription_id", subId)
-    if (starter) {
+    if (starter && after.days.length > 0) {
       await supabaseAdmin.from("subscription_schedule").insert(
         after.days.map((d) => ({ subscription_id: subId, day_of_week: d, meal_template_id: starter }))
       )
@@ -288,7 +297,11 @@ export async function updatePlanSettings(subId: string, input: PlanInput): Promi
   if (after.addonIds.slice().sort().join() !== before.addonIds.slice().sort().join()) {
     await supabaseAdmin.from("subscription_addons").delete().eq("subscription_id", subId)
     if (after.addonIds.length) {
-      await supabaseAdmin.from("subscription_addons").insert(after.addonIds.map((id) => ({ subscription_id: subId, addon_id: id })))
+      // Add-ons that stay keep the option the customer picked (cheese etc.).
+      const kept = new Map(((subAddons ?? []) as { addon_id: string; sub_option: string | null }[]).map((a) => [a.addon_id, a.sub_option]))
+      await supabaseAdmin.from("subscription_addons").insert(
+        after.addonIds.map((id) => ({ subscription_id: subId, addon_id: id, sub_option: kept.get(id) ?? null }))
+      )
     }
   }
 

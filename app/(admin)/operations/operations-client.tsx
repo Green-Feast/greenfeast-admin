@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, Undo2, ChevronLeft, ChevronRight, History } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, Undo2, ChevronLeft, ChevronRight, History, CupSoda } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import { generateDailyLists, generateKitchenSheets, generateDeliverySheet } from "./daily-lists";
@@ -47,6 +47,10 @@ export type OperationsSubscriber = {
   constraints: string;
   addons: string;
   addonList: { name: string; qty: number }[];
+  // The meal's drink (088), kept apart from add-ons: "Blue Mind", "Chef's
+  // choice", "" when the plan has no drink. drinkList feeds the per-drink tally.
+  drink: string;
+  drinkList: { name: string; qty: number }[];
   timing: string;
   note?: string;
   // Delivery partner app (057)
@@ -715,6 +719,11 @@ export function OperationsClient({
                           {s.quantity > 1 && <span className="ml-1 text-xs font-semibold text-[#1B5E20]">×{s.quantity}</span>}
                         </p>
                         <p className="text-xs text-gray-400 truncate"><span className="font-medium text-gray-500">{s.addressLabel}</span> · {s.address}</p>
+                        {s.drink && (
+                          <p className="text-xs text-gray-500 truncate flex items-center gap-1">
+                            <CupSoda className="w-3 h-3 shrink-0" /> {s.drink}
+                          </p>
+                        )}
                         {!s.batchId && !s.pickup && s.addressId && (
                           <select
                             defaultValue=""
