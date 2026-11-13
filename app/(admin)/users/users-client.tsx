@@ -36,6 +36,33 @@ export type UserRow = {
   planName: string | null
   deliveriesRemaining: number | null
   paymentMethod: string | null
+  // Saved by app onboarding before payment (null if they entered nothing).
+  onboarding: OnboardingData | null
+}
+
+export type OnboardingData = {
+  healthGoal: string | null
+  weightKg: number | null
+  heightCm: number | null
+  exercise: string | null
+  occupation: string | null
+  proteinTarget: number | null
+  fibreTarget: number | null
+  allergens: string[]
+  dietNotes: string | null
+  menu: string | null
+  addonIds: string[]
+  address: { line1: string; landmark: string | null; pincode: string | null; city: string | null } | null
+  // Plan screen onward, saved as they go (null until they pick a plan).
+  choices: {
+    planId: string
+    planName: string | null
+    addonIds: string[]
+    days: string[]
+    mealsLunch: number
+    mealsDinner: number
+    updatedAt: string | null
+  } | null
 }
 
 export type AddonOption = { id: string; name: string; price_per_meal: number }
@@ -330,6 +357,7 @@ export function UsersClient({
       {selected && (
         <DetailPanel
           user={selected}
+          addons={addons}
           isPending={isPending}
           onClose={() => setSelected(null)}
           onCreate={() => setCreateOpen(true)}
@@ -437,9 +465,10 @@ export function UsersClient({
 // ─── Detail slide-over ─────────────────────────────────────────────────────────
 
 function DetailPanel({
-  user, isPending, onClose, onCreate, onEdit, onReset, onDelete, onToggleTest, onNewPassword,
+  user, addons, isPending, onClose, onCreate, onEdit, onReset, onDelete, onToggleTest, onNewPassword,
 }: {
   user: UserRow
+  addons: AddonOption[]
   isPending: boolean
   onClose: () => void
   onCreate: () => void
@@ -493,6 +522,8 @@ function DetailPanel({
             <Row label="Last sign-in"><span className="text-gray-600">{fmtDate(user.lastSignIn)}</span></Row>
             <Row label="Onboarded"><span className="text-gray-600">{user.onboarded ? "Yes" : "No"}</span></Row>
           </Section>
+
+          {user.onboarding && <OnboardingSection data={user.onboarding} addons={addons} />}
 
           <Section title="Subscription">
             {user.subStatus ? (
@@ -717,10 +748,13 @@ function CreateSubModal({
   onClose: () => void
   onSubmit: (input: CreateSubInput) => void
 }) {
-  const [planId, setPlanId] = useState(plans[0]?.id ?? "")
-  const [days, setDays] = useState<string[]>(["Mon", "Wed", "Fri"])
-  const [mealsLunch, setMealsLunch] = useState(1)
-  const [mealsDinner, setMealsDinner] = useState(0)
+  // Start from what they chose in the app, if they got that far.
+  const choices = user.onboarding?.choices ?? null
+  const draftPlan = choices && plans.some((p) => p.id === choices.planId) ? choices.planId : null
+  const [planId, setPlanId] = useState(draftPlan ?? plans[0]?.id ?? "")
+  const [days, setDays] = useState<string[]>(choices?.days.length ? choices.days : ["Mon", "Wed", "Fri"])
+  const [mealsLunch, setMealsLunch] = useState(choices ? choices.mealsLunch : 1)
+  const [mealsDinner, setMealsDinner] = useState(choices ? choices.mealsDinner : 0)
   const [activation, setActivation] = useState<"active" | "cod">("active")
   // First delivery: the next morning's meals by default — today until the
   // 9 AM lunch cutoff (a plan set up after midnight starts that same day),
@@ -729,8 +763,10 @@ function CreateSubModal({
     istHour() < SLOT_CUTOFF_HOUR.lunch ? istToday() : addDaysISO(istToday(), 1))
   const startDay = new Date(startDate + "T00:00:00Z")
   const plan = plans.find((p) => p.id === planId)
-  const [mealsLeft, setMealsLeft] = useState(plans[0]?.meals_total ?? 1)
-  const [addonIds, setAddonIds] = useState<string[]>([])
+  const [mealsLeft, setMealsLeft] = useState(plans.find((p) => p.id === planId)?.meals_total ?? plans[0]?.meals_total ?? 1)
+  // Prefill from what they picked in app onboarding (only add-ons still on sale).
+  const [addonIds, setAddonIds] = useState<string[]>(
+    () => (choices?.addonIds ?? user.onboarding?.addonIds ?? []).filter((id) => addons.some((a) => a.id === id)))
   const [credit, setCredit] = useState("") // ₹, empty = suggested
   // A coupon (admin → Coupons) sets the plan's meal price; only coupons with
   // a price for this plan are offered.
@@ -754,9 +790,9 @@ function CreateSubModal({
   const [name, setName] = useState(user.name ?? "")
   const [phone, setPhone] = useState(user.phone ?? "")
 
-  const [line1, setLine1] = useState("")
-  const [landmark, setLandmark] = useState("")
-  const [pincode, setPincode] = useState("")
+  const [line1, setLine1] = useState(user.onboarding?.address?.line1 ?? "")
+  const [landmark, setLandmark] = useState(user.onboarding?.address?.landmark ?? "")
+  const [pincode, setPincode] = useState(user.onboarding?.address?.pincode ?? "")
 
   function toggleDay(d: string) {
     setDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]))
@@ -1126,6 +1162,46 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{title}</p>
       <div className="space-y-1.5">{children}</div>
     </div>
+  )
+}
+
+function OnboardingSection({ data, addons }: { data: OnboardingData; addons: AddonOption[] }) {
+  const addonNames = data.addonIds.map((id) => addons.find((a) => a.id === id)?.name ?? id)
+  const dash = <span className="text-gray-400">—</span>
+  const txt = (v: React.ReactNode) => <span className="text-[#1A1A1A] text-right">{v}</span>
+  return (
+    <Section title="From app onboarding">
+      {data.healthGoal && <Row label="Goal">{txt(data.healthGoal)}</Row>}
+      {(data.heightCm || data.weightKg) && (
+        <Row label="Height / weight">{txt(`${data.heightCm ?? "—"} cm · ${data.weightKg ?? "—"} kg`)}</Row>
+      )}
+      {data.exercise && <Row label="Exercise">{txt(data.exercise)}</Row>}
+      {data.occupation && <Row label="Occupation">{txt(data.occupation)}</Row>}
+      {(data.proteinTarget || data.fibreTarget) && (
+        <Row label="Daily targets">{txt(`${data.proteinTarget ?? "—"} g protein · ${data.fibreTarget ?? "—"} g fibre`)}</Row>
+      )}
+      <Row label="Allergies">{data.allergens.length ? txt(data.allergens.join(", ")) : dash}</Row>
+      {data.dietNotes && <Row label="Diet notes">{txt(data.dietNotes)}</Row>}
+      {data.choices && (
+        <>
+          <Row label="Chosen plan">{txt(data.choices.planName ?? data.choices.planId)}</Row>
+          <Row label="Days">{data.choices.days.length ? txt(data.choices.days.join(", ")) : dash}</Row>
+          <Row label="Meals per day">{txt(`${data.choices.mealsLunch} lunch · ${data.choices.mealsDinner} dinner`)}</Row>
+          <Row label="Chosen add-ons">
+            {data.choices.addonIds.length
+              ? txt(data.choices.addonIds.map((id) => addons.find((a) => a.id === id)?.name ?? id).join(", "))
+              : dash}
+          </Row>
+        </>
+      )}
+      {data.menu && <Row label="Suggested menu">{txt(data.menu)}</Row>}
+      {!data.choices && addonNames.length > 0 && <Row label="Suggested add-ons">{txt(addonNames.join(", "))}</Row>}
+      <Row label="Address">
+        {data.address
+          ? txt([data.address.line1, data.address.landmark, data.address.pincode].filter(Boolean).join(", "))
+          : dash}
+      </Row>
+    </Section>
   )
 }
 

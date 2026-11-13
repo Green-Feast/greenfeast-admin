@@ -104,7 +104,7 @@ export async function createSubscription(
 
   // 3. Optional default address (needed for orders to carry a delivery address).
   if (address?.line1?.trim()) {
-    const { error: addrErr } = await supabaseAdmin.from("addresses").insert({
+    const fields = {
       user_id: userId,
       label: address.label || "Home",
       type: address.type === "work" ? "office" : address.type || "home",
@@ -113,7 +113,18 @@ export async function createSubscription(
       pincode: address.pincode || null,
       landmark: address.landmark?.trim() || null,
       is_default: true,
-    })
+    }
+    // A user who got partway through app onboarding already has a default
+    // address (one active default per user is enforced by a unique index), so
+    // update it in place instead of inserting a second default.
+    const { data: existing, error: findErr } = await supabaseAdmin
+      .from("addresses").select("id")
+      .eq("user_id", userId).eq("is_default", true).is("archived_at", null)
+      .maybeSingle()
+    if (findErr) return { ok: false, error: `Address: ${findErr.message}` }
+    const { error: addrErr } = existing
+      ? await supabaseAdmin.from("addresses").update(fields).eq("id", existing.id)
+      : await supabaseAdmin.from("addresses").insert(fields)
     if (addrErr) return { ok: false, error: `Address: ${addrErr.message}` }
   }
 
