@@ -331,6 +331,20 @@ const ACTIVITY_ICON: Record<string, { icon: any; cls: string }> = {
   closure: { icon: DoorClosed, cls: "bg-red-100 text-red-700" },
 };
 
+function AttentionItem({ r }: { r: AttentionRow }) {
+  return (
+    <li>
+      <Link href={r.href} className="flex items-baseline justify-between gap-3 text-sm hover:text-[#1B5E20]">
+        <span className="truncate">
+          <span className="font-medium text-[#1A1A1A]">{r.who.name}</span>{" "}
+          <span className="font-mono text-xs text-gray-400">{r.who.code}</span>
+        </span>
+        <span className="text-xs text-gray-500 shrink-0">{r.detail}</span>
+      </Link>
+    </li>
+  );
+}
+
 function AttentionGroup({ icon: Icon, title, rows, empty, tone }: {
   icon: any; title: string; rows: AttentionRow[]; empty?: string; tone: string;
 }) {
@@ -346,18 +360,20 @@ function AttentionGroup({ icon: Icon, title, rows, empty, tone }: {
         <p className="text-xs text-gray-400 ml-6">{empty}</p>
       ) : (
         <ul className="ml-6 space-y-1">
-          {rows.slice(0, 6).map((r, i) => (
-            <li key={i}>
-              <Link href={r.href} className="flex items-baseline justify-between gap-3 text-sm hover:text-[#1B5E20]">
-                <span className="truncate">
-                  <span className="font-medium text-[#1A1A1A]">{r.who.name}</span>{" "}
-                  <span className="font-mono text-xs text-gray-400">{r.who.code}</span>
-                </span>
-                <span className="text-xs text-gray-500 shrink-0">{r.detail}</span>
-              </Link>
+          {rows.slice(0, 6).map((r, i) => <AttentionItem key={i} r={r} />)}
+          {rows.length > 6 && (
+            <li>
+              <details className="group">
+                <summary className="list-none [&::-webkit-details-marker]:hidden cursor-pointer select-none text-xs text-gray-400 hover:text-[#1B5E20]">
+                  <span className="group-open:hidden">+{rows.length - 6} more</span>
+                  <span className="hidden group-open:inline">Show less</span>
+                </summary>
+                <ul className="mt-1 space-y-1">
+                  {rows.slice(6).map((r, i) => <AttentionItem key={i} r={r} />)}
+                </ul>
+              </details>
             </li>
-          ))}
-          {rows.length > 6 && <li className="text-xs text-gray-400">+{rows.length - 6} more</li>}
+          )}
         </ul>
       )}
     </div>
