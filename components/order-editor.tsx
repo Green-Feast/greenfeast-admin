@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState, useTransition } from "react"
 import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2, CupSoda } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { istToday } from "@/lib/ist"
-import { isDrinkCategory } from "@/lib/drinks"
+import { isDrinkCategory, DRINK_NOT_PICKED } from "@/lib/drinks"
 import {
   getSlotContext,
   adminSetOrderDish,
@@ -81,6 +81,8 @@ export function OrderEditor({
   const [pickingDrink, setPickingDrink] = useState<string | null>(null)
   const [query, setQuery] = useState("")
   const [newAddress, setNewAddress] = useState<string>("")
+  // The drink for a meal added here ("" = none). A new meal is a delivery.
+  const [newDrink, setNewDrink] = useState<string>("")
   const [backToMenu, setBackToMenu] = useState(true)
 
   async function load() {
@@ -121,6 +123,7 @@ export function OrderEditor({
       if (res.message) setMessage({ ok: true, text: res.message })
       setPicking(null)
       setPickingDrink(null)
+      setNewDrink("")
       setQuery("")
       await load()
       onChanged()
@@ -322,7 +325,20 @@ export function OrderEditor({
                       Pick dish
                     </button>
                   </div>
-                  <p className="text-[11px] text-gray-400">Charged at the plan&apos;s per-meal rate on delivery and counts as one meal. Use it to send a portion to a second address.</p>
+                  {ctx.drinks.some((d) => d.deliverable) && (
+                    <select
+                      value={newDrink}
+                      onChange={(e) => setNewDrink(e.target.value)}
+                      className="w-full h-9 rounded-lg border border-[#e2e8d5] bg-white px-2 text-sm"
+                      aria-label="Drink"
+                    >
+                      <option value="">No drink</option>
+                      {ctx.drinks.filter((d) => d.deliverable).map((d) => (
+                        <option key={d.id} value={d.id}>Drink: {d.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  <p className="text-[11px] text-gray-400">Charged at the plan&apos;s per-meal rate on delivery and counts as one meal{newDrink ? ", plus the drink" : ""}. Use it to send a portion to a second address.</p>
                 </div>
               )}
 
@@ -382,18 +398,10 @@ export function OrderEditor({
           <div className="absolute inset-0 z-20 bg-white flex flex-col">
             <div className="px-5 py-4 border-b border-[#e2e8d5] flex items-center gap-2">
               <CupSoda className="w-4 h-4 text-gray-400" />
-              <p className="flex-1 text-sm font-semibold text-[#1A1A1A]">Choose a drink</p>
+              <p className="flex-1 text-sm font-semibold text-[#1A1A1A]">{drinkOrder?.drink ? "Change the drink" : "Add a drink"}</p>
               <button onClick={() => setPickingDrink(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
             </div>
             <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
-              <button
-                disabled={pending}
-                onClick={() => run(() => adminSetOrderDrink(pickingDrink, null))}
-                className="w-full text-left px-5 py-2.5 text-sm hover:bg-green-50 disabled:opacity-40 flex items-center justify-between"
-              >
-                <span>Chef&apos;s choice <span className="text-xs text-gray-400">(the kitchen decides)</span></span>
-                {drinkOrder && !drinkOrder.drink?.templateId && <span className="text-[10px] font-semibold uppercase text-[#1B5E20]">current</span>}
-              </button>
               {drinkOptions.map((d) => (
                 <button
                   key={d.id}
@@ -439,7 +447,7 @@ export function OrderEditor({
                   disabled={pending}
                   onClick={() => run(() =>
                     picking === "new"
-                      ? adminAddExtraDish(target.subscriptionId, target.date, target.slot, m.id, newAddress || null)
+                      ? adminAddExtraDish(target.subscriptionId, target.date, target.slot, m.id, newAddress || null, newDrink || null)
                       : adminSetOrderDish(picking, m.id)
                   )}
                   className="w-full text-left px-5 py-2.5 text-sm hover:bg-green-50 disabled:opacity-40 flex items-center justify-between"
@@ -531,23 +539,21 @@ function OrderCard({
         </div>
       </div>
 
-      {/* Drink (088): the dish chosen for this meal; the stepper still adds or removes the drink line */}
+      {/* Drink (088): always a named dish. Adding one opens the picker; the stepper sets how many. */}
       {drinkAddon && (
         <div className="space-y-1.5">
           <span className="text-xs text-gray-500 flex items-center gap-1"><CupSoda className="w-3 h-3" /> Drink</span>
           <div className="flex items-center justify-between gap-2 text-sm">
-            <span className={cn("min-w-0", drinkQty > 0 ? "text-[#1A1A1A]" : "text-gray-400")}>
-              {drinkQty > 0 ? (order.drink?.name ?? "Chef's choice") : "No drink"}
+            <span className={cn("min-w-0", drinkQty === 0 ? "text-gray-400" : order.drink?.name === DRINK_NOT_PICKED ? "text-amber-700" : "text-[#1A1A1A]")}>
+              {drinkQty > 0 ? (order.drink?.name ?? DRINK_NOT_PICKED) : "No drink"}
               {drinkQty > 0 && order.drink?.edited && <span className="ml-1.5 text-[10px] font-bold uppercase text-amber-600">changed</span>}
               {drinkLine?.included && <span className="ml-1 text-[10px] text-[#1B5E20] font-semibold">with plan</span>}
               <span className="ml-1 text-xs text-gray-400">{rupees(drinkAddon.price_per_meal)}</span>
             </span>
             <div className="flex items-center gap-1.5 shrink-0">
-              {drinkQty > 0 && (
-                <button onClick={onPickDrink} disabled={pending} className="mr-1 text-xs font-medium text-[#1B5E20] hover:underline disabled:opacity-40">
-                  Change drink
-                </button>
-              )}
+              <button onClick={onPickDrink} disabled={pending} className="mr-1 text-xs font-medium text-[#1B5E20] hover:underline disabled:opacity-40">
+                {drinkQty > 0 ? (order.drink?.templateId ? "Change drink" : "Pick drink") : "Add drink"}
+              </button>
               <button
                 disabled={pending || drinkQty === 0}
                 onClick={() => run(() => adminSetAddonQty(order.id, drinkAddon.id, drinkQty - 1))}
@@ -558,7 +564,7 @@ function OrderCard({
               <span className="w-5 text-center text-xs font-semibold">{drinkQty}</span>
               <button
                 disabled={pending}
-                onClick={() => run(() => adminSetAddonQty(order.id, drinkAddon.id, drinkQty + 1))}
+                onClick={() => (drinkQty === 0 ? onPickDrink() : run(() => adminSetAddonQty(order.id, drinkAddon.id, drinkQty + 1)))}
                 className="w-6 h-6 rounded-md border border-[#e2e8d5] flex items-center justify-center disabled:opacity-30"
               >
                 <Plus className="w-3 h-3" />

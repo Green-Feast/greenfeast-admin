@@ -34,7 +34,7 @@ export type DrinkDish = {
   name: string
   category: string
   active: boolean
-  // false = dine-in only: delivery subscribers get the chef's choice instead.
+  // false = dine-in only: it can't go out on a delivery.
   subscriptionValid: boolean
 }
 
@@ -381,7 +381,7 @@ export function KitchenClient({
                             )}
                           </span>
                         ) : (
-                          <span className="text-sm text-gray-400">— chef&apos;s choice —</span>
+                          <span className={cn("text-sm", row?.mealTemplateId ? "text-amber-700" : "text-gray-400")}>— no drink set —</span>
                         )}
                       </div>
 
@@ -409,7 +409,7 @@ export function KitchenClient({
                       <p className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-snug text-amber-800">
                         <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
                         <span>
-                          {drink.active ? "Dine-in only" : "Inactive"}: delivery subscribers get the chef&apos;s choice on this meal. Only dine-in and walk-in orders get {drink.name}.
+                          {drink.active ? "Dine-in only" : "Inactive"}: {drink.name} can&apos;t go out on a delivery, so delivery meals get no drink named. Pick a deliverable drink.
                         </span>
                       </p>
                     )}

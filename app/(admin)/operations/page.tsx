@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
+import { DRINK_NOT_PICKED } from "@/lib/drinks";
 import { OperationsClient, type OperationsSubscriber, type CashReportRow, type EarlierDay } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
 
@@ -201,12 +202,12 @@ export default async function OperationsPage({
       .filter(Boolean) as { name: string; isDrink: boolean; subOption: string | null; qty: number }[];
     const addonList = lines.filter((l) => !l.isDrink).map((l) => ({ name: l.name, qty: l.qty }));
     // The dish the order's drink id points at; else the line's sub_option (the
-    // drink's name, or an old free-text flavour); else the chef decides.
+    // drink's name, or an old free-text flavour); else nobody has picked one.
     const drinkId = (o as unknown as { drink_template_id: string | null }).drink_template_id;
     const drinkDish = drinkId ? drinkNameById.get(drinkId) : undefined;
     const drinkList = lines
       .filter((l) => l.isDrink)
-      .map((l) => ({ name: drinkDish ?? (l.subOption?.trim() || "Chef's choice"), qty: l.qty }));
+      .map((l) => ({ name: drinkDish ?? (l.subOption?.trim() || DRINK_NOT_PICKED), qty: l.qty }));
 
     return {
       orderId: o.id as string,

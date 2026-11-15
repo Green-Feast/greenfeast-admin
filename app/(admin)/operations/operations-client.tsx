@@ -47,8 +47,8 @@ export type OperationsSubscriber = {
   constraints: string;
   addons: string;
   addonList: { name: string; qty: number }[];
-  // The meal's drink (088), kept apart from add-ons: "Blue Mind", "Chef's
-  // choice", "" when the plan has no drink. drinkList feeds the per-drink tally.
+  // The meal's drink (088), kept apart from add-ons: "Blue Mind", "Drink not
+  // picked", "" when the plan has no drink. drinkList feeds the per-drink tally.
   drink: string;
   drinkList: { name: string; qty: number }[];
   timing: string;

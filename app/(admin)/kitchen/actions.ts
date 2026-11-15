@@ -104,7 +104,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 // cutoff, and nothing touched once the customer or admin swapped that day's
 // drink (drink_edited). There is no FK from orders to the drink dish (088), so
 // the dish is looked up by id here. A weekly drink that isn't deliverable
-// (inactive or dine-in only) puts delivery orders on "chef's choice" (null),
+// (inactive or dine-in only) leaves delivery orders with no drink picked (null),
 // exactly like instantiate-orders does. A day with no weekly drink is left alone
 // so a first save with the grid half-filled doesn't wipe anyone's legacy flavour.
 async function propagateDrinks(

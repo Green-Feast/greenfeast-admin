@@ -12,3 +12,8 @@ export function isDrinkCategory(category: string | null | undefined): boolean {
 export const DRINK_CATEGORY_LIST = `(${DRINK_CATEGORIES.join(",")})`
 
 export const DRINK_AS_MEAL_ERROR = "A drink can't be the meal. Pick a dish; the drink comes with it."
+
+// A drink line with no drink dish on it (orders.drink_template_id null and no
+// name on the line): nobody has picked one yet. There is no "chef's choice";
+// this shows up so the office picks one.
+export const DRINK_NOT_PICKED = "Drink not picked"

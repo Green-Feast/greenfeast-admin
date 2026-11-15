@@ -2,7 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
 import { istToday, addDaysISO } from "@/lib/ist"
-import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
+import { DRINK_CATEGORY_LIST, DRINK_NOT_PICKED } from "@/lib/drinks"
 import { KitchenClient, type WeeklyMenuRow, type WeeklyOverviewRow, type CellItem } from "./kitchen-client"
 
 export const dynamic = "force-dynamic"
@@ -131,10 +131,10 @@ export default async function KitchenPage({
       })
     // The drink is the add-on line whose addon is a drink. Its dish comes from
     // the order's drink id; the line's sub_option (the drink's name) is the
-    // fallback, and a drink line with neither is the chef's choice.
+    // fallback, and a drink line with neither still needs one picked.
     const drinkLine = lines.find((oa) => oa.addons.is_drink)
     const drinkLabel = drinkLine
-      ? (order.drink_template_id ? drinkName.get(order.drink_template_id) : undefined) ?? drinkLine.sub_option ?? "Chef's choice"
+      ? (order.drink_template_id ? drinkName.get(order.drink_template_id) : undefined) ?? drinkLine.sub_option ?? DRINK_NOT_PICKED
       : null
     const drinkCount = drinkLine ? countOf(drinkLine) : 0
     const item: CellItem = {

@@ -17,7 +17,7 @@ import { mealRate } from "@/lib/pricing"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
 import { deliverOrders, skipUndelivered, undoDelivered } from "@/lib/delivery"
-import { DRINK_CATEGORIES, DRINK_AS_MEAL_ERROR, isDrinkCategory } from "@/lib/drinks"
+import { DRINK_CATEGORIES, DRINK_AS_MEAL_ERROR, DRINK_NOT_PICKED, isDrinkCategory } from "@/lib/drinks"
 
 export type Slot = "lunch" | "dinner"
 
@@ -32,7 +32,7 @@ export type SlotOrderAddon = {
 }
 
 // The order's drink (088): the add-on line whose addon is a drink, plus the
-// dish it stands for. templateId null = chef's choice.
+// dish it stands for. templateId null = none picked yet (an old order).
 export type SlotOrderDrink = {
   lineId: string
   templateId: string | null
@@ -251,7 +251,7 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
           lineId: line.id as string,
           templateId,
           // The dish's own name first; the line's sub_option (the same name) is what name-only readers print.
-          name: (templateId ? drinkById.get(templateId)?.name : undefined) ?? line.sub_option ?? "Chef's choice",
+          name: (templateId ? drinkById.get(templateId)?.name : undefined) ?? line.sub_option ?? DRINK_NOT_PICKED,
           edited: !!o.drink_edited,
         }
       })(),
@@ -345,63 +345,83 @@ export async function adminSetOrderAddress(orderId: string, addressId: string): 
 
 // ── Drink (088) ───────────────────────────────────────────────────────────
 
-// Swaps the drink on one meal: orders.drink_template_id plus the drink add-on
+// Names the drink on one meal: orders.drink_template_id plus the drink add-on
 // line's sub_option, which is what name-only readers print (Operations, the
-// partner app, the Counter). null = the chef's choice. drink_edited keeps the
-// weekly menu's drink from overwriting it; cart_edited keeps the customer's
-// plan-default changes off this day (080). No price change: the drink is
-// already a line on the meal. Like the other edits here, past the slot's cutoff
-// it still goes through but says so, since the kitchen sheet may be printed.
-export async function adminSetOrderDrink(orderId: string, drinkTemplateId: string | null): Promise<EditResult> {
-  await requireAdmin()
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
-
-  const [{ data: row }, { data: drinkAddons }] = await Promise.all([
+// partner app, the Counter). A meal with no drink line gets one, priced like
+// any add-on put on a single meal (the same as the Drink "+" in the editor),
+// so adding a drink is one step. There is no "chef's choice": a drink is always
+// a named dish. drink_edited keeps the weekly menu's drink from overwriting it;
+// cart_edited keeps the customer's plan-default changes off this day (080).
+async function attachDrink(orderId: string, drinkTemplateId: string): Promise<{ ok: true; name: string; added: boolean } | { ok: false; error: string }> {
+  const [{ data: row }, { data: drinkAddons }, { data: dish }] = await Promise.all([
     supabaseAdmin.from("orders").select("fulfilment").eq("id", orderId).maybeSingle(),
-    supabaseAdmin.from("addons").select("id").eq("is_drink", true),
-  ])
-  const drinkAddonIds = ((drinkAddons ?? []) as { id: string }[]).map((a) => a.id)
-  const { data: lines } = drinkAddonIds.length
-    ? await supabaseAdmin
-        .from("order_addons").select("id")
-        .eq("order_id", orderId).eq("kind", "addon").in("addon_id", drinkAddonIds)
-    : { data: [] as { id: string }[] }
-  if (!lines?.length) return { ok: false, error: "This meal has no drink. Add the Drink under Add-ons first." }
-
-  let name: string | null = null
-  if (drinkTemplateId) {
-    const { data: dish } = await supabaseAdmin
+    supabaseAdmin.from("addons").select("id, price_per_meal, is_active").eq("is_drink", true).order("id"),
+    supabaseAdmin
       .from("meal_templates")
       .select("id, name, category, is_active, subscription_valid")
       .eq("id", drinkTemplateId)
-      .maybeSingle()
-    if (!dish || !dish.is_active || !DRINK_CATEGORIES.includes(dish.category)) {
-      return { ok: false, error: "That isn't an active smoothie or coffee." }
-    }
-    // Delivery only carries deliverable drinks; a pickup / dine-in booking can take a coffee.
-    if ((row?.fulfilment ?? "delivery") === "delivery" && !dish.subscription_valid) {
-      return { ok: false, error: `${dish.name} is dine-in only, so it can't go out on a delivery. Pick another drink or the chef's choice.` }
-    }
-    name = dish.name
+      .maybeSingle(),
+  ])
+  if (!dish || !dish.is_active || !DRINK_CATEGORIES.includes(dish.category)) {
+    return { ok: false, error: "That isn't an active smoothie or coffee." }
+  }
+  // Delivery only carries deliverable drinks; a pickup / dine-in booking can take a coffee.
+  if ((row?.fulfilment ?? "delivery") === "delivery" && !dish.subscription_valid) {
+    return { ok: false, error: `${dish.name} is dine-in only, so it can't go out on a delivery. Pick another drink.` }
+  }
+
+  type DrinkAddon = { id: string; price_per_meal: number; is_active: boolean }
+  const addonRows = (drinkAddons ?? []) as DrinkAddon[]
+  const { data: lines } = addonRows.length
+    ? await supabaseAdmin
+        .from("order_addons").select("id")
+        .eq("order_id", orderId).eq("kind", "addon").in("addon_id", addonRows.map((a) => a.id))
+    : { data: [] as { id: string }[] }
+
+  let added = false
+  if (lines?.length) {
+    const { error } = await supabaseAdmin
+      .from("order_addons")
+      .update({ sub_option: dish.name })
+      .in("id", (lines as { id: string }[]).map((l) => l.id))
+    if (error) return { ok: false, error: error.message }
+  } else {
+    const addon = addonRows.find((a) => a.is_active) ?? addonRows[0]
+    if (!addon) return { ok: false, error: "There's no drink add-on set up. Add one under Menu first." }
+    const { error } = await supabaseAdmin.from("order_addons").insert({
+      order_id: orderId, addon_id: addon.id, kind: "addon", quantity: 1, unit_price: addon.price_per_meal, sub_option: dish.name,
+    })
+    if (error) return { ok: false, error: error.message }
+    added = true
   }
 
   const { error } = await supabaseAdmin
     .from("orders")
-    .update({ drink_template_id: drinkTemplateId, drink_edited: true, cart_edited: true, updated_at: new Date().toISOString() })
+    .update({ drink_template_id: dish.id, drink_edited: true, cart_edited: true, updated_at: new Date().toISOString() })
     .eq("id", orderId)
   if (error) return { ok: false, error: error.message }
-  const { error: lineError } = await supabaseAdmin
-    .from("order_addons")
-    .update({ sub_option: name })
-    .in("id", (lines as { id: string }[]).map((l) => l.id))
-  if (lineError) return { ok: false, error: lineError.message }
+  if (added) await recompute(orderId)
+  return { ok: true, name: dish.name, added }
+}
+
+// Picks (or swaps) the drink on one meal; adds the drink if the meal has none.
+// Like the other edits here, past the slot's cutoff it still goes through but
+// says so, since the kitchen sheet may be printed.
+export async function adminSetOrderDrink(orderId: string, drinkTemplateId: string): Promise<EditResult> {
+  await requireAdmin()
+  if (!drinkTemplateId) return { ok: false, error: "Pick a drink." }
+  const order = await editableOrder(orderId)
+  if (typeof order === "string") return { ok: false, error: order }
+
+  const res = await attachDrink(orderId, drinkTemplateId)
+  if (!res.ok) return res
 
   refresh(order.subscription_id)
+  const what = res.added ? `${res.name} added` : `Drink is now ${res.name}`
   if (isSlotLocked(order.delivery_date, order.meal_slot)) {
-    return { ok: true, message: `Drink changed. Past the ${order.meal_slot === "lunch" ? "9 AM" : "2 PM"} cutoff, so tell the kitchen.` }
+    return { ok: true, message: `${what}. Past the ${order.meal_slot === "lunch" ? "9 AM" : "2 PM"} cutoff, so tell the kitchen.` }
   }
-  return { ok: true, message: name ? `Drink is now ${name}.` : "Drink is now the chef's choice." }
+  return { ok: true, message: `${what}.` }
 }
 
 // ── Add-ons ───────────────────────────────────────────────────────────────
@@ -606,7 +626,8 @@ export async function adminUnskipSlot(subscriptionId: string, date: string, slot
 // ── Extra dishes ──────────────────────────────────────────────────────────
 
 export async function adminAddExtraDish(
-  subscriptionId: string, date: string, slot: Slot, mealTemplateId: string, addressId: string | null
+  subscriptionId: string, date: string, slot: Slot, mealTemplateId: string, addressId: string | null,
+  drinkTemplateId: string | null = null
 ): Promise<EditResult> {
   await requireAdmin()
   if (date < istToday()) return { ok: false, error: "That day has passed." }
@@ -654,6 +675,12 @@ export async function adminAddExtraDish(
   if (error || !created) return { ok: false, error: error?.message ?? "Could not add the dish." }
   await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: created.id })
   await recompute(created.id)
+  if (drinkTemplateId) {
+    const res = await attachDrink(created.id, drinkTemplateId)
+    refresh(subscriptionId)
+    if (!res.ok) return { ok: true, message: `Dish added, but the drink wasn't: ${res.error}` }
+    return { ok: true, message: `Dish added with ${res.name}.` }
+  }
   refresh(subscriptionId)
   return { ok: true, message: "Dish added." }
 }
