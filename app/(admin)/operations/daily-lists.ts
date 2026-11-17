@@ -390,6 +390,19 @@ export function generateDailyLists(rows: ListRow[], date: string, provisional: s
   doc.save(`daily_lists_${fileDate(date)}.pdf`)
 }
 
+// One slot's master sheet: a single PDF, one page per batch, each row carrying
+// the meal, drink, constraints AND the address/phone/timing (kitchen + delivery
+// together), with the slot tally at the end. Codes match the daily lists.
+export function generateSlotMasterSheet(rows: ListRow[], date: string, slot: Slot, provisional: string | null) {
+  const sections = buildSections(rows, ["lunch", "dinner"]).filter((s) => s.slot === slot)
+  if (sections.length === 0) return false
+  const doc = newDoc()
+  masterPages(doc, sections, { value: true })
+  stampPages(doc, date, provisional)
+  doc.save(`${slot}_master_sheet_${fileDate(date)}.pdf`)
+  return true
+}
+
 export function generateKitchenSheets(rows: ListRow[], date: string, slot: Slot, provisional: string | null) {
   const doc = newDoc()
   // Built for the whole day so colours and codes match the daily lists.

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, Undo2, ChevronLeft, ChevronRight, History, CupSoda } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
-import { generateDailyLists, generateKitchenSheets, generateDeliverySheet } from "./daily-lists";
+import { generateDailyLists, generateKitchenSheets, generateDeliverySheet, generateSlotMasterSheet } from "./daily-lists";
 import {
   advanceBatchStatus,
   advanceOrderStatus,
@@ -339,6 +339,17 @@ export function OperationsClient({
     }
   }
 
+  const [masterBusy, setMasterBusy] = useState<MealSlot | null>(null);
+  async function handleGenerateMaster(s: MealSlot) {
+    setMasterBusy(s);
+    try {
+      const ok = generateSlotMasterSheet(initialSubscribers, serverDate, s, provisionalNote([s]));
+      showToast(ok ? `${s === "lunch" ? "Lunch" : "Dinner"} master sheet downloaded` : `No ${s} deliveries for this day`);
+    } finally {
+      setMasterBusy(null);
+    }
+  }
+
   async function handleGenerateKitchen() {
     setLoading((l) => ({ ...l, kitchen: { ...l.kitchen, standalone: true } }));
     try {
@@ -604,6 +615,20 @@ export function OperationsClient({
             <p className="text-xs text-white/60">One PDF: master list per batch with tallies · kitchen sheets · delivery sheets with cash to collect</p>
           </div>
           <div className="flex gap-3 flex-wrap flex-shrink-0 max-w-full">
+            {(["lunch", "dinner"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => handleGenerateMaster(s)}
+                disabled={masterBusy !== null}
+                className="flex items-center gap-2 px-5 py-3 rounded-lg bg-white/20 text-white font-semibold hover:bg-white/30 disabled:opacity-50 disabled:cursor-not-allowed transition-all border border-white/30"
+              >
+                {masterBusy === s ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" />Generating...</>
+                ) : (
+                  <><FileText className="w-4 h-4" />{s === "lunch" ? "Lunch" : "Dinner"} Master Sheet</>
+                )}
+              </button>
+            ))}
             <button
               onClick={handleGenerateKitchen}
               disabled={loading.kitchen.standalone}
