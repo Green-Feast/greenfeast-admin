@@ -19,6 +19,7 @@ import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
 import { deliverOrders, skipUndelivered, undoDelivered } from "@/lib/delivery"
 import { DRINK_CATEGORIES, DRINK_AS_MEAL_ERROR, DRINK_NOT_PICKED, isDrinkCategory } from "@/lib/drinks"
+import { addressText } from "@/lib/address"
 
 export type Slot = "lunch" | "dinner"
 
@@ -190,7 +191,7 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
       .order("slot_seq"),
     supabaseAdmin
       .from("addresses")
-      .select("id, label, type, line1, is_default, batch_id_lunch, batch_id_dinner")
+      .select("id, label, type, line1, line2, is_default, batch_id_lunch, batch_id_dinner")
       .eq("user_id", userId)
       .is("archived_at", null)
       .order("is_default", { ascending: false })
@@ -273,7 +274,7 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
     addresses: ((addrs ?? []) as any[]).map((a) => ({
       id: a.id,
       label: a.label || a.type || "Address",
-      line1: a.line1,
+      line1: addressText(a),
       isDefault: !!a.is_default,
       batchLunch: a.batch_id_lunch ? batchName.get(a.batch_id_lunch) ?? null : null,
       batchDinner: a.batch_id_dinner ? batchName.get(a.batch_id_dinner) ?? null : null,

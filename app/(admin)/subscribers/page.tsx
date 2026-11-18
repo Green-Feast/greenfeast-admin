@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
 import { isPlanFinished } from "@/lib/plan-status"
 import { SubscribersClient, type Subscriber, type DeletedAccount } from "./subscribers-client";
+import { fullAddressText } from "@/lib/address"
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +56,7 @@ export default async function SubscribersPage() {
     userIds.length
       ? supabaseAdmin
           .from("addresses")
-          .select("user_id, line1, landmark, pincode, is_default, bl:batches!addresses_batch_id_lunch_fkey ( name ), bd:batches!addresses_batch_id_dinner_fkey ( name )")
+          .select("user_id, line1, line2, landmark, pincode, is_default, bl:batches!addresses_batch_id_lunch_fkey ( name ), bd:batches!addresses_batch_id_dinner_fkey ( name )")
           .in("user_id", userIds)
           .is("archived_at", null)
           .order("is_default", { ascending: false })
@@ -95,7 +96,7 @@ export default async function SubscribersPage() {
     // Batches belong to addresses (migration 052) — the default one's.
     const batchLunch = Array.isArray(addr?.bl) ? addr.bl[0] : addr?.bl;
     const batchDinner = Array.isArray(addr?.bd) ? addr.bd[0] : addr?.bd;
-    const address = addr ? [addr.line1, addr.landmark, addr.pincode].filter(Boolean).join(", ") : "";
+    const address = addr ? fullAddressText(addr, true) : "";
     const dietary = dietaryByUser.get(s.user_id);
     const constraints = [
       dietary?.dietary_preference,

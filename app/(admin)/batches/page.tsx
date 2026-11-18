@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
 import { istToday } from "@/lib/ist"
 import BatchesClient from "./batches-client"
+import { fullAddressText } from "@/lib/address"
 
 export const dynamic = "force-dynamic"
 
@@ -66,7 +67,7 @@ export default async function BatchesPage() {
     ? await Promise.all([
         supabaseAdmin
           .from("addresses")
-          .select("id, user_id, label, type, line1, landmark, pincode, is_default, batch_id_lunch, batch_id_dinner, created_at")
+          .select("id, user_id, label, type, line1, line2, landmark, pincode, is_default, batch_id_lunch, batch_id_dinner, created_at")
           .in("user_id", userIds)
           .is("archived_at", null)
           .order("created_at"),
@@ -100,7 +101,7 @@ export default async function BatchesPage() {
       phone: (user as any)?.phone ?? "",
       plan: s?.plan_name ?? "—",
       label: (a.label || a.type || "Address") as string,
-      line1: [a.line1, a.landmark].filter(Boolean).join(", "),
+      line1: fullAddressText(a, true),
       isDefault: !!a.is_default,
       isNew: a.created_at >= newSince,
       batchIdLunch: a.batch_id_lunch as string | null,

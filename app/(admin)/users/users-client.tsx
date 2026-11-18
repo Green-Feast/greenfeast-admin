@@ -55,7 +55,7 @@ export type OnboardingData = {
   dietNotes: string | null
   menu: string | null
   addonIds: string[]
-  address: { line1: string; landmark: string | null; pincode: string | null; city: string | null } | null
+  address: { line1: string; line2: string | null; landmark: string | null; pincode: string | null; city: string | null } | null
   // Plan screen onward, saved as they go (null until they pick a plan).
   choices: {
     planId: string
@@ -808,6 +808,7 @@ function CreateSubModal({
   const [phone, setPhone] = useState(user.phone ?? "")
 
   const [line1, setLine1] = useState(user.onboarding?.address?.line1 ?? "")
+  const [line2, setLine2] = useState(user.onboarding?.address?.line2 ?? "")
   const [landmark, setLandmark] = useState(user.onboarding?.address?.landmark ?? "")
   const [pincode, setPincode] = useState(user.onboarding?.address?.pincode ?? "")
 
@@ -830,7 +831,7 @@ function CreateSubModal({
       mealsLunch,
       mealsDinner,
       activation,
-      address: line1.trim() ? { label: "Home", type: "home", line1, pincode, landmark } : undefined,
+      address: line1.trim() ? { label: "Home", type: "home", line1, line2, pincode, landmark } : undefined,
       startDate,
       mealsLeft,
       walletCredit: activation === "active" ? creditPaise : upfrontPaise,
@@ -916,10 +917,12 @@ function CreateSubModal({
         </Field>
 
         <Field label="Delivery address (optional)">
-          <textarea value={line1} onChange={(e) => setLine1(e.target.value)} rows={2} placeholder="Flat / street / area" className={cn(inputCls, "h-auto py-2 resize-none")} />
-          <div className="grid grid-cols-2 gap-3 mt-2">
+          <textarea value={line1} onChange={(e) => setLine1(e.target.value)} rows={2} placeholder="Line 1 — house / flat no., building, street" className={cn(inputCls, "h-auto py-2 resize-none")} />
+          <input value={line2} onChange={(e) => setLine2(e.target.value)} placeholder="Line 2 — area, colony, sector" className={cn(inputCls, "mt-2")} />
+          <div className="grid grid-cols-3 gap-3 mt-2">
             <input value={landmark} onChange={(e) => setLandmark(e.target.value)} placeholder="Landmark" className={inputCls} />
-            <input value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="Pincode" className={inputCls} />
+            <input value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="Pincode (Jaipur)" className={inputCls} />
+            <input value="Jaipur" disabled aria-label="City" className={cn(inputCls, "bg-gray-50 text-gray-500")} />
           </div>
         </Field>
 
@@ -1165,7 +1168,7 @@ function OnboardingSection({ data, addons }: { data: OnboardingData; addons: Add
       {!data.choices && addonNames.length > 0 && <Row label="Suggested add-ons">{txt(addonNames.join(", "))}</Row>}
       <Row label="Address">
         {data.address
-          ? txt([data.address.line1, data.address.landmark, data.address.pincode].filter(Boolean).join(", "))
+          ? txt([data.address.line1, data.address.line2, data.address.landmark, data.address.pincode].filter(Boolean).join(", "))
           : dash}
       </Row>
     </Section>

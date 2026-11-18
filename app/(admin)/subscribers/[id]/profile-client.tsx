@@ -37,6 +37,7 @@ import {
   IdentityModal, PlanModal, DietaryModal, AddressModal, CashModal, ActivateModal, FixedDishModal,
   type DietaryValue, type AddressFormValue,
 } from "./profile-editors"
+import { mapsLink } from "@/lib/address"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -818,7 +819,7 @@ export function ProfileClient({
             <CardHeader
               title="Delivery Addresses"
               icon={<MapPin className="w-3.5 h-3.5" />}
-              action={{ label: "Add", onClick: () => { setEditingAddress({ label: "", type: "home", line1: "", landmark: "", pincode: "", timeWindow: "" }); setModal("address") } }}
+              action={{ label: "Add", onClick: () => { setEditingAddress({ label: "", type: "home", line1: "", line2: "", landmark: "", pincode: "", timeWindow: "" }); setModal("address") } }}
             />
             <div className="px-5 pb-5 space-y-3">
               {addresses.length === 0 ? (
@@ -851,7 +852,7 @@ export function ProfileClient({
                         <button
                           title="Edit"
                           onClick={() => {
-                            setEditingAddress({ id: addr.id, label: addr.label ?? "", type: addr.type ?? "home", line1: addr.line1 ?? "", landmark: addr.landmark ?? "", pincode: addr.pincode ?? "", timeWindow: addr.time_window ?? "" })
+                            setEditingAddress({ id: addr.id, label: addr.label ?? "", type: addr.type ?? "home", line1: addr.line1 ?? "", line2: addr.line2 ?? "", landmark: addr.landmark ?? "", pincode: addr.pincode ?? "", timeWindow: addr.time_window ?? "" })
                             setModal("address")
                           }}
                           className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#1B5E20]"
@@ -869,6 +870,14 @@ export function ProfileClient({
                       </div>
                     </div>
                     <p className="text-gray-600">{addr.line1}</p>
+                    {addr.line2 && <p className="text-gray-600">{addr.line2}</p>}
+                    <p className="text-gray-500 text-xs">
+                      {addr.city || "Jaipur"} {addr.pincode || <span className="text-amber-700">· no pincode</span>}
+                      {" · "}
+                      <a href={mapsLink(addr)} target="_blank" rel="noreferrer" className={addr.lat != null ? "text-[#1B5E20] hover:underline" : "text-amber-700 hover:underline"}>
+                        {addr.lat != null ? "Map pin" : "No map pin — search on Maps"}
+                      </a>
+                    </p>
                     {addr.landmark && <p className="text-gray-500 text-xs">Near: {addr.landmark}</p>}
                     {addr.time_window && (
                       <p className="text-gray-500 text-xs flex items-center gap-1"><Clock className="w-3 h-3" />{addr.time_window}</p>

@@ -5,6 +5,7 @@ import { isTestMode } from "@/lib/mode";
 import { DRINK_NOT_PICKED } from "@/lib/drinks";
 import { OperationsClient, type OperationsSubscriber, type CashReportRow, type EarlierDay } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
+import { fullAddressText } from "@/lib/address"
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,7 @@ export default async function OperationsPage({
       ),
       drink_template_id,
       meal_templates ( name ),
-      addresses ( label, type, line1, landmark, city, time_window ),
+      addresses ( label, type, line1, line2, landmark, city, time_window ),
       order_addons ( kind, quantity, unit_price, sub_option, addons ( name, is_drink ) )
     `)
     .eq("delivery_date", date)
@@ -165,10 +166,10 @@ export default async function OperationsPage({
     const pickup = fulfilment !== "delivery";
     const placeRow = Array.isArray((o as any).pickup_locations) ? (o as any).pickup_locations[0] : (o as any).pickup_locations;
     const batchName: string = pickup ? `Walk-in — ${placeRow?.name ?? "counter"}` : (batch as any)?.name ?? "Unassigned";
-    // Jaipur is implied on the sheets — street address and landmark.
+    // Jaipur is implied on the sheets — line 1, line 2 and landmark.
     const address = pickup
       ? `${(o as any).walk_in ? "Walk-in" : "Booked"} · code ${(o as any).pickup_code ?? "—"}`
-      : addr ? [(addr as any).line1, (addr as any).landmark].filter(Boolean).join(", ") : "—";
+      : addr ? fullAddressText(addr as any) || "—" : "—";
 
     // Everything the customer told us (app or admin → Food preferences), in
     // the kitchen's own wording. Allergies / vegan / no paneer print in red.

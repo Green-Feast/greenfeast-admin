@@ -352,7 +352,7 @@ export function DietaryModal({ initial, pending, onClose, onSave }: {
 
 // ── Address ───────────────────────────────────────────────────────────────
 
-export type AddressFormValue = { id?: string; label: string; type: string; line1: string; landmark: string; pincode: string; timeWindow: string }
+export type AddressFormValue = { id?: string; label: string; type: string; line1: string; line2: string; landmark: string; pincode: string; timeWindow: string }
 
 export function AddressModal({ initial, pending, onClose, onSave }: {
   initial: AddressFormValue
@@ -376,18 +376,20 @@ export function AddressModal({ initial, pending, onClose, onSave }: {
               </select>
             </Field>
           </div>
-          <Field label="Address">
-            <textarea value={v.line1} onChange={(e) => set("line1", e.target.value)} rows={2} className={cn(inputCls, "h-auto py-2 resize-none")} />
+          <Field label="Address line 1">
+            <textarea value={v.line1} onChange={(e) => set("line1", e.target.value)} rows={2} placeholder="House / flat no., building, street" className={cn(inputCls, "h-auto py-2 resize-none")} />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <Field label="Address line 2"><input value={v.line2} onChange={(e) => set("line2", e.target.value)} placeholder="Area, colony, sector" className={inputCls} /></Field>
+          <div className="grid grid-cols-3 gap-3">
             <Field label="Landmark"><input value={v.landmark} onChange={(e) => set("landmark", e.target.value)} className={inputCls} /></Field>
-            <Field label="Pincode"><input value={v.pincode} onChange={(e) => set("pincode", e.target.value)} className={inputCls} /></Field>
+            <Field label="Pincode"><input value={v.pincode} onChange={(e) => set("pincode", e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="302…" className={inputCls} /></Field>
+            <Field label="City"><input value="Jaipur" disabled className={cn(inputCls, "bg-gray-50 text-gray-500")} /></Field>
           </div>
           <Field label="Delivery time window"><input value={v.timeWindow} onChange={(e) => set("timeWindow", e.target.value)} placeholder="e.g. 12:30–1:30" className={inputCls} /></Field>
         </div>
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending || !v.line1.trim()} onClick={() => onSave(v)}>{pending ? "Saving…" : "Save address"}</PrimaryBtn>
+          <PrimaryBtn disabled={pending || !v.line1.trim() || !/^\d{6}$/.test(v.pincode)} onClick={() => onSave(v)}>{pending ? "Saving…" : "Save address"}</PrimaryBtn>
         </ModalFooter>
       </ModalCard>
     </ModalOverlay>

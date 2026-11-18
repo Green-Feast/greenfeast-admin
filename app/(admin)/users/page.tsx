@@ -32,7 +32,7 @@ type DietRow = {
   free_text: string | null
 }
 type QuizRow = { user_id: string; derived_menu: string | null; derived_addons: string[] | null }
-type AddrRow = { user_id: string; line1: string | null; landmark: string | null; pincode: string | null; city: string | null }
+type AddrRow = { user_id: string; line1: string | null; line2: string | null; landmark: string | null; pincode: string | null; city: string | null }
 
 function onboardingOf(d?: DietRow, q?: QuizRow, a?: AddrRow, draft?: Draft | null): OnboardingData | null {
   if (!d && !q && !a && !draft) return null
@@ -48,7 +48,7 @@ function onboardingOf(d?: DietRow, q?: QuizRow, a?: AddrRow, draft?: Draft | nul
     dietNotes: d?.free_text ?? null,
     menu: q?.derived_menu ?? null,
     addonIds: q?.derived_addons ?? [],
-    address: a?.line1 ? { line1: a.line1, landmark: a.landmark, pincode: a.pincode, city: a.city } : null,
+    address: a?.line1 ? { line1: a.line1, line2: a.line2, landmark: a.landmark, pincode: a.pincode, city: a.city } : null,
     // What they actually chose on the plan / add-on / days screens (090).
     choices: draft?.planId
       ? {
@@ -99,7 +99,7 @@ export default async function UsersPage() {
     supabaseAdmin.from("questionnaire_responses").select("user_id, derived_menu, derived_addons"),
     supabaseAdmin
       .from("addresses")
-      .select("user_id, line1, landmark, pincode, city")
+      .select("user_id, line1, line2, landmark, pincode, city")
       .eq("is_default", true)
       .is("archived_at", null),
   ])

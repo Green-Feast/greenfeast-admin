@@ -34,6 +34,7 @@ export type CreateSubInput = {
     label: string
     type: string
     line1: string
+    line2?: string
     pincode: string
     landmark?: string
   }

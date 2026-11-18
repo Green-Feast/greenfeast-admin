@@ -10,6 +10,7 @@ import { instantiateOrders } from "@/lib/instantiate"
 import { isTestMode } from "@/lib/mode"
 import { tempPassword } from "@/lib/temp-password"
 import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
+import { servicePincodeError } from "@/lib/address-server"
 import type { CreateSubInput, NewCustomer } from "./types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,13 +117,17 @@ async function createSubscriptionCore(input: CreateSubInput, ctx: SensitiveCtx):
 
   // 3. Optional default address (needed for orders to carry a delivery address).
   if (address?.line1?.trim()) {
+    // Same pincode list as the app and the database (service_pincodes, 093).
+    const pinErr = await servicePincodeError(address.pincode ?? "")
+    if (pinErr) return { ok: false, error: `Address: ${pinErr}` }
     const fields = {
       user_id: userId,
       label: address.label || "Home",
       type: address.type === "work" ? "office" : address.type || "home",
       line1: address.line1.trim(),
+      line2: address.line2?.trim() || null,
       city: "Jaipur",
-      pincode: address.pincode || null,
+      pincode: address.pincode.replace(/\s/g, ""),
       landmark: address.landmark?.trim() || null,
       is_default: true,
     }

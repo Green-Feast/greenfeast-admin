@@ -53,7 +53,7 @@ export type DeletedAccount = {
   snapshot: {
     profile?: { name?: string; phone?: string; created_at?: string } | null;
     dietary_profile?: { dietary_preference?: string; allergens?: string[]; health_goal?: string } | null;
-    addresses?: { line1?: string; landmark?: string; pincode?: string; label?: string }[];
+    addresses?: { line1?: string; line2?: string; landmark?: string; pincode?: string; label?: string }[];
     subscriptions?: { status?: string; plan_name?: string; deliveries_remaining?: number; plans?: { name?: string } }[];
     orders?: { delivery_date?: string; meal_slot?: string; status?: string; meal_templates?: { name?: string } }[];
     wallet_balance?: number;
@@ -529,7 +529,7 @@ function DeletedAccountsPanel({ accounts, onBack }: { accounts: DeletedAccount[]
                             <div>
                               <p className="font-semibold text-gray-400 uppercase tracking-wide mb-1">Addresses ({a.snapshot.addresses?.length ?? 0})</p>
                               {(a.snapshot.addresses ?? []).slice(0, 2).map((addr, i) => (
-                                <p key={i} className="text-gray-700 truncate">{addr.line1}{addr.landmark ? `, ${addr.landmark}` : ""}</p>
+                                <p key={i} className="text-gray-700 truncate">{[addr.line1, addr.line2, addr.landmark].filter(Boolean).join(", ")}</p>
                               ))}
                             </div>
                             <div>

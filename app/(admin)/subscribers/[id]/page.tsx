@@ -73,7 +73,7 @@ export default async function SubscriberProfilePage({
     supabaseAdmin.from("dietary_profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabaseAdmin
       .from("addresses")
-      .select("id, label, type, line1, landmark, city, pincode, time_window, is_default, batch_id_lunch, batch_id_dinner, created_at")
+      .select("id, label, type, line1, line2, landmark, city, pincode, time_window, is_default, batch_id_lunch, batch_id_dinner, created_at, lat, lng")
       .eq("user_id", userId)
       .is("archived_at", null)
       .order("is_default", { ascending: false })

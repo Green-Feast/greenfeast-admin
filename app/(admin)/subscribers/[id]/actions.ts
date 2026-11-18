@@ -10,6 +10,7 @@ import { instantiateOrders } from "@/lib/instantiate"
 import { syncUpcomingOrders, type PlanShape } from "@/lib/plan-sync"
 import { audited, sensitive } from "@/lib/audit"
 import { recordCod, recordOfficePayment, settleBalance, validProof, type CodInput, type SettleInput } from "@/lib/money-ops"
+import { servicePincodeError } from "@/lib/address-server"
 import type { ProofInput } from "@/components/payment-proof"
 import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 
@@ -455,6 +456,7 @@ export type AddressInput = {
   label: string
   type: string
   line1: string
+  line2: string
   landmark: string
   pincode: string
   timeWindow: string
@@ -463,14 +465,19 @@ export type AddressInput = {
 export async function saveCustomerAddress(subId: string, userId: string, input: AddressInput): Promise<ActionResult> {
   return audited<ActionResult>("subscribers.saveCustomerAddress", { subscriptionId: subId, userId }, async () => {
     await requireAdmin()
-    if (!input.line1.trim()) return { ok: false, error: "Enter the address." }
+    if (!input.line1.trim()) return { ok: false, error: "Enter address line 1 (house / flat no. and street)." }
+    // Same pincode list as the app and the database (service_pincodes, 093).
+    const pinErr = await servicePincodeError(input.pincode)
+    if (pinErr) return { ok: false, error: pinErr }
     const fields = {
       label: input.label.trim() || "Home",
       // The table allows home / office / other (the app uses the same three).
       type: input.type === "work" ? "office" : ["home", "office", "other"].includes(input.type) ? input.type : "home",
       line1: input.line1.trim(),
+      line2: input.line2.trim() || null,
       landmark: input.landmark.trim() || null,
-      pincode: input.pincode.trim() || "",
+      pincode: input.pincode.replace(/\s/g, ""),
+      city: "Jaipur",
       time_window: input.timeWindow.trim() || null,
     }
     if (input.id) {
@@ -481,7 +488,7 @@ export async function saveCustomerAddress(subId: string, userId: string, input: 
         .from("addresses").select("*", { count: "exact", head: true }).eq("user_id", userId).is("archived_at", null)
       const { error } = await supabaseAdmin
         .from("addresses")
-        .insert({ ...fields, user_id: userId, city: "Jaipur", is_default: (count ?? 0) === 0 })
+        .insert({ ...fields, user_id: userId, is_default: (count ?? 0) === 0 })
       if (error) return { ok: false, error: error.message }
     }
     revalidatePath(`/subscribers/${subId}`)
