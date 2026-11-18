@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
   AlertTriangle, CheckCircle2, Download, FileText, Gift, Landmark, ListChecks, Receipt, Scale, Search,
-  ShieldCheck, TicketPercent, Trash2, Users, Wallet, X, XCircle,
+  ShieldCheck, TicketPercent, Trash2, Users, Wallet, X, XCircle, Info,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MonthPicker, downloadText } from "@/components/month-picker"
@@ -232,14 +232,21 @@ export function MoneyClient({ data }: { data: MoneyData }) {
 
       {s && (
         <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
-          <Kpi label="Opening wallets" value={rupees(s.opening_balance)} hint={`owed on ${fmtDate(data.from)}`} />
-          <Kpi label="Money received" value={rupees(moneyIn)} hint="Cashfree, cash, UPI, opening balances" tone="green" />
-          <Kpi label="Other credits" value={rupees(otherCredits)} hint="gifts, referrals, refunds to wallet" tone="amber" />
-          <Kpi label="Meals charged" value={rupees(mealsCharged)} hint="delivered meals" />
-          <Kpi label="Refunded out" value={rupees(refundsOut)} hint="bank + outside Cashfree" />
-          <Kpi label="Kept by GreenFeast" value={rupees(income)} hint="rounding, forfeits, closed accounts" />
+          <Kpi label="Opening wallets" value={rupees(s.opening_balance)} hint={`owed on ${fmtDate(data.from)}`}
+            info="Money customers had already paid but not yet eaten, at the start of the month (midnight IST on the 1st). GreenFeast owes it to them as meals, so it's a liability — not income. It's the same as last month's closing wallets." />
+          <Kpi label="Money received" value={rupees(moneyIn)} hint="Cashfree, cash, UPI, opening balances" tone="green"
+            info="Real money that came in this month and went into customer wallets: Cashfree payments, cash and UPI the office recorded (with proof), and opening balances moved from earlier records. This is cash the company received." />
+          <Kpi label="Other credits" value={rupees(otherCredits)} hint="gifts, referrals, refunds to wallet" tone="amber"
+            info="Wallet money added without a payment this month: gift meals, referral rewards, refunds to wallet, undone deliveries and failed bank refunds put back. No cash came in, but customers can now eat this much more — it adds to what GreenFeast owes." />
+          <Kpi label="Meals charged" value={rupees(mealsCharged)} hint="delivered meals"
+            info="The value of meals delivered this month, taken from wallets. This is the revenue earned: prepaid money becomes a sale when the meal is delivered." />
+          <Kpi label="Refunded out" value={rupees(refundsOut)} hint="bank + outside Cashfree"
+            info="Money that left the company back to customers: Cashfree refunds to their bank / UPI, and refunds the office paid in cash, UPI or a bank transfer. Taken out of their wallets." alignRight />
+          <Kpi label="Kept by GreenFeast" value={rupees(income)} hint="rounding, forfeits, closed accounts"
+            info="Wallet money that became the company's without a meal: plan rounding (₹29 on the 30-meal plan), balances forfeited when a plan was cancelled, and balances closed when an account was deleted. Counts as income." alignRight />
           <Kpi label="Closing wallets" value={rupees(s.closing_balance)} hint={isCurrent ? `wallets now ${rupees(s.wallets_now)}` : "owed at month end"}
-            tone={isCurrent && s.closing_balance !== s.wallets_now ? "red" : undefined} />
+            tone={isCurrent && s.closing_balance !== s.wallets_now ? "red" : undefined}
+            info="Opening wallets + every credit − every debit this month. What customers still hold at month end, owed to them as future meals; it becomes next month's opening. For the current month it must equal the live wallets — it turns red if it doesn't." alignRight />
         </div>
       )}
 
@@ -311,10 +318,45 @@ export function MoneyClient({ data }: { data: MoneyData }) {
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
-function Kpi({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: "green" | "amber" | "red" }) {
+// An "i" next to a card's title: hover (desktop) or tap (phone) explains it.
+function InfoTip({ text, alignRight }: { text: string; alignRight?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="relative inline-flex group" onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        aria-label="What does this mean?"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onBlur={() => setOpen(false)}
+        className="text-gray-400 hover:text-[#1B5E20] focus:outline-none focus-visible:text-[#1B5E20]"
+      >
+        <Info className="w-3.5 h-3.5" />
+      </button>
+      <span
+        role="tooltip"
+        className={cn(
+          "absolute top-full mt-1.5 z-30 w-60 max-w-[75vw] rounded-xl bg-[#1A1A1A] px-3 py-2.5 text-[11px] font-normal leading-relaxed text-white shadow-lg",
+          "invisible opacity-0 transition-opacity group-hover:visible group-hover:opacity-100",
+          open && "visible opacity-100",
+          alignRight ? "right-0" : "left-0"
+        )}
+      >
+        {text}
+      </span>
+    </span>
+  )
+}
+
+function Kpi({ label, value, hint, tone, info, alignRight }: {
+  label: string; value: string; hint?: string; tone?: "green" | "amber" | "red"; info?: string; alignRight?: boolean
+}) {
   return (
     <div className="rounded-2xl border border-[#e2e8d5] bg-white p-4">
-      <p className="text-xs font-medium text-gray-500">{label}</p>
+      <p className="text-xs font-medium text-gray-500 flex items-center gap-1">
+        {label}
+        {info && <InfoTip text={info} alignRight={alignRight} />}
+      </p>
       <p className={cn("text-lg font-bold mt-1", tone === "green" ? "text-[#1B5E20]" : tone === "amber" ? "text-amber-700" : tone === "red" ? "text-red-600" : "text-[#1A1A1A]")}>{value}</p>
       {hint && <p className="text-[11px] text-gray-400 mt-0.5">{hint}</p>}
     </div>
