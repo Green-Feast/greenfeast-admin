@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { X, Search, Wallet, Landmark, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { X, Search, Wallet, Landmark, Banknote, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { refundToWallet, refundToBank } from "./actions";
+import { refundToWallet, refundToBank, refundOffline } from "./actions";
+import { useActionPassword } from "@/components/action-password";
 
 export type RefundCustomer = { id: string; name: string; phone: string; code: string; balance: number };
 export type RefundablePayment = {
@@ -44,7 +45,10 @@ export function RefundDialog({
 }) {
   const [query, setQuery] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
-  const [kind, setKind] = useState<"wallet" | "bank">("wallet");
+  const [kind, setKind] = useState<"wallet" | "bank" | "offline">("wallet");
+  const [method, setMethod] = useState<"" | "cash" | "upi" | "bank_transfer">("");
+  const [reference, setReference] = useState("");
+  const askPassword = useActionPassword();
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -74,6 +78,9 @@ export function RefundDialog({
     : !reason.trim() ? "Add a reason — the customer sees it."
     : kind === "bank" && !selectedPayment ? "Pick the payment to refund."
     : kind === "bank" && amountPaise > maxBank ? `At most ${rupees(maxBank)} can go back to the bank.`
+    : kind === "offline" && !method ? "Pick how you paid it back."
+    : kind === "offline" && method !== "cash" && reference.trim().length < 3 ? "Add the UPI / transfer reference."
+    : kind === "offline" && amountPaise > Math.max(customer.balance, 0) ? `The wallet only has ${rupees(customer.balance)}.`
     : null;
 
   function pickCustomer(id: string) {
@@ -83,16 +90,21 @@ export function RefundDialog({
     setResult(null);
   }
 
-  function submit() {
+  async function submit() {
     if (problem || !customer) return;
-    if (kind === "bank" && !window.confirm(
-      `Refund ${rupees(amountPaise)} to ${customer.name}'s original payment method through Cashfree?\n\nThe same amount is deducted from their wallet.`
-    )) return;
+    const what =
+      kind === "wallet" ? `Refund ${rupees(amountPaise)} to ${customer.name}'s wallet.`
+      : kind === "bank" ? `Refund ${rupees(amountPaise)} to ${customer.name}'s bank through Cashfree — the same amount comes off their wallet.`
+      : `Record ${rupees(amountPaise)} paid back to ${customer.name} outside Cashfree — it comes off their wallet.`;
+    const pw = await askPassword(what);
+    if (pw === null) return;
     setResult(null);
     startTransition(async () => {
       const r = kind === "wallet"
-        ? await refundToWallet(customer.id, amountPaise, reason)
-        : await refundToBank(selectedPayment!.id, amountPaise, reason);
+        ? await refundToWallet(customer.id, amountPaise, reason, pw)
+        : kind === "bank"
+          ? await refundToBank(selectedPayment!.id, amountPaise, reason, pw)
+          : await refundOffline(customer.id, amountPaise, method as "cash" | "upi" | "bank_transfer", reference.trim(), reason, pw);
       setResult(r.ok ? { ok: true, text: r.message } : { ok: false, text: r.error });
       if (r.ok) {
         setAmount("");
@@ -164,10 +176,11 @@ export function RefundDialog({
           {/* Where to */}
           <div>
             <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">Refund to</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {([
                 ["wallet", Wallet, "Wallet", "Store credit, instant"],
                 ["bank", Landmark, "Bank / UPI", "Via Cashfree, 5–7 days"],
+                ["offline", Banknote, "Paid back", "Cash / UPI / transfer by us"],
               ] as const).map(([k, Icon, label, hint]) => (
                 <button
                   key={k}
@@ -194,7 +207,7 @@ export function RefundDialog({
               {userPayments.length === 0 ? (
                 <p className="rounded-lg bg-gray-50 px-3 py-2.5 text-sm text-gray-500">
                   No Cashfree payments left to refund for this customer. Cash payments can't go back through Cashfree —
-                  use a wallet refund, or return the cash and deduct it by hand.
+                  use a wallet refund, or pay it back yourself and record it under “Paid back”.
                 </p>
               ) : (
                 <div className="space-y-1.5">
@@ -230,6 +243,28 @@ export function RefundDialog({
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Outside Cashfree: how, with its reference */}
+          {kind === "offline" && customer && (
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={method}
+                onChange={(e) => setMethod(e.target.value as typeof method)}
+                className="h-10 rounded-lg border border-[#e2e8d5] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+              >
+                <option value="">How was it paid back?</option>
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="bank_transfer">Bank transfer</option>
+              </select>
+              <input
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                placeholder={method === "cash" ? "Receipt / note (optional)" : "UTR / reference"}
+                className="h-10 rounded-lg border border-[#e2e8d5] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+              />
             </div>
           )}
 

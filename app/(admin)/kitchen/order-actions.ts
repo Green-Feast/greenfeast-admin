@@ -12,6 +12,7 @@
 // ('preparing'); past the slot's cutoff the drawer warns instead of blocking.
 
 import { revalidatePath } from "next/cache"
+import { audited, sensitive } from "@/lib/audit"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { mealRate } from "@/lib/pricing"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
@@ -297,50 +298,56 @@ export async function getSlotContext(subscriptionId: string, date: string, slot:
 // ── Dish, portions, address ───────────────────────────────────────────────
 
 export async function adminSetOrderDish(orderId: string, mealTemplateId: string): Promise<EditResult> {
-  await requireAdmin()
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
-  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
-  const { error } = await supabaseAdmin
-    .from("orders")
-    .update({ meal_template_id: mealTemplateId, is_customized: true, cart_edited: true, updated_at: new Date().toISOString() })
-    .eq("id", orderId)
-  if (error) return { ok: false, error: error.message }
-  await supabaseAdmin.from("order_addons").delete().eq("order_id", orderId).eq("kind", "fee")
-  await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: orderId })
-  await recompute(orderId)
-  refresh(order.subscription_id)
-  return { ok: true }
+  return audited<EditResult>("kitchen.adminSetOrderDish", { ref: orderId, details: { mealTemplateId } }, async () => {
+    await requireAdmin()
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
+    if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
+    const { error } = await supabaseAdmin
+      .from("orders")
+      .update({ meal_template_id: mealTemplateId, is_customized: true, cart_edited: true, updated_at: new Date().toISOString() })
+      .eq("id", orderId)
+    if (error) return { ok: false, error: error.message }
+    await supabaseAdmin.from("order_addons").delete().eq("order_id", orderId).eq("kind", "fee")
+    await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: orderId })
+    await recompute(orderId)
+    refresh(order.subscription_id)
+    return { ok: true }
+  })
 }
 
 export async function adminSetOrderQuantity(orderId: string, quantity: number): Promise<EditResult> {
-  await requireAdmin()
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
-    return { ok: false, error: "Portions must be between 1 and 20 (skip the meal for none)." }
-  }
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
-  const { error } = await supabaseAdmin
-    .from("orders").update({ quantity, cart_edited: true, updated_at: new Date().toISOString() }).eq("id", orderId)
-  if (error) return { ok: false, error: error.message }
-  await recompute(orderId)
-  refresh(order.subscription_id)
-  return { ok: true }
+  return audited<EditResult>("kitchen.adminSetOrderQuantity", { ref: orderId, details: { quantity } }, async () => {
+    await requireAdmin()
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      return { ok: false, error: "Portions must be between 1 and 20 (skip the meal for none)." }
+    }
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
+    const { error } = await supabaseAdmin
+      .from("orders").update({ quantity, cart_edited: true, updated_at: new Date().toISOString() }).eq("id", orderId)
+    if (error) return { ok: false, error: error.message }
+    await recompute(orderId)
+    refresh(order.subscription_id)
+    return { ok: true }
+  })
 }
 
 export async function adminSetOrderAddress(orderId: string, addressId: string): Promise<EditResult> {
-  await requireAdmin()
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
-  const { data: addr } = await supabaseAdmin
-    .from("addresses").select("id").eq("id", addressId).eq("user_id", order.user_id).is("archived_at", null).maybeSingle()
-  if (!addr) return { ok: false, error: "That address isn't on this customer's account." }
-  // The order's batch follows the address (orders_batch_from_address).
-  const { error } = await supabaseAdmin
-    .from("orders").update({ address_id: addressId, updated_at: new Date().toISOString() }).eq("id", orderId)
-  if (error) return { ok: false, error: error.message }
-  refresh(order.subscription_id)
-  return { ok: true }
+  return audited<EditResult>("kitchen.adminSetOrderAddress", { ref: orderId, details: { addressId } }, async () => {
+    await requireAdmin()
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
+    const { data: addr } = await supabaseAdmin
+      .from("addresses").select("id").eq("id", addressId).eq("user_id", order.user_id).is("archived_at", null).maybeSingle()
+    if (!addr) return { ok: false, error: "That address isn't on this customer's account." }
+    // The order's batch follows the address (orders_batch_from_address).
+    const { error } = await supabaseAdmin
+      .from("orders").update({ address_id: addressId, updated_at: new Date().toISOString() }).eq("id", orderId)
+    if (error) return { ok: false, error: error.message }
+    refresh(order.subscription_id)
+    return { ok: true }
+  })
 }
 
 // ── Drink (088) ───────────────────────────────────────────────────────────
@@ -408,20 +415,22 @@ async function attachDrink(orderId: string, drinkTemplateId: string): Promise<{ 
 // Like the other edits here, past the slot's cutoff it still goes through but
 // says so, since the kitchen sheet may be printed.
 export async function adminSetOrderDrink(orderId: string, drinkTemplateId: string): Promise<EditResult> {
-  await requireAdmin()
-  if (!drinkTemplateId) return { ok: false, error: "Pick a drink." }
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
+  return audited<EditResult>("kitchen.adminSetOrderDrink", { ref: orderId, details: { drinkTemplateId } }, async () => {
+    await requireAdmin()
+    if (!drinkTemplateId) return { ok: false, error: "Pick a drink." }
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
 
-  const res = await attachDrink(orderId, drinkTemplateId)
-  if (!res.ok) return res
+    const res = await attachDrink(orderId, drinkTemplateId)
+    if (!res.ok) return res
 
-  refresh(order.subscription_id)
-  const what = res.added ? `${res.name} added` : `Drink is now ${res.name}`
-  if (isSlotLocked(order.delivery_date, order.meal_slot)) {
-    return { ok: true, message: `${what}. Past the ${order.meal_slot === "lunch" ? "9 AM" : "2 PM"} cutoff, so tell the kitchen.` }
-  }
-  return { ok: true, message: `${what}.` }
+    refresh(order.subscription_id)
+    const what = res.added ? `${res.name} added` : `Drink is now ${res.name}`
+    if (isSlotLocked(order.delivery_date, order.meal_slot)) {
+      return { ok: true, message: `${what}. Past the ${order.meal_slot === "lunch" ? "9 AM" : "2 PM"} cutoff, so tell the kitchen.` }
+    }
+    return { ok: true, message: `${what}.` }
+  })
 }
 
 // ── Add-ons ───────────────────────────────────────────────────────────────
@@ -431,59 +440,61 @@ export async function adminSetOrderDrink(orderId: string, drinkTemplateId: strin
 // one meal turns it into its own priced line and takes it out of the meal
 // price, so the bill matches exactly what's sent.
 export async function adminSetAddonQty(orderId: string, addonId: string, quantity: number): Promise<EditResult> {
-  await requireAdmin()
-  if (!Number.isInteger(quantity) || quantity < 0 || quantity > 20) return { ok: false, error: "Pick 0–20." }
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
+  return audited<EditResult>("kitchen.adminSetAddonQty", { ref: orderId, details: { quantity, addonId } }, async () => {
+    await requireAdmin()
+    if (!Number.isInteger(quantity) || quantity < 0 || quantity > 20) return { ok: false, error: "Pick 0–20." }
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
 
-  const [{ data: addon }, { data: line }] = await Promise.all([
-    supabaseAdmin.from("addons").select("id, price_per_meal, is_drink").eq("id", addonId).maybeSingle(),
-    supabaseAdmin
-      .from("order_addons").select("id, quantity, unit_price")
-      .eq("order_id", orderId).eq("addon_id", addonId).eq("kind", "addon").maybeSingle(),
-  ])
-  if (!addon) return { ok: false, error: "Add-on not found." }
+    const [{ data: addon }, { data: line }] = await Promise.all([
+      supabaseAdmin.from("addons").select("id, price_per_meal, is_drink").eq("id", addonId).maybeSingle(),
+      supabaseAdmin
+        .from("order_addons").select("id, quantity, unit_price")
+        .eq("order_id", orderId).eq("addon_id", addonId).eq("kind", "addon").maybeSingle(),
+    ])
+    if (!addon) return { ok: false, error: "Add-on not found." }
 
-  if (line && line.unit_price == null && !order.extra_dish) {
-    // Included plan add-on → take its share out of the meal price.
-    const baseRate = await baseRateFor(order.subscription_id)
-    const includedPart = Math.max((order.unit_price ?? 0) - baseRate, 0)
-    const share = Math.min(addon.price_per_meal, includedPart)
-    await supabaseAdmin
-      .from("orders").update({ unit_price: (order.unit_price ?? 0) - share }).eq("id", orderId)
-    if (quantity === 0) {
-      await supabaseAdmin.from("order_addons").delete().eq("id", line.id)
-    } else {
-      await supabaseAdmin.from("order_addons")
-        .update({ quantity, unit_price: share > 0 ? share : addon.price_per_meal }).eq("id", line.id)
-    }
-  } else if (quantity === 0) {
-    if (line) await supabaseAdmin.from("order_addons").delete().eq("id", line.id)
-  } else if (line) {
-    await supabaseAdmin.from("order_addons")
-      .update({ quantity, unit_price: line.unit_price ?? addon.price_per_meal }).eq("id", line.id)
-  } else {
-    // A drink put back on a meal keeps that meal's drink: name it on the line,
-    // since the line's sub_option is what name-only readers print.
-    let subOption: string | null = null
-    if (addon.is_drink) {
-      const { data: o } = await supabaseAdmin.from("orders").select("drink_template_id").eq("id", orderId).maybeSingle()
-      if (o?.drink_template_id) {
-        const { data: dish } = await supabaseAdmin.from("meal_templates").select("name").eq("id", o.drink_template_id).maybeSingle()
-        subOption = dish?.name ?? null
+    if (line && line.unit_price == null && !order.extra_dish) {
+      // Included plan add-on → take its share out of the meal price.
+      const baseRate = await baseRateFor(order.subscription_id)
+      const includedPart = Math.max((order.unit_price ?? 0) - baseRate, 0)
+      const share = Math.min(addon.price_per_meal, includedPart)
+      await supabaseAdmin
+        .from("orders").update({ unit_price: (order.unit_price ?? 0) - share }).eq("id", orderId)
+      if (quantity === 0) {
+        await supabaseAdmin.from("order_addons").delete().eq("id", line.id)
+      } else {
+        await supabaseAdmin.from("order_addons")
+          .update({ quantity, unit_price: share > 0 ? share : addon.price_per_meal }).eq("id", line.id)
       }
+    } else if (quantity === 0) {
+      if (line) await supabaseAdmin.from("order_addons").delete().eq("id", line.id)
+    } else if (line) {
+      await supabaseAdmin.from("order_addons")
+        .update({ quantity, unit_price: line.unit_price ?? addon.price_per_meal }).eq("id", line.id)
+    } else {
+      // A drink put back on a meal keeps that meal's drink: name it on the line,
+      // since the line's sub_option is what name-only readers print.
+      let subOption: string | null = null
+      if (addon.is_drink) {
+        const { data: o } = await supabaseAdmin.from("orders").select("drink_template_id").eq("id", orderId).maybeSingle()
+        if (o?.drink_template_id) {
+          const { data: dish } = await supabaseAdmin.from("meal_templates").select("name").eq("id", o.drink_template_id).maybeSingle()
+          subOption = dish?.name ?? null
+        }
+      }
+      const { error } = await supabaseAdmin.from("order_addons").insert({
+        order_id: orderId, addon_id: addonId, kind: "addon", quantity, unit_price: addon.price_per_meal, sub_option: subOption,
+      })
+      if (error) return { ok: false, error: error.message }
     }
-    const { error } = await supabaseAdmin.from("order_addons").insert({
-      order_id: orderId, addon_id: addonId, kind: "addon", quantity, unit_price: addon.price_per_meal, sub_option: subOption,
-    })
-    if (error) return { ok: false, error: error.message }
-  }
 
-  // Changed by hand: the customer's plan-default changes leave this day alone (080).
-  await supabaseAdmin.from("orders").update({ cart_edited: true }).eq("id", orderId)
-  await recompute(orderId)
-  refresh(order.subscription_id)
-  return { ok: true }
+    // Changed by hand: the customer's plan-default changes leave this day alone (080).
+    await supabaseAdmin.from("orders").update({ cart_edited: true }).eq("id", orderId)
+    await recompute(orderId)
+    refresh(order.subscription_id)
+    return { ok: true }
+  })
 }
 
 // ── Delivery: settle a slot on any day up to today (068) ─────────────────
@@ -510,117 +521,126 @@ function rupeesText(paise: number) {
 }
 
 export async function adminDeliverSlot(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
-  await requireAdminStrict()
-  if (date > istToday()) return { ok: false, error: "That day hasn't come yet." }
-  const ids = await undeliveredIds(subscriptionId, date, slot)
-  if (ids.length === 0) return { ok: false, error: "Nothing left to deliver here." }
-  const results = Object.values(await deliverOrders(ids, slot))
-  const billed = results.filter((r) => r === "billed").length
-  const short = results.filter((r) => r === "skipped_insufficient").length
-  refresh(subscriptionId)
-  revalidatePath("/operations")
-  if (short > 0) {
-    return { ok: true, message: `${billed} delivered and charged; ${short} skipped — the wallet was short (the customer was told).` }
-  }
-  return {
-    ok: true,
-    message: date < istToday()
-      ? "Marked delivered and charged to the wallet (an earlier day — no message is sent)."
-      : "Marked delivered and charged to the wallet.",
-  }
+  return audited<EditResult>("kitchen.adminDeliverSlot", { subscriptionId, details: { date, slot } }, async () => {
+    await requireAdminStrict()
+    if (date > istToday()) return { ok: false, error: "That day hasn't come yet." }
+    const ids = await undeliveredIds(subscriptionId, date, slot)
+    if (ids.length === 0) return { ok: false, error: "Nothing left to deliver here." }
+    const results = Object.values(await deliverOrders(ids, slot))
+    const billed = results.filter((r) => r === "billed").length
+    const short = results.filter((r) => r === "skipped_insufficient").length
+    refresh(subscriptionId)
+    revalidatePath("/operations")
+    if (short > 0) {
+      return { ok: true, message: `${billed} delivered and charged; ${short} skipped — the wallet was short (the customer was told).` }
+    }
+    return {
+      ok: true,
+      message: date < istToday()
+        ? "Marked delivered and charged to the wallet (an earlier day — no message is sent)."
+        : "Marked delivered and charged to the wallet.",
+    }
+  })
 }
 
 export async function adminSkipUndelivered(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
-  await requireAdminStrict()
-  const n = await skipUndelivered(await undeliveredIds(subscriptionId, date, slot))
-  if (n === 0) return { ok: false, error: "Nothing to skip here." }
-  refresh(subscriptionId)
-  revalidatePath("/operations")
-  return { ok: true, message: "Skipped — not charged, and the meal stays on the plan." }
+  return audited<EditResult>("kitchen.adminSkipUndelivered", { subscriptionId, details: { date, slot } }, async () => {
+    await requireAdminStrict()
+    const n = await skipUndelivered(await undeliveredIds(subscriptionId, date, slot))
+    if (n === 0) return { ok: false, error: "Nothing to skip here." }
+    refresh(subscriptionId)
+    revalidatePath("/operations")
+    return { ok: true, message: "Skipped — not charged, and the meal stays on the plan." }
+  })
 }
 
-export async function adminUndoDelivered(orderId: string): Promise<EditResult> {
-  await requireAdminStrict()
-  const { data: order } = await supabaseAdmin.from("orders").select("subscription_id").eq("id", orderId).maybeSingle()
-  try {
-    const { refunded } = await undoDelivered(orderId)
-    refresh(order?.subscription_id ?? undefined)
-    revalidatePath("/operations")
-    return {
-      ok: true,
-      message: refunded > 0
-        ? `Undone — ${rupeesText(refunded)} back in the wallet and the meal back on the plan.`
-        : "Undone — the meal is back on the plan.",
+export async function adminUndoDelivered(orderId: string, password: string): Promise<EditResult> {
+  return sensitive("kitchen.adminUndoDelivered", password, { ref: orderId }, async (ctx): Promise<EditResult> => {
+    try {
+      const { refunded, userId, subscriptionId } = await undoDelivered(orderId, ctx)
+      ctx.note({ userId, subscriptionId, amountPaise: refunded })
+      refresh(subscriptionId ?? undefined)
+      revalidatePath("/operations")
+      return {
+        ok: true,
+        message: refunded > 0
+          ? `Undone — ${rupeesText(refunded)} back in the wallet and the meal back on the plan.`
+          : "Undone — the meal is back on the plan.",
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
     }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
-  }
+  })
 }
 
 // ── Skip / bring back ─────────────────────────────────────────────────────
 
 export async function adminSkipSlot(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
-  await requireAdmin()
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .update({ status: "skipped", skip_reason: "admin", updated_at: new Date().toISOString() })
-    .eq("subscription_id", subscriptionId)
-    .eq("delivery_date", date)
-    .eq("meal_slot", slot)
-    .in("status", EDITABLE)
-    .select("id")
-  if (error) return { ok: false, error: error.message }
-  if (!data?.length) return { ok: false, error: "Nothing to skip here." }
-  refresh(subscriptionId)
-  return { ok: true, message: "Skipped — nothing is charged and the meal stays on the plan." }
+  return audited<EditResult>("kitchen.adminSkipSlot", { subscriptionId, details: { date, slot } }, async () => {
+    await requireAdmin()
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .update({ status: "skipped", skip_reason: "admin", updated_at: new Date().toISOString() })
+      .eq("subscription_id", subscriptionId)
+      .eq("delivery_date", date)
+      .eq("meal_slot", slot)
+      .in("status", EDITABLE)
+      .select("id")
+    if (error) return { ok: false, error: error.message }
+    if (!data?.length) return { ok: false, error: "Nothing to skip here." }
+    refresh(subscriptionId)
+    return { ok: true, message: "Skipped — nothing is charged and the meal stays on the plan." }
+  })
 }
 
 // Brings back skipped meals in a slot (any reason — e.g. a low-wallet skip
 // after the customer paid). If the plan's meals are all scheduled already,
 // the latest untouched meal at the end of the window gives its place back.
 export async function adminUnskipSlot(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
-  await requireAdmin()
-  const { data: skipped } = await supabaseAdmin
-    .from("orders")
-    .select("id, quantity")
-    .eq("subscription_id", subscriptionId)
-    .eq("delivery_date", date)
-    .eq("meal_slot", slot)
-    .eq("status", "skipped")
-  if (!skipped?.length) return { ok: false, error: "Nothing skipped here." }
-  const need = skipped.reduce((n, o: any) => n + (o.quantity ?? 1), 0)
+  return audited<EditResult>("kitchen.adminUnskipSlot", { subscriptionId, details: { date, slot } }, async () => {
+    await requireAdmin()
+    const { data: skipped } = await supabaseAdmin
+      .from("orders")
+      .select("id, quantity")
+      .eq("subscription_id", subscriptionId)
+      .eq("delivery_date", date)
+      .eq("meal_slot", slot)
+      .eq("status", "skipped")
+    if (!skipped?.length) return { ok: false, error: "Nothing skipped here." }
+    const need = skipped.reduce((n, o: any) => n + (o.quantity ?? 1), 0)
 
-  const { data: sub } = await supabaseAdmin
-    .from("subscriptions").select("deliveries_remaining").eq("id", subscriptionId).single()
-  const { data: upcoming } = await supabaseAdmin
-    .from("orders")
-    .select("id, delivery_date, meal_slot, quantity, extra_dish, is_customized, status")
-    .eq("subscription_id", subscriptionId)
-    .gte("delivery_date", istToday())
-    .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
-    .order("delivery_date", { ascending: false })
-    .order("meal_slot", { ascending: false })
-  let room = (sub?.deliveries_remaining ?? 0) - (upcoming ?? []).reduce((n, o: any) => n + (o.quantity ?? 1), 0)
-  if (room < need) {
-    const drop: string[] = []
-    for (const o of (upcoming ?? []) as any[]) {
-      if (room >= need) break
-      if (o.status !== "scheduled" || o.extra_dish || o.is_customized || o.delivery_date <= date) continue
-      drop.push(o.id)
-      room += o.quantity ?? 1
+    const { data: sub } = await supabaseAdmin
+      .from("subscriptions").select("deliveries_remaining").eq("id", subscriptionId).single()
+    const { data: upcoming } = await supabaseAdmin
+      .from("orders")
+      .select("id, delivery_date, meal_slot, quantity, extra_dish, is_customized, status")
+      .eq("subscription_id", subscriptionId)
+      .gte("delivery_date", istToday())
+      .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
+      .order("delivery_date", { ascending: false })
+      .order("meal_slot", { ascending: false })
+    let room = (sub?.deliveries_remaining ?? 0) - (upcoming ?? []).reduce((n, o: any) => n + (o.quantity ?? 1), 0)
+    if (room < need) {
+      const drop: string[] = []
+      for (const o of (upcoming ?? []) as any[]) {
+        if (room >= need) break
+        if (o.status !== "scheduled" || o.extra_dish || o.is_customized || o.delivery_date <= date) continue
+        drop.push(o.id)
+        room += o.quantity ?? 1
+      }
+      if (room < need) return { ok: false, error: "The plan has no meals left for this. Extend it or set meals left first." }
+      if (drop.length) await supabaseAdmin.from("orders").delete().in("id", drop)
     }
-    if (room < need) return { ok: false, error: "The plan has no meals left for this. Extend it or set meals left first." }
-    if (drop.length) await supabaseAdmin.from("orders").delete().in("id", drop)
-  }
 
-  const { error } = await supabaseAdmin
-    .from("orders")
-    .update({ status: "scheduled", skip_reason: null, updated_at: new Date().toISOString() })
-    .in("id", skipped.map((o: any) => o.id))
-  if (error) return { ok: false, error: error.message }
-  for (const o of skipped as any[]) await recompute(o.id)
-  refresh(subscriptionId)
-  return { ok: true, message: "Meal is back on." }
+    const { error } = await supabaseAdmin
+      .from("orders")
+      .update({ status: "scheduled", skip_reason: null, updated_at: new Date().toISOString() })
+      .in("id", skipped.map((o: any) => o.id))
+    if (error) return { ok: false, error: error.message }
+    for (const o of skipped as any[]) await recompute(o.id)
+    refresh(subscriptionId)
+    return { ok: true, message: "Meal is back on." }
+  })
 }
 
 // ── Extra dishes ──────────────────────────────────────────────────────────
@@ -629,72 +649,76 @@ export async function adminAddExtraDish(
   subscriptionId: string, date: string, slot: Slot, mealTemplateId: string, addressId: string | null,
   drinkTemplateId: string | null = null
 ): Promise<EditResult> {
-  await requireAdmin()
-  if (date < istToday()) return { ok: false, error: "That day has passed." }
-  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
-  const { data: sub } = await supabaseAdmin
-    .from("subscriptions").select("id, user_id, status, batch_id_lunch, batch_id_dinner").eq("id", subscriptionId).single()
-  if (!sub || !["active", "paused"].includes(sub.status)) return { ok: false, error: "The plan isn't active." }
+  return audited<EditResult>("kitchen.adminAddExtraDish", { subscriptionId, details: { date, slot, mealTemplateId, addressId, drinkTemplateId } }, async () => {
+    await requireAdmin()
+    if (date < istToday()) return { ok: false, error: "That day has passed." }
+    if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
+    const { data: sub } = await supabaseAdmin
+      .from("subscriptions").select("id, user_id, status, batch_id_lunch, batch_id_dinner").eq("id", subscriptionId).single()
+    if (!sub || !["active", "paused"].includes(sub.status)) return { ok: false, error: "The plan isn't active." }
 
-  let address = addressId
-  if (address) {
-    const { data: own } = await supabaseAdmin
-      .from("addresses").select("id").eq("id", address).eq("user_id", sub.user_id).is("archived_at", null).maybeSingle()
-    if (!own) return { ok: false, error: "That address isn't on this customer's account." }
-  } else {
-    const { data: def } = await supabaseAdmin
-      .from("addresses").select("id").eq("user_id", sub.user_id).is("archived_at", null)
-      .order("is_default", { ascending: false }).limit(1).maybeSingle()
-    address = def?.id ?? null
-  }
+    let address = addressId
+    if (address) {
+      const { data: own } = await supabaseAdmin
+        .from("addresses").select("id").eq("id", address).eq("user_id", sub.user_id).is("archived_at", null).maybeSingle()
+      if (!own) return { ok: false, error: "That address isn't on this customer's account." }
+    } else {
+      const { data: def } = await supabaseAdmin
+        .from("addresses").select("id").eq("user_id", sub.user_id).is("archived_at", null)
+        .order("is_default", { ascending: false }).limit(1).maybeSingle()
+      address = def?.id ?? null
+    }
 
-  const { data: last } = await supabaseAdmin
-    .from("orders").select("slot_seq")
-    .eq("subscription_id", subscriptionId).eq("delivery_date", date).eq("meal_slot", slot)
-    .order("slot_seq", { ascending: false }).limit(1).maybeSingle()
+    const { data: last } = await supabaseAdmin
+      .from("orders").select("slot_seq")
+      .eq("subscription_id", subscriptionId).eq("delivery_date", date).eq("meal_slot", slot)
+      .order("slot_seq", { ascending: false }).limit(1).maybeSingle()
 
-  const { data: created, error } = await supabaseAdmin
-    .from("orders")
-    .insert({
-      user_id: sub.user_id,
-      subscription_id: subscriptionId,
-      meal_template_id: mealTemplateId,
-      batch_id: (slot === "lunch" ? sub.batch_id_lunch : sub.batch_id_dinner) ?? null,
-      address_id: address,
-      delivery_date: date,
-      meal_slot: slot,
-      status: "scheduled",
-      is_customized: true,
-      extra_dish: true,
-      quantity: 1,
-      unit_price: await baseRateFor(subscriptionId),
-      slot_seq: (last?.slot_seq ?? 0) + 1,
-    })
-    .select("id")
-    .single()
-  if (error || !created) return { ok: false, error: error?.message ?? "Could not add the dish." }
-  await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: created.id })
-  await recompute(created.id)
-  if (drinkTemplateId) {
-    const res = await attachDrink(created.id, drinkTemplateId)
+    const { data: created, error } = await supabaseAdmin
+      .from("orders")
+      .insert({
+        user_id: sub.user_id,
+        subscription_id: subscriptionId,
+        meal_template_id: mealTemplateId,
+        batch_id: (slot === "lunch" ? sub.batch_id_lunch : sub.batch_id_dinner) ?? null,
+        address_id: address,
+        delivery_date: date,
+        meal_slot: slot,
+        status: "scheduled",
+        is_customized: true,
+        extra_dish: true,
+        quantity: 1,
+        unit_price: await baseRateFor(subscriptionId),
+        slot_seq: (last?.slot_seq ?? 0) + 1,
+      })
+      .select("id")
+      .single()
+    if (error || !created) return { ok: false, error: error?.message ?? "Could not add the dish." }
+    await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: created.id })
+    await recompute(created.id)
+    if (drinkTemplateId) {
+      const res = await attachDrink(created.id, drinkTemplateId)
+      refresh(subscriptionId)
+      if (!res.ok) return { ok: true, message: `Dish added, but the drink wasn't: ${res.error}` }
+      return { ok: true, message: `Dish added with ${res.name}.` }
+    }
     refresh(subscriptionId)
-    if (!res.ok) return { ok: true, message: `Dish added, but the drink wasn't: ${res.error}` }
-    return { ok: true, message: `Dish added with ${res.name}.` }
-  }
-  refresh(subscriptionId)
-  return { ok: true, message: "Dish added." }
+    return { ok: true, message: "Dish added." }
+  })
 }
 
 export async function adminRemoveExtraDish(orderId: string): Promise<EditResult> {
-  await requireAdmin()
-  const order = await editableOrder(orderId)
-  if (typeof order === "string") return { ok: false, error: order }
-  if (!order.extra_dish) return { ok: false, error: "Only an extra dish can be removed — skip the meal instead." }
-  const { error } = await supabaseAdmin
-    .from("orders").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", orderId)
-  if (error) return { ok: false, error: error.message }
-  refresh(order.subscription_id)
-  return { ok: true, message: "Dish removed." }
+  return audited<EditResult>("kitchen.adminRemoveExtraDish", { ref: orderId }, async () => {
+    await requireAdmin()
+    const order = await editableOrder(orderId)
+    if (typeof order === "string") return { ok: false, error: order }
+    if (!order.extra_dish) return { ok: false, error: "Only an extra dish can be removed — skip the meal instead." }
+    const { error } = await supabaseAdmin
+      .from("orders").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", orderId)
+    if (error) return { ok: false, error: error.message }
+    refresh(order.subscription_id)
+    return { ok: true, message: "Dish removed." }
+  })
 }
 
 // ── Same dish every day ───────────────────────────────────────────────────
@@ -704,90 +728,94 @@ export async function adminRemoveExtraDish(orderId: string): Promise<EditResult>
 export async function setFixedDish(
   subscriptionId: string, slot: Slot, dayOfWeek: number | null, mealTemplateId: string
 ): Promise<EditResult> {
-  const admin = await requireAdmin()
-  if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
-  const { data: sub } = await supabaseAdmin.from("subscriptions").select("user_id").eq("id", subscriptionId).single()
-  if (!sub) return { ok: false, error: "Subscription not found." }
-  const userId = sub.user_id as string
+  return audited<EditResult>("kitchen.setFixedDish", { subscriptionId, details: { slot, mealTemplateId } }, async () => {
+    const admin = await requireAdmin()
+    if (await isDrinkDish(mealTemplateId)) return { ok: false, error: DRINK_AS_MEAL_ERROR }
+    const { data: sub } = await supabaseAdmin.from("subscriptions").select("user_id").eq("id", subscriptionId).single()
+    if (!sub) return { ok: false, error: "Subscription not found." }
+    const userId = sub.user_id as string
 
-  let del = supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot)
-  del = dayOfWeek === null ? del.is("day_of_week", null) : del.eq("day_of_week", dayOfWeek)
-  await del
-  // The office's dish wins: the customer's own picks for this slot go (080),
-  // and the app shows the slot as set by GreenFeast while this rule exists.
-  await supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot).eq("set_by", "customer")
-  const { error } = await supabaseAdmin.from("customer_meal_rules").insert({
-    user_id: userId, meal_slot: slot, day_of_week: dayOfWeek, meal_template_id: mealTemplateId, created_by: admin.email, set_by: "admin",
-  })
-  if (error) return { ok: false, error: error.message }
+    let del = supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot)
+    del = dayOfWeek === null ? del.is("day_of_week", null) : del.eq("day_of_week", dayOfWeek)
+    await del
+    // The office's dish wins: the customer's own picks for this slot go (080),
+    // and the app shows the slot as set by GreenFeast while this rule exists.
+    await supabaseAdmin.from("customer_meal_rules").delete().eq("user_id", userId).eq("meal_slot", slot).eq("set_by", "customer")
+    const { error } = await supabaseAdmin.from("customer_meal_rules").insert({
+      user_id: userId, meal_slot: slot, day_of_week: dayOfWeek, meal_template_id: mealTemplateId, created_by: admin.email, set_by: "admin",
+    })
+    if (error) return { ok: false, error: error.message }
 
-  const { data: upcoming } = await supabaseAdmin
-    .from("orders")
-    .select("id, delivery_date, meal_template_id")
-    .eq("user_id", userId)
-    .eq("meal_slot", slot)
-    .eq("extra_dish", false)
-    .gte("delivery_date", istToday())
-    .in("status", EDITABLE)
-  // A weekday rule wins over an every-day one, so an every-day rule leaves
-  // weekdays that have their own rule alone.
-  const { data: weekdayRules } = await supabaseAdmin
-    .from("customer_meal_rules").select("day_of_week").eq("user_id", userId).eq("meal_slot", slot).not("day_of_week", "is", null)
-  const ownDays = new Set(((weekdayRules ?? []) as { day_of_week: number }[]).map((r) => r.day_of_week))
-  const ids = ((upcoming ?? []) as any[])
-    .filter((o) => !isSlotLocked(o.delivery_date, slot))
-    .filter((o) => (dayOfWeek === null ? !ownDays.has(dowMon0(o.delivery_date)) : dowMon0(o.delivery_date) === dayOfWeek))
-    .map((o) => o.id as string)
-  if (ids.length) {
-    await supabaseAdmin
+    const { data: upcoming } = await supabaseAdmin
       .from("orders")
-      .update({ meal_template_id: mealTemplateId, is_customized: true, updated_at: new Date().toISOString() })
-      .in("id", ids)
-    for (const id of ids) {
-      await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: id })
-      await recompute(id)
+      .select("id, delivery_date, meal_template_id")
+      .eq("user_id", userId)
+      .eq("meal_slot", slot)
+      .eq("extra_dish", false)
+      .gte("delivery_date", istToday())
+      .in("status", EDITABLE)
+    // A weekday rule wins over an every-day one, so an every-day rule leaves
+    // weekdays that have their own rule alone.
+    const { data: weekdayRules } = await supabaseAdmin
+      .from("customer_meal_rules").select("day_of_week").eq("user_id", userId).eq("meal_slot", slot).not("day_of_week", "is", null)
+    const ownDays = new Set(((weekdayRules ?? []) as { day_of_week: number }[]).map((r) => r.day_of_week))
+    const ids = ((upcoming ?? []) as any[])
+      .filter((o) => !isSlotLocked(o.delivery_date, slot))
+      .filter((o) => (dayOfWeek === null ? !ownDays.has(dowMon0(o.delivery_date)) : dowMon0(o.delivery_date) === dayOfWeek))
+      .map((o) => o.id as string)
+    if (ids.length) {
+      await supabaseAdmin
+        .from("orders")
+        .update({ meal_template_id: mealTemplateId, is_customized: true, updated_at: new Date().toISOString() })
+        .in("id", ids)
+      for (const id of ids) {
+        await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: id })
+        await recompute(id)
+      }
     }
-  }
-  refresh(subscriptionId)
-  return { ok: true, message: `Fixed dish saved — ${ids.length} upcoming meal${ids.length === 1 ? "" : "s"} updated.` }
+    refresh(subscriptionId)
+    return { ok: true, message: `Fixed dish saved — ${ids.length} upcoming meal${ids.length === 1 ? "" : "s"} updated.` }
+  })
 }
 
 // Removes a rule. With backToMenu, upcoming open meals it set go back to the
 // weekly menu's dish for their day.
 export async function clearFixedDish(subscriptionId: string, ruleId: string, backToMenu: boolean): Promise<EditResult> {
-  await requireAdmin()
-  const { data: rule } = await supabaseAdmin
-    .from("customer_meal_rules").select("id, user_id, meal_slot, day_of_week, meal_template_id").eq("id", ruleId).maybeSingle()
-  if (!rule) return { ok: false, error: "Already removed." }
-  await supabaseAdmin.from("customer_meal_rules").delete().eq("id", ruleId)
+  return audited<EditResult>("kitchen.clearFixedDish", { subscriptionId, ref: ruleId, details: { backToMenu } }, async () => {
+    await requireAdmin()
+    const { data: rule } = await supabaseAdmin
+      .from("customer_meal_rules").select("id, user_id, meal_slot, day_of_week, meal_template_id").eq("id", ruleId).maybeSingle()
+    if (!rule) return { ok: false, error: "Already removed." }
+    await supabaseAdmin.from("customer_meal_rules").delete().eq("id", ruleId)
 
-  let moved = 0
-  if (backToMenu) {
-    const [{ data: upcoming }, { data: menu }] = await Promise.all([
-      supabaseAdmin
-        .from("orders")
-        .select("id, delivery_date")
-        .eq("user_id", rule.user_id)
-        .eq("meal_slot", rule.meal_slot)
-        .eq("meal_template_id", rule.meal_template_id)
-        .eq("extra_dish", false)
-        .gte("delivery_date", istToday())
-        .in("status", EDITABLE),
-      supabaseAdmin.from("weekly_menu").select("day_of_week, meal_template_id").eq("menu_type", "M1").eq("meal_slot", rule.meal_slot),
-    ])
-    const byDay = new Map(((menu ?? []) as any[]).map((m) => [m.day_of_week as number, m.meal_template_id as string]))
-    for (const o of (upcoming ?? []) as any[]) {
-      const dow = dowMon0(o.delivery_date)
-      if (rule.day_of_week !== null && dow !== rule.day_of_week) continue
-      if (isSlotLocked(o.delivery_date, rule.meal_slot)) continue
-      const dish = byDay.get(dow)
-      if (!dish) continue
-      await supabaseAdmin.from("orders")
-        .update({ meal_template_id: dish, is_customized: false, updated_at: new Date().toISOString() }).eq("id", o.id)
-      await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: o.id })
-      moved++
+    let moved = 0
+    if (backToMenu) {
+      const [{ data: upcoming }, { data: menu }] = await Promise.all([
+        supabaseAdmin
+          .from("orders")
+          .select("id, delivery_date")
+          .eq("user_id", rule.user_id)
+          .eq("meal_slot", rule.meal_slot)
+          .eq("meal_template_id", rule.meal_template_id)
+          .eq("extra_dish", false)
+          .gte("delivery_date", istToday())
+          .in("status", EDITABLE),
+        supabaseAdmin.from("weekly_menu").select("day_of_week, meal_template_id").eq("menu_type", "M1").eq("meal_slot", rule.meal_slot),
+      ])
+      const byDay = new Map(((menu ?? []) as any[]).map((m) => [m.day_of_week as number, m.meal_template_id as string]))
+      for (const o of (upcoming ?? []) as any[]) {
+        const dow = dowMon0(o.delivery_date)
+        if (rule.day_of_week !== null && dow !== rule.day_of_week) continue
+        if (isSlotLocked(o.delivery_date, rule.meal_slot)) continue
+        const dish = byDay.get(dow)
+        if (!dish) continue
+        await supabaseAdmin.from("orders")
+          .update({ meal_template_id: dish, is_customized: false, updated_at: new Date().toISOString() }).eq("id", o.id)
+        await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: o.id })
+        moved++
+      }
     }
-  }
-  refresh(subscriptionId)
-  return { ok: true, message: backToMenu ? `Rule removed — ${moved} meal${moved === 1 ? "" : "s"} back on the menu.` : "Rule removed." }
+    refresh(subscriptionId)
+    return { ok: true, message: backToMenu ? `Rule removed — ${moved} meal${moved === 1 ? "" : "s"} back on the menu.` : "Rule removed." }
+  })
 }

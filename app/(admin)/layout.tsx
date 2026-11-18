@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { AdminShell } from "@/components/admin-shell";
+import { ActionPasswordProvider } from "@/components/action-password";
 import { SIDEBAR_COOKIE } from "@/lib/sidebar";
 import { requireAdmin } from "@/lib/auth";
 import { getDataMode } from "@/lib/mode";
@@ -46,7 +47,7 @@ export default async function AdminLayout({
               TEST MODE — you're seeing test accounts only. Real customers are under Live (switch in the sidebar).
             </div>
           )}
-          {children}
+          <ActionPasswordProvider>{children}</ActionPasswordProvider>
         </div>
       </AdminShell>
     </div>

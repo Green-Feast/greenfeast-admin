@@ -1,5 +1,6 @@
 "use client"
 
+import { planMealRate } from "@/lib/pricing"
 import { useState, useMemo, useEffect, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -16,6 +17,8 @@ import {
   setUserTestFlag, createCustomerAccount, generateCustomerPassword,
 } from "./actions"
 import type { CreateSubInput, NewCustomer } from "./types"
+import { useActionPassword } from "@/components/action-password"
+import { PaymentProofFields, emptyProof, proofProblem, type ProofInput } from "@/components/payment-proof"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -161,6 +164,12 @@ export function UsersClient({
   function showToast(type: "success" | "error", msg: string) {
     setToast({ type, msg })
     setTimeout(() => setToast(null), 3200)
+  }
+
+  const askPassword = useActionPassword()
+  // Sensitive actions (migration 092): the action password first.
+  function runSecure(what: string, fn: (password: string) => Promise<{ ok: boolean; error?: string } | void>, successMsg: string, opts: { closePanel?: boolean } = {}) {
+    askPassword(what).then((pw) => { if (pw !== null) run(() => fn(pw), successMsg, opts) })
   }
 
   function closeModals() {
@@ -411,7 +420,9 @@ export function UsersClient({
           coupons={coupons}
           isPending={isPending}
           onClose={() => setCreateOpen(false)}
-          onSubmit={(input) => run(() => createSubscription(input), "Subscription created.", { closePanel: true })}
+          onSubmit={(input) => runSecure(
+            `Create a subscription for ${selected.name ?? "this customer"}${(input.walletCredit ?? 0) > 0 ? ` with ${fmtRupees(input.walletCredit ?? 0)} received` : ""}.`,
+            (pw) => createSubscription(input, pw), "Subscription created.", { closePanel: true })}
         />
       )}
 
@@ -427,24 +438,24 @@ export function UsersClient({
       {resetOpen && selected && (
         <ConfirmModal
           title="Reset this user's data?"
-          body="Their subscription, orders, dietary profile, address and wallet will be deleted, and onboarding reset. Their login stays intact so you can re-test flows."
+          body="Their subscription, orders, dietary profile and address will be deleted, and onboarding reset. Their payments and wallet history are kept in the archive (any balance is closed). Their login stays intact so you can re-test flows."
           confirmLabel="Reset data"
           danger
           isPending={isPending}
           onClose={() => setResetOpen(false)}
-          onConfirm={() => run(() => resetUserData(selected.id), "User data reset.", { closePanel: true })}
+          onConfirm={() => runSecure(`Reset ${selected.name ?? "this user"}'s data.`, (pw) => resetUserData(selected.id, pw), "User data reset.", { closePanel: true })}
         />
       )}
 
       {deleteOpen && selected && (
         <ConfirmModal
           title="Delete this user completely?"
-          body="This permanently removes their login and ALL their data. This cannot be undone."
+          body="This removes their login and app data — the same phone / email can sign up again. Their payments and wallet history move to the deleted-accounts archive (any balance is closed). This cannot be undone."
           confirmLabel="Delete user"
           danger
           isPending={isPending}
           onClose={() => setDeleteOpen(false)}
-          onConfirm={() => run(() => deleteUser(selected.id), "User deleted.", { closePanel: true })}
+          onConfirm={() => runSecure(`Delete ${selected.name ?? "this user"}'s account.`, (pw) => deleteUser(selected.id, pw), "User deleted.", { closePanel: true })}
         />
       )}
 
@@ -773,7 +784,7 @@ function CreateSubModal({
   const [couponId, setCouponId] = useState("")
   const planCoupons = coupons.filter((c) => c.prices[planId])
   const coupon = planCoupons.find((c) => c.id === couponId) ?? null
-  const regularMeal = plan ? Math.round(plan.base_price / Math.max(plan.meals_total, 1)) : 0
+  const regularMeal = planMealRate(plan)
   const mealPrice = coupon ? coupon.prices[planId] : regularMeal
   // Billing is per delivered meal: the plan's meal price, plus add-ons per meal.
   const perMeal = plan
@@ -786,6 +797,12 @@ function CreateSubModal({
   const [cashDue, setCashDue] = useState("")
   const upfrontPaise = Math.round((parseFloat(upfront) || 0) * 100)
   const cashDuePaise = cashDue.trim() ? Math.round((parseFloat(cashDue) || 0) * 100) : Math.max(suggestedCredit - upfrontPaise, 0)
+
+  // How the money was paid, with its proof (migration 092).
+  const [proof, setProof] = useState<ProofInput>(emptyProof)
+  const [idemKey] = useState(() => crypto.randomUUID())
+  const moneyPaise = activation === "active" ? creditPaise : upfrontPaise
+  const proofErr = moneyPaise > 0 ? proofProblem(proof, moneyPaise) : null
 
   const [name, setName] = useState(user.name ?? "")
   const [phone, setPhone] = useState(user.phone ?? "")
@@ -800,7 +817,7 @@ function CreateSubModal({
 
   const needsProfile = !user.hasPublicRow
   const valid = planId && days.length > 0 && mealsLunch + mealsDinner >= 1 && (!needsProfile || phone.trim())
-    && mealsLeft >= 1 && (activation === "cod" ? upfrontPaise >= 0 : creditPaise >= 0)
+    && mealsLeft >= 1 && (activation === "cod" ? upfrontPaise >= 0 : creditPaise >= 0) && !proofErr
 
   function submit() {
     onSubmit({
@@ -820,6 +837,8 @@ function CreateSubModal({
       cashDue: activation === "cod" ? cashDuePaise : undefined,
       addonIds,
       couponId: coupon?.id,
+      proof: moneyPaise > 0 ? proof : null,
+      idempotencyKey: idemKey,
     })
   }
 
@@ -854,7 +873,7 @@ function CreateSubModal({
           >
             {plans.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} · {fmtRupees(p.base_price)} · {p.meals_total} meals · {fmtRupees(Math.round(p.base_price / Math.max(p.meals_total, 1)))}/meal
+                {p.name} · {fmtRupees(p.base_price)} · {p.meals_total} meals · {fmtRupees(planMealRate(p))}/meal
               </option>
             ))}
           </select>
@@ -1021,11 +1040,19 @@ function CreateSubModal({
               {creditPaise < suggestedCredit && (
                 <span className="block mt-1 text-amber-700">
                   Less than that covers only about {perMeal > 0 ? Math.floor(creditPaise / perMeal) : 0} meals — the rest would be skipped
-                  for low balance. If they got a discount, still credit the full {fmtRupees(suggestedCredit)}.
+                  for low balance. If they got a discount, pick the coupon above so their meals are priced at it — only credit money they actually paid.
                 </span>
               )}
             </p>
           </div>
+        )}
+        {moneyPaise > 0 && (
+          <PaymentProofFields
+            value={proof}
+            onChange={setProof}
+            amountPaise={moneyPaise}
+            title={activation === "cod" ? "How was the upfront amount paid?" : "How was this money paid? (proof is required)"}
+          />
         )}
       </div>
 
@@ -1067,66 +1094,6 @@ function EditProfileModal({
     </ModalShell>
   )
 }
-
-// ─── Pause / Extend modals ─────────────────────────────────────────────────────
-
-function PauseModal({
-  isPending, onClose, onSubmit,
-}: {
-  isPending: boolean
-  onClose: () => void
-  onSubmit: (from: string, until: string) => void
-}) {
-  const today = new Date().toISOString().split("T")[0]
-  const [from, setFrom] = useState(today)
-  const [until, setUntil] = useState("")
-  return (
-    <ModalShell title="Pause subscription" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Pause from">
-          <input type="date" min={today} value={from} onChange={(e) => setFrom(e.target.value)} className={inputCls} />
-        </Field>
-        <Field label="Pause until">
-          <input type="date" min={from || today} value={until} onChange={(e) => setUntil(e.target.value)} className={inputCls} />
-        </Field>
-        <p className="text-xs text-gray-400">Scheduled orders in this range will be cancelled.</p>
-      </div>
-      <ModalFooter>
-        <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-        <PrimaryBtn disabled={!from || !until || isPending} onClick={() => onSubmit(from, until)}>Confirm pause</PrimaryBtn>
-      </ModalFooter>
-    </ModalShell>
-  )
-}
-
-function ExtendModal({
-  current, isPending, onClose, onSubmit,
-}: {
-  current: number
-  isPending: boolean
-  onClose: () => void
-  onSubmit: (meals: number) => void
-}) {
-  const [meals, setMeals] = useState(15)
-  return (
-    <ModalShell title="Extend plan" onClose={onClose}>
-      <div className="space-y-4">
-        <Field label="Meals to add">
-          <input type="number" min={1} max={90} value={meals} onChange={(e) => setMeals(Number(e.target.value))} className={inputCls} />
-        </Field>
-        <p className="text-sm text-gray-500">
-          Current: <strong>{current}</strong> → New total: <strong>{current + (meals || 0)}</strong>
-        </p>
-      </div>
-      <ModalFooter>
-        <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-        <PrimaryBtn disabled={meals < 1 || isPending} onClick={() => onSubmit(meals)}>Confirm extension</PrimaryBtn>
-      </ModalFooter>
-    </ModalShell>
-  )
-}
-
-// ─── Generic confirm modal ─────────────────────────────────────────────────────
 
 function ConfirmModal({
   title, body, confirmLabel, danger, isPending, onClose, onConfirm,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { useActionPassword } from "@/components/action-password";
 import { Gift, Undo2, Search, X, Loader2, CheckCircle2, AlertCircle, Users, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RefundDialog, type RefundCustomer, type RefundablePayment } from "./refund-dialog";
@@ -303,6 +304,7 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
   const [meals, setMeals] = useState(1);
   const [reason, setReason] = useState("");
   const [worth, setWorth] = useState<number | null>(null);
+  const askPassword = useActionPassword();
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -323,11 +325,13 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
 
   const problem = !customer ? "Pick a customer." : !reason.trim() ? "Add a reason — the customer sees it." : null;
 
-  function submit() {
+  async function submit() {
     if (problem || !customer) return;
+    const pw = await askPassword(`Gift ${meals} meal${meals === 1 ? "" : "s"}${worth ? ` (${rupees(worth * meals)})` : ""} to ${customer.name}.`);
+    if (pw === null) return;
     setResult(null);
     startTransition(async () => {
-      const r = await giftMeals(customer.id, meals, reason);
+      const r = await giftMeals(customer.id, meals, reason, pw);
       setResult(r.ok ? { ok: true, text: r.message } : { ok: false, text: r.error });
       if (r.ok) setReason("");
     });

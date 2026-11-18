@@ -6,7 +6,8 @@ import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { isTestMode, modeUserIds } from "@/lib/mode"
 import { advanceBatch, advanceOrder, clearDeliveryTime, deliverOrders, notifyStatus, skipUndelivered, undoDelivered, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
 import { istToday } from "@/lib/ist"
-import { recordCash } from "@/lib/cash"
+import { audited, sensitive } from "@/lib/audit"
+import { recordCod, type CodInput } from "@/lib/money-ops"
 
 // No `export type { … }` re-exports here: Next turns every name exported from a
 // "use server" file into a runtime reference, so a type-only name crashes this
@@ -25,49 +26,51 @@ export async function advanceBatchStatus(
   newStatus: DeliveryStatus,
   slot: MealSlot
 ) {
-  await requireAdminStrict()
-  // An earlier day is settled, not cooked again: no kitchen / "on its way"
-  // step, which would message customers days later (068).
-  if (newStatus !== "delivered" && date < istToday()) throw new Error("An earlier day can only be marked delivered or skipped.")
-  // Only the current mode's customers (Live / Test) — a batch can hold both,
-  // and marking Live deliveries must never touch (or bill) test accounts.
-  const isTest = await isTestMode()
-  const userIds = await modeUserIds(isTest)
-  let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
+  return audited("operations.advanceBatchStatus", { ref: batchId, details: { date, newStatus, slot } }, async () => {
+    await requireAdminStrict()
+    // An earlier day is settled, not cooked again: no kitchen / "on its way"
+    // step, which would message customers days later (068).
+    if (newStatus !== "delivered" && date < istToday()) throw new Error("An earlier day can only be marked delivered or skipped.")
+    // Only the current mode's customers (Live / Test) — a batch can hold both,
+    // and marking Live deliveries must never touch (or bill) test accounts.
+    const isTest = await isTestMode()
+    const userIds = await modeUserIds(isTest)
+    let billingSummary: { billed: number; skipped_insufficient: number; already_settled: number } | null = null
 
-  if (newStatus === "delivered") {
-    // Orders this click can move — so only they get a message, not customers
-    // whose order was already delivered (a re-click used to re-notify).
-    const { data: candidates } = await supabaseAdmin
-      .from("orders")
-      .select("id")
-      .eq("batch_id", batchId)
-      .eq("delivery_date", date)
-      .eq("meal_slot", slot)
-      .not("status", "in", "(delivered,cancelled,skipped)")
-      .in("user_id", userIds)
-    const candidateIds = (candidates ?? []).map((o: { id: string }) => o.id)
+    if (newStatus === "delivered") {
+      // Orders this click can move — so only they get a message, not customers
+      // whose order was already delivered (a re-click used to re-notify).
+      const { data: candidates } = await supabaseAdmin
+        .from("orders")
+        .select("id")
+        .eq("batch_id", batchId)
+        .eq("delivery_date", date)
+        .eq("meal_slot", slot)
+        .not("status", "in", "(delivered,cancelled,skipped)")
+        .in("user_id", userIds)
+      const candidateIds = (candidates ?? []).map((o: { id: string }) => o.id)
 
-    const { data, error } = await supabaseAdmin.rpc("advance_batch_delivered", {
-      p_batch: batchId,
-      p_date: date,
-      p_slot: slot,
-      p_is_test: isTest,
-    })
-    if (error) throw error
-    billingSummary = data
-    if (candidateIds.length > 0) {
-      // An earlier day settled late: no delivery time (unknown), no
-      // "today's lunch has been delivered" message days later (068).
-      if (date < istToday()) await clearDeliveryTime(candidateIds)
-      else await notifyStatus(candidateIds, "delivered", slot, null, `Batch ${batchId}, ${date} ${slot}`)
+      const { data, error } = await supabaseAdmin.rpc("advance_batch_delivered", {
+        p_batch: batchId,
+        p_date: date,
+        p_slot: slot,
+        p_is_test: isTest,
+      })
+      if (error) throw error
+      billingSummary = data
+      if (candidateIds.length > 0) {
+        // An earlier day settled late: no delivery time (unknown), no
+        // "today's lunch has been delivered" message days later (068).
+        if (date < istToday()) await clearDeliveryTime(candidateIds)
+        else await notifyStatus(candidateIds, "delivered", slot, null, `Batch ${batchId}, ${date} ${slot}`)
+      }
+    } else {
+      await advanceBatch({ batchId, date, slot, status: newStatus, userIds })
     }
-  } else {
-    await advanceBatch({ batchId, date, slot, status: newStatus, userIds })
-  }
 
-  revalidatePath("/operations")
-  return billingSummary
+    revalidatePath("/operations")
+    return billingSummary
+  })
 }
 
 /**
@@ -77,51 +80,57 @@ export async function advanceBatchStatus(
  * logic exactly so the two paths can never diverge.
  */
 export async function advanceOrderStatus(orderId: string, newStatus: DeliveryStatus, slot: MealSlot) {
-  await requireAdminStrict()
-  let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
+  return audited("operations.advanceOrderStatus", { ref: orderId, details: { newStatus, slot } }, async () => {
+    await requireAdminStrict()
+    let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
 
-  if (newStatus === "delivered") {
-    result = (await deliverOrders([orderId], slot))[orderId] ?? null
-  } else {
-    await advanceOrder(orderId, newStatus, slot)
-  }
+    if (newStatus === "delivered") {
+      result = (await deliverOrders([orderId], slot))[orderId] ?? null
+    } else {
+      await advanceOrder(orderId, newStatus, slot)
+    }
 
-  revalidatePath("/operations")
-  return result
+    revalidatePath("/operations")
+    return result
+  })
 }
 
 // A meal that didn't go out: skipped, not charged, stays on the plan (an
 // earlier day shows "couldn't be delivered" to the customer).
 export async function skipOrderNoCharge(orderId: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
-  await requireAdminStrict()
-  try {
-    const n = await skipUndelivered([orderId])
-    if (n === 0) return { ok: false, error: "This meal is already delivered, skipped or cancelled." }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Could not skip it." }
-  }
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
+  return audited<{ ok: true; message: string } | { ok: false; error: string }>("operations.skipOrderNoCharge", { ref: orderId }, async () => {
+    await requireAdminStrict()
+    try {
+      const n = await skipUndelivered([orderId])
+      if (n === 0) return { ok: false, error: "This meal is already delivered, skipped or cancelled." }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Could not skip it." }
+    }
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
+  })
 }
 
 // A meal marked delivered by mistake (068): the charge goes back to the
 // wallet, the meal back on the plan, and the customer is told.
-export async function undoOrderDelivery(orderId: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
-  await requireAdminStrict()
-  try {
-    const { refunded } = await undoDelivered(orderId)
-    revalidatePath("/operations")
-    revalidatePath("/dashboard")
-    return {
-      ok: true,
-      message: refunded > 0
-        ? `Undone — ₹${(refunded / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })} back in their wallet, meal back on the plan.`
-        : "Undone — meal back on the plan.",
+export async function undoOrderDelivery(orderId: string, password: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  return sensitive("operations.undoOrderDelivery", password, { ref: orderId }, async (ctx): Promise<{ ok: true; message: string } | { ok: false; error: string }> => {
+    try {
+      const { refunded, userId, subscriptionId } = await undoDelivered(orderId, ctx)
+      ctx.note({ userId, subscriptionId, amountPaise: refunded })
+      revalidatePath("/operations")
+      revalidatePath("/dashboard")
+      return {
+        ok: true,
+        message: refunded > 0
+          ? `Undone — ₹${(refunded / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })} back in their wallet, meal back on the plan.`
+          : "Undone — meal back on the plan.",
+      }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
     }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
-  }
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,96 +165,90 @@ function rupeesText(paise: number) {
 // all (billed like any delivery) or skip it — not charged, and the meal
 // stays on the plan.
 export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "skip"): Promise<ActionResult> {
-  await requireAdminStrict()
-  const { data: order } = await supabaseAdmin
-    .from("orders")
-    .select("id, status, meal_slot, user_id, batch_id, delivery_partner_id")
-    .eq("id", orderId)
-    .maybeSingle()
-  if (!order) return { ok: false, error: "Order not found." }
-  if (["delivered", "cancelled", "skipped"].includes(order.status)) return { ok: false, error: "This meal is already settled." }
-  const vars = { name: await customerName(order.user_id), slot: order.meal_slot }
-  const data = { batch_id: order.batch_id }
+  return audited<ActionResult>("operations.resolveFailedDrop", { ref: orderId, details: { outcome } }, async () => {
+    await requireAdminStrict()
+    const { data: order } = await supabaseAdmin
+      .from("orders")
+      .select("id, status, meal_slot, user_id, batch_id, delivery_partner_id")
+      .eq("id", orderId)
+      .maybeSingle()
+    if (!order) return { ok: false, error: "Order not found." }
+    if (["delivered", "cancelled", "skipped"].includes(order.status)) return { ok: false, error: "This meal is already settled." }
+    const vars = { name: await customerName(order.user_id), slot: order.meal_slot }
+    const data = { batch_id: order.batch_id }
 
-  if (outcome === "deliver") {
-    const result = (await deliverOrders([orderId], order.meal_slot as MealSlot))[orderId]
+    if (outcome === "deliver") {
+      const result = (await deliverOrders([orderId], order.meal_slot as MealSlot))[orderId]
+      revalidatePath("/operations")
+      revalidatePath("/dashboard")
+      if (result === "skipped_insufficient") return { ok: true, message: "Wallet was short — skipped and the customer was told." }
+      await tellPartner(order.delivery_partner_id, "drop_delivered", vars, data)
+      return { ok: true, message: "Marked delivered and billed." }
+    }
+
+    const { error } = await supabaseAdmin
+      .from("orders")
+      .update({ status: "skipped", skip_reason: "not_delivered", updated_at: new Date().toISOString() })
+      .eq("id", orderId)
+      .not("status", "in", "(delivered,cancelled,skipped)")
+    if (error) return { ok: false, error: error.message }
+    await tellPartner(order.delivery_partner_id, "drop_skipped", vars, data)
     revalidatePath("/operations")
     revalidatePath("/dashboard")
-    if (result === "skipped_insufficient") return { ok: true, message: "Wallet was short — skipped and the customer was told." }
-    await tellPartner(order.delivery_partner_id, "drop_delivered", vars, data)
-    return { ok: true, message: "Marked delivered and billed." }
-  }
-
-  const { error } = await supabaseAdmin
-    .from("orders")
-    .update({ status: "skipped", skip_reason: "not_delivered", updated_at: new Date().toISOString() })
-    .eq("id", orderId)
-    .not("status", "in", "(delivered,cancelled,skipped)")
-  if (error) return { ok: false, error: error.message }
-  await tellPartner(order.delivery_partner_id, "drop_skipped", vars, data)
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
+    return { ok: true, message: "Skipped — not charged, and the meal stays on their plan." }
+  })
 }
 
-// Cash a partner reported: recording it is the normal "cash received"
-// (payment, wallet credit, less cash due, message to the customer).
-export async function recordCashReport(reportId: string, amountPaise?: number): Promise<ActionResult> {
-  const admin = await requireAdminStrict()
-  const { data: report } = await supabaseAdmin
-    .from("cash_reports")
-    .select("id, subscription_id, amount_paise, recorded_at, dismissed_at, partner_id, user_id")
-    .eq("id", reportId)
-    .maybeSingle()
-  if (!report) return { ok: false, error: "Report not found." }
-  if (report.recorded_at || report.dismissed_at) return { ok: false, error: "Already dealt with." }
+// Cash a partner reported: recorded like any cash-on-delivery collection —
+// cash + UPI must equal what's due (admin_record_cod), and the report is
+// marked recorded in the same transaction.
+export async function recordCashReport(reportId: string, input: CodInput, password: string): Promise<ActionResult> {
+  return sensitive("operations.recordCashReport", password, { ref: reportId, amountPaise: input.cashPaise + input.upiPaise }, async (ctx): Promise<ActionResult> => {
+    const { data: report } = await supabaseAdmin
+      .from("cash_reports")
+      .select("id, subscription_id, amount_paise, recorded_at, dismissed_at, partner_id, user_id")
+      .eq("id", reportId)
+      .maybeSingle()
+    if (!report) return { ok: false, error: "Report not found." }
+    if (report.recorded_at || report.dismissed_at) return { ok: false, error: "Already dealt with." }
+    ctx.note({ userId: report.user_id, subscriptionId: report.subscription_id, details: { reported: report.amount_paise } })
 
-  // Claim the report first so a double click can't record the cash twice.
-  const { data: claimed } = await supabaseAdmin
-    .from("cash_reports")
-    .update({ recorded_at: new Date().toISOString(), recorded_by: admin.id })
-    .eq("id", reportId)
-    .is("recorded_at", null)
-    .is("dismissed_at", null)
-    .select("id")
-  if (!claimed?.length) return { ok: false, error: "Already dealt with." }
+    const res = await recordCod(ctx, report.subscription_id, input, reportId)
+    if (!res.ok) return res
+    await tellPartner(report.partner_id, "cash_recorded", {
+      name: await customerName(report.user_id),
+      amount: rupeesText(input.cashPaise + input.upiPaise),
+    })
 
-  const res = await recordCash(report.subscription_id, amountPaise ?? report.amount_paise)
-  if (!res.ok) {
-    await supabaseAdmin.from("cash_reports").update({ recorded_at: null, recorded_by: null }).eq("id", reportId)
-    return res
-  }
-  await supabaseAdmin.from("cash_reports").update({ payment_id: res.paymentId }).eq("id", reportId)
-  await tellPartner(report.partner_id, "cash_recorded", {
-    name: await customerName(report.user_id),
-    amount: rupeesText(amountPaise ?? report.amount_paise),
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    revalidatePath("/money")
+    revalidatePath(`/subscribers/${report.subscription_id}`)
+    return { ok: true, message: res.message }
   })
-
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  revalidatePath(`/subscribers/${report.subscription_id}`)
-  return { ok: true, message: res.message }
 }
 
 export async function dismissCashReport(reportId: string): Promise<ActionResult> {
-  const admin = await requireAdminStrict()
-  const { data, error } = await supabaseAdmin
-    .from("cash_reports")
-    .update({ dismissed_at: new Date().toISOString(), dismissed_by: admin.id })
-    .eq("id", reportId)
-    .is("recorded_at", null)
-    .is("dismissed_at", null)
-    .select("subscription_id, partner_id, user_id, amount_paise")
-  if (error) return { ok: false, error: error.message }
-  if (!data?.length) return { ok: false, error: "Already dealt with." }
-  await tellPartner(data[0].partner_id, "cash_dismissed", {
-    name: await customerName(data[0].user_id),
-    amount: rupeesText(data[0].amount_paise),
+  return audited<ActionResult>("operations.dismissCashReport", { ref: reportId }, async () => {
+    const admin = await requireAdminStrict()
+    const { data, error } = await supabaseAdmin
+      .from("cash_reports")
+      .update({ dismissed_at: new Date().toISOString(), dismissed_by: admin.id })
+      .eq("id", reportId)
+      .is("recorded_at", null)
+      .is("dismissed_at", null)
+      .select("subscription_id, partner_id, user_id, amount_paise")
+    if (error) return { ok: false, error: error.message }
+    if (!data?.length) return { ok: false, error: "Already dealt with." }
+    await tellPartner(data[0].partner_id, "cash_dismissed", {
+      name: await customerName(data[0].user_id),
+      amount: rupeesText(data[0].amount_paise),
+    })
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    revalidatePath(`/subscribers/${data[0].subscription_id}`)
+    return { ok: true, message: "Report dismissed — nothing recorded." }
   })
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  revalidatePath(`/subscribers/${data[0].subscription_id}`)
-  return { ok: true, message: "Report dismissed — nothing recorded." }
 }
 
 // Handover photos are private; a link lasts 5 minutes.
@@ -266,45 +269,51 @@ export async function deliveryPhotoUrl(orderId: string): Promise<string | null> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function previewKitchenClosure(date: string, slots: MealSlot[]) {
-  await requireAdmin()
-  const { data } = await supabaseAdmin
-    .from("orders")
-    .select("user_id")
-    .eq("delivery_date", date)
-    .in("meal_slot", slots)
-    .in("status", ["scheduled", "confirmed", "preparing"])
-  const rows = (data ?? []) as { user_id: string }[]
-  return { orders: rows.length, customers: new Set(rows.map((r) => r.user_id)).size }
+  return audited("operations.previewKitchenClosure", { details: { date, slots } }, async () => {
+    await requireAdmin()
+    const { data } = await supabaseAdmin
+      .from("orders")
+      .select("user_id")
+      .eq("delivery_date", date)
+      .in("meal_slot", slots)
+      .in("status", ["scheduled", "confirmed", "preparing"])
+    const rows = (data ?? []) as { user_id: string }[]
+    return { orders: rows.length, customers: new Set(rows.map((r) => r.user_id)).size }
+  })
 }
 
 export async function closeKitchen(date: string, slots: MealSlot[], reason: string, notify: boolean) {
-  const admin = await requireAdminStrict()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Pick a date.")
-  if (slots.length === 0) throw new Error("Pick lunch, dinner or both.")
-  let cancelled = 0
-  let customers = 0
-  for (const slot of slots) {
-    const { data, error } = await supabaseAdmin.rpc("close_kitchen", {
-      p_date: date,
-      p_slot: slot,
-      p_reason: reason,
-      p_admin: admin.id,
-      p_notify: notify,
-    })
-    if (error) throw new Error(error.message)
-    cancelled += data?.cancelled ?? 0
-    customers += data?.customers ?? 0
-  }
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  return { cancelled, customers }
+  return audited("operations.closeKitchen", { details: { date, slots, reason, notify } }, async () => {
+    const admin = await requireAdminStrict()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Pick a date.")
+    if (slots.length === 0) throw new Error("Pick lunch, dinner or both.")
+    let cancelled = 0
+    let customers = 0
+    for (const slot of slots) {
+      const { data, error } = await supabaseAdmin.rpc("close_kitchen", {
+        p_date: date,
+        p_slot: slot,
+        p_reason: reason,
+        p_admin: admin.id,
+        p_notify: notify,
+      })
+      if (error) throw new Error(error.message)
+      cancelled += data?.cancelled ?? 0
+      customers += data?.customers ?? 0
+    }
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    return { cancelled, customers }
+  })
 }
 
 export async function reopenKitchen(date: string, slot: MealSlot, notify: boolean) {
-  await requireAdminStrict()
-  const { data, error } = await supabaseAdmin.rpc("reopen_kitchen", { p_date: date, p_slot: slot, p_notify: notify })
-  if (error) throw new Error(error.message)
-  revalidatePath("/operations")
-  revalidatePath("/dashboard")
-  return { revived: data?.revived ?? 0, note: (data?.note as string | undefined) ?? null }
+  return audited("operations.reopenKitchen", { details: { date, slot, notify } }, async () => {
+    await requireAdminStrict()
+    const { data, error } = await supabaseAdmin.rpc("reopen_kitchen", { p_date: date, p_slot: slot, p_notify: notify })
+    if (error) throw new Error(error.message)
+    revalidatePath("/operations")
+    revalidatePath("/dashboard")
+    return { revived: data?.revived ?? 0, note: (data?.note as string | undefined) ?? null }
+  })
 }

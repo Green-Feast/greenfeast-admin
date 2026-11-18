@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin, requireAdminStrict } from "@/lib/auth";
+import { audited } from "@/lib/audit";
 import { isTestMode } from "@/lib/mode";
 import { notifyUsers, logBroadcast, type Channel } from "@/lib/notifications";
 
@@ -50,98 +51,116 @@ async function resolveRecipients(audience: AudienceMode, userIds: string[] | und
 }
 
 export async function sendBroadcast(input: SendBroadcastInput) {
-  const admin = await requireAdminStrict();
+  return audited("notifications.sendBroadcast", {
+    details: { title: input.title?.slice(0, 120), type: input.type, audience: input.audience, audienceDescription: input.audienceDescription?.slice(0, 120), channels: input.channels, selectedUsers: input.userIds?.length ?? 0, bodyChars: input.body?.length ?? 0 },
+  }, async () => {
+    const admin = await requireAdminStrict();
 
-  if (!input.title.trim() || !input.body.trim()) {
-    throw new Error("Title and message are required.");
-  }
-  if (input.channels.length === 0) {
-    throw new Error("Select at least one channel.");
-  }
-  const recipients = await resolveRecipients(input.audience, input.userIds, await isTestMode());
-  if (recipients.length === 0) {
-    throw new Error("Nobody to send to — pick at least one recipient.");
-  }
+    if (!input.title.trim() || !input.body.trim()) {
+      throw new Error("Title and message are required.");
+    }
+    if (input.channels.length === 0) {
+      throw new Error("Select at least one channel.");
+    }
+    const recipients = await resolveRecipients(input.audience, input.userIds, await isTestMode());
+    if (recipients.length === 0) {
+      throw new Error("Nobody to send to — pick at least one recipient.");
+    }
 
-  const results = await notifyUsers(recipients, input.title.trim(), input.body.trim(), input.type, input.channels);
+    const results = await notifyUsers(recipients, input.title.trim(), input.body.trim(), input.type, input.channels);
 
-  await logBroadcast({
-    type: input.type,
-    title: input.title.trim(),
-    body: input.body.trim(),
-    channels: input.channels,
-    audience: { mode: input.audience, description: input.audienceDescription, count: recipients.length },
-    results,
-    createdBy: admin.email,
+    await logBroadcast({
+      type: input.type,
+      title: input.title.trim(),
+      body: input.body.trim(),
+      channels: input.channels,
+      audience: { mode: input.audience, description: input.audienceDescription, count: recipients.length },
+      results,
+      createdBy: admin.email,
+    });
+
+    revalidatePath("/notifications");
+
+    return {
+      sent: results.length,
+      pushSent: results.filter((r) => r.push === "sent").length,
+      whatsappSent: results.filter((r) => r.whatsapp === "sent").length,
+      results,
+    };
   });
-
-  revalidatePath("/notifications");
-
-  return {
-    sent: results.length,
-    pushSent: results.filter((r) => r.push === "sent").length,
-    whatsappSent: results.filter((r) => r.whatsapp === "sent").length,
-    results,
-  };
 }
 
 // ── Automated messages ────────────────────────────────────────────────────
 
 export async function saveTemplate(key: string, input: { title: string; body: string; enabled: boolean }) {
-  const admin = await requireAdmin();
-  if (!input.title.trim() || !input.body.trim()) throw new Error("Title and message can't be empty.");
-  const { error } = await supabaseAdmin
-    .from("notification_templates")
-    .update({
-      title: input.title.trim(),
-      body: input.body.trim(),
-      enabled: input.enabled,
-      updated_at: new Date().toISOString(),
-      updated_by: admin.email,
-    })
-    .eq("key", key);
-  if (error) throw new Error(error.message);
-  revalidatePath("/notifications");
+  return audited("notifications.saveTemplate", {
+    ref: key,
+    details: { title: input.title?.slice(0, 120), enabled: input.enabled, bodyChars: input.body?.length ?? 0 },
+  }, async () => {
+    const admin = await requireAdmin();
+    if (!input.title.trim() || !input.body.trim()) throw new Error("Title and message can't be empty.");
+    const { error } = await supabaseAdmin
+      .from("notification_templates")
+      .update({
+        title: input.title.trim(),
+        body: input.body.trim(),
+        enabled: input.enabled,
+        updated_at: new Date().toISOString(),
+        updated_by: admin.email,
+      })
+      .eq("key", key);
+    if (error) throw new Error(error.message);
+    revalidatePath("/notifications");
+  });
 }
 
 export async function resetTemplate(key: string) {
-  const admin = await requireAdmin();
-  const { data: t } = await supabaseAdmin
-    .from("notification_templates").select("default_title, default_body").eq("key", key).maybeSingle();
-  if (!t?.default_title || !t?.default_body) throw new Error("No default text for this message.");
-  const { error } = await supabaseAdmin
-    .from("notification_templates")
-    .update({ title: t.default_title, body: t.default_body, updated_at: new Date().toISOString(), updated_by: admin.email })
-    .eq("key", key);
-  if (error) throw new Error(error.message);
-  revalidatePath("/notifications");
-  return { title: t.default_title as string, body: t.default_body as string };
+  return audited("notifications.resetTemplate", { ref: key }, async () => {
+    const admin = await requireAdmin();
+    const { data: t } = await supabaseAdmin
+      .from("notification_templates").select("default_title, default_body").eq("key", key).maybeSingle();
+    if (!t?.default_title || !t?.default_body) throw new Error("No default text for this message.");
+    const { error } = await supabaseAdmin
+      .from("notification_templates")
+      .update({ title: t.default_title, body: t.default_body, updated_at: new Date().toISOString(), updated_by: admin.email })
+      .eq("key", key);
+    if (error) throw new Error(error.message);
+    revalidatePath("/notifications");
+    return { title: t.default_title as string, body: t.default_body as string };
+  });
 }
 
 // ── Saved messages (promotions etc.) ──────────────────────────────────────
 
 export async function saveMessage(input: { key?: string; label: string; title: string; body: string }) {
-  const admin = await requireAdmin();
-  if (!input.label.trim() || !input.title.trim() || !input.body.trim()) {
-    throw new Error("Give it a name, a title and a message.");
-  }
-  const row = {
-    label: input.label.trim(),
-    title: input.title.trim(),
-    body: input.body.trim(),
-    updated_at: new Date().toISOString(),
-    updated_by: admin.email,
-  };
-  const { error } = input.key
-    ? await supabaseAdmin.from("notification_templates").update(row).eq("key", input.key).eq("kind", "saved")
-    : await supabaseAdmin.from("notification_templates").insert({ ...row, key: `saved_${randomUUID()}`, kind: "saved" });
-  if (error) throw new Error(error.message);
-  revalidatePath("/notifications");
+  return audited("notifications.saveMessage", {
+    ref: input.key ?? null,
+    details: { create: !input.key, label: input.label?.slice(0, 120), title: input.title?.slice(0, 120), bodyChars: input.body?.length ?? 0 },
+  }, async () => {
+    const admin = await requireAdmin();
+    if (!input.label.trim() || !input.title.trim() || !input.body.trim()) {
+      throw new Error("Give it a name, a title and a message.");
+    }
+    const row = {
+      label: input.label.trim(),
+      title: input.title.trim(),
+      body: input.body.trim(),
+      updated_at: new Date().toISOString(),
+      updated_by: admin.email,
+    };
+    const { error } = input.key
+      ? await supabaseAdmin.from("notification_templates").update(row).eq("key", input.key).eq("kind", "saved")
+      : await supabaseAdmin.from("notification_templates").insert({ ...row, key: `saved_${randomUUID()}`, kind: "saved" });
+    if (error) throw new Error(error.message);
+    revalidatePath("/notifications");
+  });
 }
 
 export async function deleteMessage(key: string) {
-  await requireAdmin();
-  const { error } = await supabaseAdmin.from("notification_templates").delete().eq("key", key).eq("kind", "saved");
-  if (error) throw new Error(error.message);
-  revalidatePath("/notifications");
+  return audited("notifications.deleteMessage", { ref: key }, async () => {
+    await requireAdmin();
+    const { error } = await supabaseAdmin.from("notification_templates").delete().eq("key", key).eq("kind", "saved");
+    if (error) throw new Error(error.message);
+    revalidatePath("/notifications");
+  });
 }

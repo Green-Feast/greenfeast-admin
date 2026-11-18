@@ -1,6 +1,8 @@
 // Shared types for the Users tab. Kept in a directive-free module so the
 // "use server" actions file only exports async functions (an RSC requirement).
 
+import type { ProofInput } from "@/components/payment-proof"
+
 export type CreateSubInput = {
   userId: string
   // For auth-only "ghost" users with no public.users row yet:
@@ -24,6 +26,10 @@ export type CreateSubInput = {
   addonIds?: string[]
   // A coupon (migration 066): sets the plan's meal price; recorded as used.
   couponId?: string
+  // How the money in walletCredit was paid, with its proof (migration 092).
+  proof?: ProofInput | null
+  // Generated when the form opens, so a double submit records it once.
+  idempotencyKey?: string
   address?: {
     label: string
     type: string

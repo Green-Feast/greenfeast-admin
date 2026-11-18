@@ -72,7 +72,7 @@ export default async function OperationsPage({
   // the office records it when the cash is handed over.
   const cashQuery = supabaseAdmin
     .from("cash_reports")
-    .select("id, subscription_id, amount_paise, note, reported_at, delivery_partners ( name ), users!inner ( name, is_test )")
+    .select("id, subscription_id, amount_paise, note, reported_at, delivery_partners ( name ), users!inner ( name, is_test ), subscriptions ( cod_due_paise )")
     .is("recorded_at", null)
     .is("dismissed_at", null)
     .eq("users.is_test", isTest)
@@ -112,6 +112,7 @@ export default async function OperationsPage({
     id: r.id,
     subscriptionId: r.subscription_id,
     amount: r.amount_paise,
+    due: (Array.isArray(r.subscriptions) ? r.subscriptions[0] : r.subscriptions)?.cod_due_paise ?? 0,
     note: r.note ?? null,
     reportedAt: r.reported_at,
     partner: (Array.isArray(r.delivery_partners) ? r.delivery_partners[0] : r.delivery_partners)?.name ?? "Partner",

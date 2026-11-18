@@ -2,11 +2,15 @@
 
 // Edit dialogs for the subscriber profile — everything a customer can tell
 // us on WhatsApp, the admin can now set here: details, plan, food
-// preferences, addresses, wallet, cash-on-delivery, fixed dishes.
+// preferences, addresses, wallet, cash-on-delivery, fixed dishes. (Wallet money only moves through payments,
+// gifts, referrals and refunds — there is no manual wallet adjustment.)
 
+import { planMealRate } from "@/lib/pricing"
 import { useState } from "react"
 import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { istToday } from "@/lib/ist"
+import { PaymentProofFields, emptyProof, proofProblem, type ProofInput } from "@/components/payment-proof"
 
 // ── Shared UI ─────────────────────────────────────────────────────────────
 
@@ -181,7 +185,7 @@ export function PlanModal({ initial, noDeliveryDays, plans, addons, pending, onC
               <select value={v.planId} onChange={(e) => set("planId", e.target.value)} className={inputCls}>
                 {plans.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name} · {p.meals_total} meals · ₹{(Math.round(p.base_price / Math.max(p.meals_total, 1)) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}/meal
+                    {p.name} · {p.meals_total} meals · ₹{(planMealRate(p) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}/meal
                   </option>
                 ))}
               </select>
@@ -390,88 +394,88 @@ export function AddressModal({ initial, pending, onClose, onSave }: {
   )
 }
 
-// ── Wallet ────────────────────────────────────────────────────────────────
-
-export function WalletModal({ balance, pending, onClose, onSave }: {
-  balance: number | null
-  pending: boolean
-  onClose: () => void
-  onSave: (amountPaise: number, direction: "credit" | "debit", reason: string) => void
-}) {
-  const [direction, setDirection] = useState<"credit" | "debit">("credit")
-  const [amount, setAmount] = useState("")
-  const [reason, setReason] = useState("")
-  const paise = rupeesToPaise(amount)
-  return (
-    <ModalOverlay onClose={onClose}>
-      <ModalCard title="Adjust wallet" onClose={onClose}>
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">Balance now: <span className="font-semibold text-[#1A1A1A]">{balance !== null ? fmtRupees(balance) : "—"}</span></p>
-          <div className="flex gap-2">
-            {(["credit", "debit"] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDirection(d)}
-                className={cn("flex-1 h-9 rounded-lg border text-sm font-medium", direction === d ? "bg-[#1B5E20] text-white border-[#1B5E20]" : "border-[#e2e8d5] text-gray-600")}
-              >
-                {d === "credit" ? "Add money" : "Take money"}
-              </button>
-            ))}
-          </div>
-          <Field label="Amount (₹)"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} className={inputCls} /></Field>
-          <Field label="Reason (the customer sees it)"><input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. goodwill credit for a late delivery" className={inputCls} /></Field>
-          <p className="text-xs text-gray-400">For a refund of a paid order use Money → Refund, so it&apos;s tracked as a refund.</p>
-        </div>
-        <ModalFooter>
-          <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending || paise <= 0 || !reason.trim()} onClick={() => onSave(paise, direction, reason)}>
-            {direction === "credit" ? `Add ${paise > 0 ? fmtRupees(paise) : ""}` : `Take ${paise > 0 ? fmtRupees(paise) : ""}`}
-          </PrimaryBtn>
-        </ModalFooter>
-      </ModalCard>
-    </ModalOverlay>
-  )
-}
-
 // ── Cash on delivery ──────────────────────────────────────────────────────
+// The money a cash-on-delivery customer hands over: some in cash, some by
+// UPI on our QR. The two must add up exactly to what's due (migration 092),
+// and the UPI part needs its reference (UTR).
 
-export function CashModal({ due, pending, onClose, onRecord, onSetDue }: {
+export type CodValue = { cashPaise: number; upiPaise: number; upiReference: string; paidOn: string; note: string; idempotencyKey: string }
+
+export function CashModal({ due, report, pending, onClose, onRecord, onSetDue }: {
   due: number
+  /** A partner's report being recorded: prefills the cash part. */
+  report?: { amount: number; partner: string } | null
   pending: boolean
   onClose: () => void
-  onRecord: (amountPaise: number) => void
-  onSetDue: (duePaise: number, onCredit: boolean) => void
+  onRecord: (v: CodValue) => void
+  onSetDue: (duePaise: number, onCredit: boolean, reason: string) => void
 }) {
-  const [amount, setAmount] = useState(due > 0 ? String(due / 100) : "")
+  const startCash = report ? Math.min(report.amount, due) : due
+  const [cash, setCash] = useState(String(startCash / 100))
+  const [upi, setUpi] = useState(due - startCash > 0 ? String((due - startCash) / 100) : "")
+  const [upiRef, setUpiRef] = useState("")
+  const [paidOn, setPaidOn] = useState(istToday())
+  const [note, setNote] = useState(report ? `Collected by ${report.partner}` : "")
+  const [key] = useState(() => crypto.randomUUID())
   const [newDue, setNewDue] = useState(String(due / 100))
   const [onCredit, setOnCredit] = useState(true)
-  const paise = rupeesToPaise(amount)
+  const [dueReason, setDueReason] = useState("")
+  const cashPaise = rupeesToPaise(cash)
+  const upiPaise = rupeesToPaise(upi)
+  const sum = cashPaise + upiPaise
+  const problem =
+    sum !== due ? `Cash ${fmtRupees(cashPaise)} + UPI ${fmtRupees(upiPaise)} = ${fmtRupees(sum)} — it must be exactly ${fmtRupees(due)}.`
+    : upiPaise > 0 && upiRef.trim().length < 3 ? "Add the UPI reference (UTR) for the UPI part."
+    : !paidOn || paidOn > istToday() ? "Give the day it was paid."
+    : null
   return (
     <ModalOverlay onClose={onClose}>
-      <ModalCard title="Cash on delivery" onClose={onClose}>
+      <ModalCard title={report ? `Record ${report.partner}'s collection` : "Cash on delivery"} onClose={onClose}>
         <div className="space-y-4">
-          <p className="text-sm text-gray-600">Still to collect: <span className="font-semibold text-[#1A1A1A]">{fmtRupees(due)}</span></p>
-          <Field label="Cash received (₹)" hint="Part payments are fine — it goes into their wallet and lowers what's due.">
-            <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} className={inputCls} />
-          </Field>
-          <PrimaryBtn disabled={pending || paise <= 0} onClick={() => onRecord(paise)}>Record {paise > 0 ? fmtRupees(paise) : "cash"} received</PrimaryBtn>
-          <div className="pt-3 border-t border-[#e2e8d5] space-y-2">
-            <Field label="Or change what's due (₹)">
-              <input inputMode="decimal" value={newDue} onChange={(e) => setNewDue(e.target.value.replace(/[^\d.]/g, ""))} className={inputCls} />
+          <p className="text-sm text-gray-600">
+            Due: <span className="font-semibold text-[#1A1A1A]">{fmtRupees(due)}</span>
+            {report && <> · partner reported <span className="font-semibold">{fmtRupees(report.amount)}</span></>}
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Cash (₹)">
+              <input inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value.replace(/[^\d.]/g, ""))} className={inputCls} />
             </Field>
-            <label className="flex items-center gap-2 text-xs text-gray-600">
-              <input type="checkbox" checked={onCredit} onChange={(e) => setOnCredit(e.target.checked)} className="accent-[#1B5E20]" />
-              Keep delivering on credit until it&apos;s paid (the wallet may go negative)
-            </label>
-            <button
-              disabled={pending}
-              onClick={() => onSetDue(rupeesToPaise(newDue), onCredit)}
-              className="w-full h-9 rounded-lg border border-[#e2e8d5] text-sm font-medium hover:bg-gray-50 disabled:opacity-40"
-            >
-              Save amount due
-            </button>
+            <Field label="UPI to our QR (₹)">
+              <input inputMode="decimal" value={upi} onChange={(e) => setUpi(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0" className={inputCls} />
+            </Field>
           </div>
+          {upiPaise > 0 && (
+            <Field label="UPI reference (UTR)">
+              <input value={upiRef} onChange={(e) => setUpiRef(e.target.value)} placeholder="12-digit UTR from the payment" className={inputCls} />
+            </Field>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Paid on"><input type="date" max={istToday()} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} className={inputCls} /></Field>
+            <Field label="Note (optional)"><input value={note} onChange={(e) => setNote(e.target.value)} className={inputCls} /></Field>
+          </div>
+          {problem && <p className="text-xs text-amber-700">{problem}</p>}
+          <PrimaryBtn disabled={pending || !!problem} onClick={() => onRecord({ cashPaise, upiPaise, upiReference: upiRef.trim(), paidOn, note: note.trim(), idempotencyKey: key })}>
+            Record {fmtRupees(sum)} received
+          </PrimaryBtn>
+          {!report && (
+            <div className="pt-3 border-t border-[#e2e8d5] space-y-2">
+              <Field label="Or change what's due (₹)" hint="Lowering it without a payment writes money off — it's logged with your reason.">
+                <input inputMode="decimal" value={newDue} onChange={(e) => setNewDue(e.target.value.replace(/[^\d.]/g, ""))} className={inputCls} />
+              </Field>
+              <input value={dueReason} onChange={(e) => setDueReason(e.target.value)} placeholder="Reason for the change" className={inputCls} />
+              <label className="flex items-center gap-2 text-xs text-gray-600">
+                <input type="checkbox" checked={onCredit} onChange={(e) => setOnCredit(e.target.checked)} className="accent-[#1B5E20]" />
+                Keep delivering on credit until it&apos;s paid (the wallet may go negative)
+              </label>
+              <button
+                disabled={pending || !dueReason.trim()}
+                onClick={() => onSetDue(rupeesToPaise(newDue), onCredit, dueReason.trim())}
+                className="w-full h-9 rounded-lg border border-[#e2e8d5] text-sm font-medium hover:bg-gray-50 disabled:opacity-40"
+              >
+                Save amount due
+              </button>
+            </div>
+          )}
         </div>
       </ModalCard>
     </ModalOverlay>
@@ -482,27 +486,31 @@ export function ActivateModal({ total, pending, onClose, onSave }: {
   total: number
   pending: boolean
   onClose: () => void
-  onSave: (paidPaise: number, cashDuePaise: number) => void
+  onSave: (paidPaise: number, cashDuePaise: number, proof: ProofInput | null, idempotencyKey: string) => void
 }) {
   const [paid, setPaid] = useState("")
   const [due, setDue] = useState("")
+  const [proof, setProof] = useState<ProofInput>(emptyProof)
+  const [key] = useState(() => crypto.randomUUID())
   const paidPaise = rupeesToPaise(paid)
   const duePaise = due.trim() ? rupeesToPaise(due) : Math.max(total - paidPaise, 0)
+  const problem = paidPaise > 0 ? proofProblem(proof, paidPaise) : null
   return (
     <ModalOverlay onClose={onClose}>
       <ModalCard title="Activate plan" onClose={onClose}>
         <div className="space-y-4">
           <p className="text-sm text-gray-600">Plan price: <span className="font-semibold">{fmtRupees(total)}</span></p>
-          <Field label="Paid so far (₹)" hint="Cash, UPI or bank transfer you've received — it goes into the wallet. 0 is fine.">
+          <Field label="Paid so far (₹)" hint="Money you've received outside the app — it goes into the wallet with its proof. 0 is fine.">
             <input inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0" className={inputCls} />
           </Field>
+          {paidPaise > 0 && <PaymentProofFields value={proof} onChange={setProof} amountPaise={paidPaise} />}
           <Field label="Cash still to collect (₹)" hint="Meals run on credit until it's recorded.">
             <input inputMode="decimal" value={due} onChange={(e) => setDue(e.target.value.replace(/[^\d.]/g, ""))} placeholder={String(Math.max(total - paidPaise, 0) / 100)} className={inputCls} />
           </Field>
         </div>
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending} onClick={() => onSave(paidPaise, duePaise)}>Activate</PrimaryBtn>
+          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(paidPaise, duePaise, paidPaise > 0 ? proof : null, key)}>Activate</PrimaryBtn>
         </ModalFooter>
       </ModalCard>
     </ModalOverlay>

@@ -19,6 +19,8 @@ import {
 import type { DeliveryStatus, MealSlot } from "@/lib/delivery";
 import { setAddressBatch } from "@/app/(admin)/batches/actions";
 import { recordCashPayment } from "@/app/(admin)/subscribers/[id]/actions";
+import { CashModal, type CodValue } from "@/app/(admin)/subscribers/[id]/profile-editors";
+import { useActionPassword } from "@/components/action-password";
 import { istHour, addDaysISO, isSlotLocked, SLOT_CUTOFF_HOUR } from "@/lib/ist";
 
 /* ─── Types ──────────────────────────────────────────────────────────────────── */
@@ -67,6 +69,8 @@ export type CashReportRow = {
   id: string;
   subscriptionId: string;
   amount: number;
+  /** Cash still due on the plan (what the recording must add up to). */
+  due: number;
   note: string | null;
   reportedAt: string;
   partner: string;
@@ -187,6 +191,9 @@ export function OperationsClient({
   });
   const [toast, setToast] = useState("");
   const [, startTransition] = useTransition();
+  const askPassword = useActionPassword();
+  // The cash-on-delivery dialog: a customer's due, or a partner's report.
+  const [cashFor, setCashFor] = useState<{ subscriptionId: string; name: string; due: number; report: CashReportRow | null } | null>(null);
   const [advancing, setAdvancing] = useState<string | null>(null);
   const [advancingOrder, setAdvancingOrder] = useState<string | null>(null);
 
@@ -226,17 +233,7 @@ export function OperationsClient({
 
   function handleCashReport(r: CashReportRow, action: "record" | "dismiss") {
     if (action === "record") {
-      const answer = window.prompt(`Cash received from ${r.partner} for ${r.customer} (₹):`, String(r.amount / 100));
-      if (!answer) return;
-      const paise = Math.round((parseFloat(answer) || 0) * 100);
-      if (paise <= 0) return;
-      setBusyRow(r.id);
-      startTransition(async () => {
-        const res = await recordCashReport(r.id, paise);
-        setBusyRow(null);
-        showToast(res.ok ? res.message ?? "Recorded." : res.error);
-        if (res.ok) router.refresh();
-      });
+      setCashFor({ subscriptionId: r.subscriptionId, name: r.customer, due: r.due, report: r });
       return;
     }
     if (!window.confirm(`Dismiss ${r.partner}'s report of ${rupees(r.amount)} from ${r.customer}? Nothing is recorded.`)) return;
@@ -290,7 +287,9 @@ export function OperationsClient({
     if (!window.confirm(`Undo — ${s.name}'s ${slot} on ${shortDay(serverDate)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return;
     setBusyRow(s.orderId);
     startTransition(async () => {
-      const res = await undoOrderDelivery(s.orderId);
+      const pw = await askPassword(`Undo ${s.name}'s ${slot} on ${shortDay(serverDate)} — the charge goes back to their wallet.`);
+      if (pw === null) { setBusyRow(null); return; }
+      const res = await undoOrderDelivery(s.orderId, pw);
       setBusyRow(null);
       showToast(res.ok ? res.message : res.error);
       if (res.ok) router.refresh();
@@ -298,18 +297,24 @@ export function OperationsClient({
   }
 
   function handleCollect(s: OperationsSubscriber) {
-    const answer = window.prompt(`Cash collected from ${s.name} (₹). Still due: ${rupees(s.codDue)}`, String(s.codDue / 100));
-    if (!answer) return;
-    const paise = Math.round((parseFloat(answer) || 0) * 100);
-    if (paise <= 0) return;
-    setBusyRow(s.orderId);
+    setCashFor({ subscriptionId: s.subscriptionId, name: s.name, due: s.codDue, report: null });
+  }
+
+  // Cash + UPI recorded with the action password (migration 092).
+  async function recordCod(v: CodValue) {
+    if (!cashFor) return;
+    const f = cashFor;
+    const pw = await askPassword(`Record ${rupees(v.cashPaise + v.upiPaise)} (cash ${rupees(v.cashPaise)} + UPI ${rupees(v.upiPaise)}) from ${f.name}.`);
+    if (pw === null) return;
+    setBusyRow(f.report?.id ?? f.subscriptionId);
     startTransition(async () => {
-      const res = await recordCashPayment(s.subscriptionId, paise);
+      const res = f.report ? await recordCashReport(f.report.id, v, pw) : await recordCashPayment(f.subscriptionId, v, pw);
       setBusyRow(null);
-      showToast(res.ok ? res.message ?? "Cash recorded." : res.error);
-      if (res.ok) router.refresh();
+      showToast(res.ok ? res.message ?? "Recorded." : res.error);
+      if (res.ok) { setCashFor(null); router.refresh(); }
     });
   }
+
 
   // One timer: a new message gets its full 3 s, not the end of the last one's
   // (settling an earlier day is many quick clicks).
@@ -894,6 +899,16 @@ export function OperationsClient({
       </div>
 
       {/* Toast */}
+      {cashFor && (
+        <CashModal
+          due={cashFor.due}
+          report={cashFor.report ? { amount: cashFor.report.amount, partner: cashFor.report.partner } : null}
+          pending={false}
+          onClose={() => setCashFor(null)}
+          onRecord={recordCod}
+          onSetDue={() => showToast("Change what's due from the customer's profile.")}
+        />
+      )}
       {toast && <Toast message={toast} />}
     </div>
   );

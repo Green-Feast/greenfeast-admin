@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
+import { audited } from "@/lib/audit"
 
 const MEAL_BUCKET = "meal-images"
 const CATEGORY_BUCKET = "category-images"
@@ -42,43 +43,48 @@ export type DishInput = {
 }
 
 export async function upsertDish(input: DishInput) {
-  await requireAdmin()
-  const price = Math.round(input.price_rupees * 100)
-  const common = {
-    name: input.name,
-    category: input.category,
-    short_description: input.short_description,
-    description: input.description,
-    price,
-    kcal: input.kcal,
-    protein: input.protein,
-    carbs: input.carbs,
-    fat: input.fat,
-    fibre: input.fibre,
-    tags: input.tags,
-    menu_visible: input.menu_visible,
-    subscription_valid: input.subscription_valid,
-  }
+  return audited("menu.upsertDish", {
+    ref: input.id ?? null,
+    details: { create: !input.id, name: input.name, category: input.category, priceRupees: input.price_rupees, menuVisible: input.menu_visible, subscriptionValid: input.subscription_valid },
+  }, async () => {
+    await requireAdmin()
+    const price = Math.round(input.price_rupees * 100)
+    const common = {
+      name: input.name,
+      category: input.category,
+      short_description: input.short_description,
+      description: input.description,
+      price,
+      kcal: input.kcal,
+      protein: input.protein,
+      carbs: input.carbs,
+      fat: input.fat,
+      fibre: input.fibre,
+      tags: input.tags,
+      menu_visible: input.menu_visible,
+      subscription_valid: input.subscription_valid,
+    }
 
-  if (input.id) {
+    if (input.id) {
+      const { data, error } = await supabaseAdmin
+        .from("meal_templates").update(common).eq("id", input.id).select().single()
+      if (error) throw error
+      revalidatePath("/menu")
+      return data
+    }
+
+    // id is a hand-authored slug (also the storage-path prefix) — derive from
+    // name, disambiguate on collision rather than fail.
+    let slug = slugify(input.name) || `dish-${Date.now()}`
+    const { data: clash } = await supabaseAdmin.from("meal_templates").select("id").eq("id", slug).maybeSingle()
+    if (clash) slug = `${slug}-${Date.now().toString(36)}`
+
     const { data, error } = await supabaseAdmin
-      .from("meal_templates").update(common).eq("id", input.id).select().single()
+      .from("meal_templates").insert({ id: slug, is_active: true, ...common }).select().single()
     if (error) throw error
     revalidatePath("/menu")
     return data
-  }
-
-  // id is a hand-authored slug (also the storage-path prefix) — derive from
-  // name, disambiguate on collision rather than fail.
-  let slug = slugify(input.name) || `dish-${Date.now()}`
-  const { data: clash } = await supabaseAdmin.from("meal_templates").select("id").eq("id", slug).maybeSingle()
-  if (clash) slug = `${slug}-${Date.now().toString(36)}`
-
-  const { data, error } = await supabaseAdmin
-    .from("meal_templates").insert({ id: slug, is_active: true, ...common }).select().single()
-  if (error) throw error
-  revalidatePath("/menu")
-  return data
+  })
 }
 
 // Never a hard delete — orders.meal_template_id and subscription_schedule
@@ -86,48 +92,54 @@ export async function upsertDish(input: DishInput) {
 // any dish that's ever been ordered. Archiving is the only safe path.
 // Returns rather than throws: production masks thrown messages.
 export async function archiveDish(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  await requireAdmin()
+  return audited<{ ok: true } | { ok: false; error: string }>("menu.archiveDish", { ref: id }, async () => {
+    await requireAdmin()
 
-  const { data: weeklyRows } = await supabaseAdmin
-    .from("weekly_menu").select("day_of_week, meal_slot").eq("meal_template_id", id)
-  if (weeklyRows && weeklyRows.length > 0) {
-    const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    const slots = weeklyRows.map((r) => `${DAYS[r.day_of_week]} ${r.meal_slot}`).join(", ")
-    return { ok: false, error: `This dish is in the weekly menu (${slots}). Clear it there first.` }
-  }
+    const { data: weeklyRows } = await supabaseAdmin
+      .from("weekly_menu").select("day_of_week, meal_slot").eq("meal_template_id", id)
+    if (weeklyRows && weeklyRows.length > 0) {
+      const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+      const slots = weeklyRows.map((r) => `${DAYS[r.day_of_week]} ${r.meal_slot}`).join(", ")
+      return { ok: false, error: `This dish is in the weekly menu (${slots}). Clear it there first.` }
+    }
 
-  // daily_specials cascades on delete, but that's silent — clear future
-  // rows ourselves first so "Today's Special" doesn't quietly go blank.
-  // Past dates are history; leave them.
-  const today = new Date().toISOString().slice(0, 10)
-  await supabaseAdmin.from("daily_specials").delete().eq("meal_template_id", id).gte("for_date", today)
+    // daily_specials cascades on delete, but that's silent — clear future
+    // rows ourselves first so "Today's Special" doesn't quietly go blank.
+    // Past dates are history; leave them.
+    const today = new Date().toISOString().slice(0, 10)
+    await supabaseAdmin.from("daily_specials").delete().eq("meal_template_id", id).gte("for_date", today)
 
-  const { error } = await supabaseAdmin.from("meal_templates").update({ is_active: false }).eq("id", id)
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/menu")
-  return { ok: true }
+    const { error } = await supabaseAdmin.from("meal_templates").update({ is_active: false }).eq("id", id)
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/menu")
+    return { ok: true }
+  })
 }
 
 // One-click Menu / Subscriber tags in the dish table — the same two flags as
 // the editor's "Where this dish appears" toggles.
 export async function setDishVisibility(id: string, field: "menu_visible" | "subscription_valid", value: boolean) {
-  await requireAdmin()
-  const { error } = await supabaseAdmin.from("meal_templates").update({ [field]: value }).eq("id", id)
-  if (error) throw error
-  revalidatePath("/menu")
+  return audited("menu.setDishVisibility", { ref: id, details: { field, value } }, async () => {
+    await requireAdmin()
+    const { error } = await supabaseAdmin.from("meal_templates").update({ [field]: value }).eq("id", id)
+    if (error) throw error
+    revalidatePath("/menu")
+  })
 }
 
 export async function restoreDish(id: string) {
-  await requireAdmin()
-  const { data, error } = await supabaseAdmin
-    .from("meal_templates").update({ is_active: true }).eq("id", id).select("category").single()
-  if (error) throw error
-  // A live dish needs a live category: restoring one brings back its
-  // archived category too.
-  const { data: restored } = await supabaseAdmin.from("categories")
-    .update({ is_active: true }).eq("id", data.category).eq("is_active", false).select("name")
-  revalidatePath("/menu")
-  return { restoredCategory: restored?.[0]?.name ?? null }
+  return audited("menu.restoreDish", { ref: id }, async () => {
+    await requireAdmin()
+    const { data, error } = await supabaseAdmin
+      .from("meal_templates").update({ is_active: true }).eq("id", id).select("category").single()
+    if (error) throw error
+    // A live dish needs a live category: restoring one brings back its
+    // archived category too.
+    const { data: restored } = await supabaseAdmin.from("categories")
+      .update({ is_active: true }).eq("id", data.category).eq("is_active", false).select("name")
+    revalidatePath("/menu")
+    return { restoredCategory: restored?.[0]?.name ?? null }
+  })
 }
 
 // ── Dish images ──────────────────────────────────────────────────────────
@@ -137,67 +149,73 @@ export async function restoreDish(id: string) {
 // URL, so this makes that long cache correct instead of a bug.
 
 export async function createDishImageUploadUrls(dishId: string) {
-  await requireAdmin()
-  const stamp = Date.now()
-  const fullPath = `${dishId}/${stamp}-full.webp`
-  const thumbPath = `${dishId}/${stamp}-thumb.webp`
-  const [full, thumb] = await Promise.all([
-    supabaseAdmin.storage.from(MEAL_BUCKET).createSignedUploadUrl(fullPath),
-    supabaseAdmin.storage.from(MEAL_BUCKET).createSignedUploadUrl(thumbPath),
-  ])
-  if (full.error) throw full.error
-  if (thumb.error) throw thumb.error
-  return {
-    full: { token: full.data.token, path: fullPath },
-    thumb: { token: thumb.data.token, path: thumbPath },
-  }
+  return audited("menu.createDishImageUploadUrls", { ref: dishId }, async () => {
+    await requireAdmin()
+    const stamp = Date.now()
+    const fullPath = `${dishId}/${stamp}-full.webp`
+    const thumbPath = `${dishId}/${stamp}-thumb.webp`
+    const [full, thumb] = await Promise.all([
+      supabaseAdmin.storage.from(MEAL_BUCKET).createSignedUploadUrl(fullPath),
+      supabaseAdmin.storage.from(MEAL_BUCKET).createSignedUploadUrl(thumbPath),
+    ])
+    if (full.error) throw full.error
+    if (thumb.error) throw thumb.error
+    return {
+      full: { token: full.data.token, path: fullPath },
+      thumb: { token: thumb.data.token, path: thumbPath },
+    }
+  })
 }
 
 // Called after both objects finish uploading. Old objects are deleted LAST
 // — only once the row points at the new ones — so a failed upload can never
 // destroy the currently-live photo.
 export async function saveDishImage(dishId: string, fullPath: string, thumbPath: string, blurDataUrl: string) {
-  await requireAdmin()
+  return audited("menu.saveDishImage", { ref: dishId, details: { fullPath, thumbPath } }, async () => {
+    await requireAdmin()
 
-  const { data: existing } = await supabaseAdmin
-    .from("meal_templates").select("image_url, thumb_url").eq("id", dishId).single()
+    const { data: existing } = await supabaseAdmin
+      .from("meal_templates").select("image_url, thumb_url").eq("id", dishId).single()
 
-  const { data, error } = await supabaseAdmin.from("meal_templates").update({
-    image_url: publicUrl(MEAL_BUCKET, fullPath),
-    thumb_url: publicUrl(MEAL_BUCKET, thumbPath),
-    blur_data_url: blurDataUrl,
-  }).eq("id", dishId).select("image_url, thumb_url, blur_data_url").single()
-  if (error) throw error
+    const { data, error } = await supabaseAdmin.from("meal_templates").update({
+      image_url: publicUrl(MEAL_BUCKET, fullPath),
+      thumb_url: publicUrl(MEAL_BUCKET, thumbPath),
+      blur_data_url: blurDataUrl,
+    }).eq("id", dishId).select("image_url, thumb_url, blur_data_url").single()
+    if (error) throw error
 
-  const oldPaths = [
-    pathFromPublicUrl(MEAL_BUCKET, existing?.image_url ?? null),
-    pathFromPublicUrl(MEAL_BUCKET, existing?.thumb_url ?? null),
-  ].filter((p): p is string => !!p && p !== fullPath && p !== thumbPath)
-  if (oldPaths.length > 0) {
-    await supabaseAdmin.storage.from(MEAL_BUCKET).remove(oldPaths)
-  }
+    const oldPaths = [
+      pathFromPublicUrl(MEAL_BUCKET, existing?.image_url ?? null),
+      pathFromPublicUrl(MEAL_BUCKET, existing?.thumb_url ?? null),
+    ].filter((p): p is string => !!p && p !== fullPath && p !== thumbPath)
+    if (oldPaths.length > 0) {
+      await supabaseAdmin.storage.from(MEAL_BUCKET).remove(oldPaths)
+    }
 
-  revalidatePath("/menu")
-  return data
+    revalidatePath("/menu")
+    return data
+  })
 }
 
 export async function deleteDishImage(dishId: string) {
-  await requireAdmin()
-  const { data: existing } = await supabaseAdmin
-    .from("meal_templates").select("image_url, thumb_url").eq("id", dishId).single()
+  return audited("menu.deleteDishImage", { ref: dishId }, async () => {
+    await requireAdmin()
+    const { data: existing } = await supabaseAdmin
+      .from("meal_templates").select("image_url, thumb_url").eq("id", dishId).single()
 
-  const paths = [
-    pathFromPublicUrl(MEAL_BUCKET, existing?.image_url ?? null),
-    pathFromPublicUrl(MEAL_BUCKET, existing?.thumb_url ?? null),
-  ].filter((p): p is string => !!p)
-  if (paths.length > 0) {
-    await supabaseAdmin.storage.from(MEAL_BUCKET).remove(paths)
-  }
+    const paths = [
+      pathFromPublicUrl(MEAL_BUCKET, existing?.image_url ?? null),
+      pathFromPublicUrl(MEAL_BUCKET, existing?.thumb_url ?? null),
+    ].filter((p): p is string => !!p)
+    if (paths.length > 0) {
+      await supabaseAdmin.storage.from(MEAL_BUCKET).remove(paths)
+    }
 
-  const { error } = await supabaseAdmin
-    .from("meal_templates").update({ image_url: null, thumb_url: null, blur_data_url: null }).eq("id", dishId)
-  if (error) throw error
-  revalidatePath("/menu")
+    const { error } = await supabaseAdmin
+      .from("meal_templates").update({ image_url: null, thumb_url: null, blur_data_url: null }).eq("id", dishId)
+    if (error) throw error
+    revalidatePath("/menu")
+  })
 }
 
 // ── Categories ───────────────────────────────────────────────────────────
@@ -210,51 +228,60 @@ export type CategoryInput = {
 }
 
 export async function upsertCategory(input: CategoryInput) {
-  await requireAdmin()
-  if (input.id) {
-    const { error } = await supabaseAdmin.from("categories")
-      .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji }).eq("id", input.id)
-    if (error) throw error
-  } else {
-    let slug = slugify(input.name) || `category-${Date.now()}`
-    const { data: clash } = await supabaseAdmin.from("categories").select("id, is_active").eq("id", slug).maybeSingle()
-    // Re-creating an archived category brings the same one back.
-    if (clash && !clash.is_active) {
+  return audited("menu.upsertCategory", {
+    ref: input.id ?? null,
+    details: { create: !input.id, name: input.name, sortOrder: input.sortOrder, emoji: input.emoji },
+  }, async () => {
+    await requireAdmin()
+    if (input.id) {
       const { error } = await supabaseAdmin.from("categories")
-        .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji, is_active: true }).eq("id", slug)
+        .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji }).eq("id", input.id)
       if (error) throw error
-      revalidatePath("/menu")
-      return
+    } else {
+      let slug = slugify(input.name) || `category-${Date.now()}`
+      const { data: clash } = await supabaseAdmin.from("categories").select("id, is_active").eq("id", slug).maybeSingle()
+      // Re-creating an archived category brings the same one back.
+      if (clash && !clash.is_active) {
+        const { error } = await supabaseAdmin.from("categories")
+          .update({ name: input.name, sort_order: input.sortOrder, emoji: input.emoji, is_active: true }).eq("id", slug)
+        if (error) throw error
+        revalidatePath("/menu")
+        return
+      }
+      if (clash) slug = `${slug}-${Date.now().toString(36)}`
+      const { error } = await supabaseAdmin.from("categories")
+        .insert({ id: slug, name: input.name, sort_order: input.sortOrder, emoji: input.emoji })
+      if (error) throw error
     }
-    if (clash) slug = `${slug}-${Date.now().toString(36)}`
-    const { error } = await supabaseAdmin.from("categories")
-      .insert({ id: slug, name: input.name, sort_order: input.sortOrder, emoji: input.emoji })
-    if (error) throw error
-  }
-  revalidatePath("/menu")
+    revalidatePath("/menu")
+  })
 }
 
 export async function createCategoryImageUploadUrl(categoryId: string) {
-  await requireAdmin()
-  const path = `${categoryId}-${Date.now()}.webp`
-  const { data, error } = await supabaseAdmin.storage.from(CATEGORY_BUCKET).createSignedUploadUrl(path)
-  if (error) throw error
-  return { token: data.token, path }
+  return audited("menu.createCategoryImageUploadUrl", { ref: categoryId }, async () => {
+    await requireAdmin()
+    const path = `${categoryId}-${Date.now()}.webp`
+    const { data, error } = await supabaseAdmin.storage.from(CATEGORY_BUCKET).createSignedUploadUrl(path)
+    if (error) throw error
+    return { token: data.token, path }
+  })
 }
 
 export async function saveCategoryImage(categoryId: string, path: string) {
-  await requireAdmin()
-  const { data: existing } = await supabaseAdmin.from("categories").select("image_url").eq("id", categoryId).single()
-  const { data, error } = await supabaseAdmin.from("categories")
-    .update({ image_url: publicUrl(CATEGORY_BUCKET, path) }).eq("id", categoryId)
-    .select("image_url").single()
-  if (error) throw error
-  const oldPath = pathFromPublicUrl(CATEGORY_BUCKET, existing?.image_url ?? null)
-  if (oldPath && oldPath !== path) {
-    await supabaseAdmin.storage.from(CATEGORY_BUCKET).remove([oldPath])
-  }
-  revalidatePath("/menu")
-  return data
+  return audited("menu.saveCategoryImage", { ref: categoryId, details: { path } }, async () => {
+    await requireAdmin()
+    const { data: existing } = await supabaseAdmin.from("categories").select("image_url").eq("id", categoryId).single()
+    const { data, error } = await supabaseAdmin.from("categories")
+      .update({ image_url: publicUrl(CATEGORY_BUCKET, path) }).eq("id", categoryId)
+      .select("image_url").single()
+    if (error) throw error
+    const oldPath = pathFromPublicUrl(CATEGORY_BUCKET, existing?.image_url ?? null)
+    if (oldPath && oldPath !== path) {
+      await supabaseAdmin.storage.from(CATEGORY_BUCKET).remove([oldPath])
+    }
+    revalidatePath("/menu")
+    return data
+  })
 }
 
 type CategoryResult = { ok: true } | { ok: false; error: string }
@@ -269,44 +296,50 @@ function dishList(names: string[]) {
 // carry order history — is archived instead. These return rather than throw:
 // production masks thrown messages.
 export async function deleteCategory(id: string): Promise<CategoryResult> {
-  await requireAdmin()
-  const { data: dishes, error: dishErr } = await supabaseAdmin
-    .from("meal_templates").select("name, is_active").eq("category", id)
-  if (dishErr) return { ok: false, error: dishErr.message }
-  const live = (dishes ?? []).filter((d) => d.is_active).map((d) => d.name)
-  if (live.length > 0) {
-    return { ok: false, error: `Can't delete: ${dishList(live)} ${live.length === 1 ? "is" : "are"} still in this category.` }
-  }
-  if ((dishes ?? []).length > 0) {
-    return { ok: false, error: `Can't delete: its ${dishes!.length} archived dish(es) keep their order history. Archive the category instead.` }
-  }
-  const { error } = await supabaseAdmin.from("categories").delete().eq("id", id)
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/menu")
-  return { ok: true }
+  return audited<CategoryResult>("menu.deleteCategory", { ref: id }, async () => {
+    await requireAdmin()
+    const { data: dishes, error: dishErr } = await supabaseAdmin
+      .from("meal_templates").select("name, is_active").eq("category", id)
+    if (dishErr) return { ok: false, error: dishErr.message }
+    const live = (dishes ?? []).filter((d) => d.is_active).map((d) => d.name)
+    if (live.length > 0) {
+      return { ok: false, error: `Can't delete: ${dishList(live)} ${live.length === 1 ? "is" : "are"} still in this category.` }
+    }
+    if ((dishes ?? []).length > 0) {
+      return { ok: false, error: `Can't delete: its ${dishes!.length} archived dish(es) keep their order history. Archive the category instead.` }
+    }
+    const { error } = await supabaseAdmin.from("categories").delete().eq("id", id)
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/menu")
+    return { ok: true }
+  })
 }
 
 // Archived = is_active false: gone from the app (it only loads active
 // categories) and from the admin's pickers, history untouched. Only once its
 // dishes are archived or moved, so no live dish is left without a category.
 export async function archiveCategory(id: string): Promise<CategoryResult> {
-  await requireAdmin()
-  const { data: live, error: dishErr } = await supabaseAdmin
-    .from("meal_templates").select("name").eq("category", id).eq("is_active", true)
-  if (dishErr) return { ok: false, error: dishErr.message }
-  if ((live ?? []).length > 0) {
-    return { ok: false, error: `Archive or move ${dishList(live!.map((d) => d.name))} first.` }
-  }
-  const { error } = await supabaseAdmin.from("categories").update({ is_active: false }).eq("id", id)
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/menu")
-  return { ok: true }
+  return audited<CategoryResult>("menu.archiveCategory", { ref: id }, async () => {
+    await requireAdmin()
+    const { data: live, error: dishErr } = await supabaseAdmin
+      .from("meal_templates").select("name").eq("category", id).eq("is_active", true)
+    if (dishErr) return { ok: false, error: dishErr.message }
+    if ((live ?? []).length > 0) {
+      return { ok: false, error: `Archive or move ${dishList(live!.map((d) => d.name))} first.` }
+    }
+    const { error } = await supabaseAdmin.from("categories").update({ is_active: false }).eq("id", id)
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/menu")
+    return { ok: true }
+  })
 }
 
 export async function restoreCategory(id: string): Promise<CategoryResult> {
-  await requireAdmin()
-  const { error } = await supabaseAdmin.from("categories").update({ is_active: true }).eq("id", id)
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/menu")
-  return { ok: true }
+  return audited<CategoryResult>("menu.restoreCategory", { ref: id }, async () => {
+    await requireAdmin()
+    const { error } = await supabaseAdmin.from("categories").update({ is_active: true }).eq("id", id)
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/menu")
+    return { ok: true }
+  })
 }

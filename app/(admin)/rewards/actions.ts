@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireAdmin, requireAdminStrict } from "@/lib/auth"
+import { requireAdmin } from "@/lib/auth"
 import { notifyEvent } from "@/lib/notifications"
+import { dbError, sensitive } from "@/lib/audit"
+import { bankRefund } from "@/lib/money-ops"
 
 export type RefundResult = { ok: true; message: string } | { ok: false; error: string }
 
@@ -20,69 +22,66 @@ async function recipient(userId: string) {
 }
 
 // Store credit — the default under the Refunds & Cancellations policy
-// (undelivered meal, quality issue, wrong or missing item…).
-export async function refundToWallet(userId: string, amountPaise: number, reason: string): Promise<RefundResult> {
-  const admin = await requireAdminStrict()
-  if (!userId) return { ok: false, error: "Pick a customer." }
-  if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
-  if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
-
-  const { data: refund, error } = await supabaseAdmin
-    .from("refunds")
-    .insert({ user_id: userId, kind: "wallet", amount: amountPaise, reason: reason.trim(), status: "completed", created_by: admin.id })
-    .select("id")
-    .single()
-  if (error || !refund) return { ok: false, error: `Could not record the refund: ${error?.message ?? "unknown error"}` }
-
-  const { error: creditErr } = await supabaseAdmin.rpc("wallet_credit", {
-    p_user: userId,
-    p_amount: amountPaise,
-    p_reason: `Refund — ${reason.trim()}`,
-    p_reference_id: `refund_${refund.id}`,
+// (undelivered meal, quality issue, wrong or missing item…). One transaction
+// in the database (admin_refund_to_wallet): the refund row and the credit,
+// stamped with the admin and this action.
+export async function refundToWallet(userId: string, amountPaise: number, reason: string, password: string): Promise<RefundResult> {
+  return sensitive("rewards.refundToWallet", password, { userId, amountPaise, details: { reason } }, async (ctx): Promise<RefundResult> => {
+    if (!userId) return { ok: false, error: "Pick a customer." }
+    if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
+    if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
+    const { data: refundId, error } = await supabaseAdmin.rpc("admin_refund_to_wallet", {
+      p_user: userId, p_amount: amountPaise, p_reason: reason.trim(), p_admin: ctx.admin.id, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
+    ctx.note({ ref: refundId as string })
+    await notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() })
+    revalidatePath("/rewards")
+    revalidatePath("/money")
+    return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
   })
-  if (creditErr) {
-    await supabaseAdmin.from("refunds").update({ status: "failed", failure_note: creditErr.message }).eq("id", refund.id)
-    return { ok: false, error: `Wallet credit failed: ${creditErr.message}` }
-  }
-
-  await notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() })
-
-  revalidatePath("/rewards")
-  return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
 }
 
 // Money back to the original UPI / card / bank through Cashfree, against one
 // paid payment. The edge function deducts the same amount from the wallet.
-export async function refundToBank(paymentId: string, amountPaise: number, reason: string): Promise<RefundResult> {
-  const admin = await requireAdminStrict()
-  if (!paymentId) return { ok: false, error: "Pick the payment to refund." }
-  if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
-  if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
-
-  const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/admin-refund`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.INTERNAL_FN_SECRET}`,
-      apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ payment_id: paymentId, amount_paise: amountPaise, reason: reason.trim(), admin_user_id: admin.id }),
-  })
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok || !body?.ok) {
+export async function refundToBank(paymentId: string, amountPaise: number, reason: string, password: string): Promise<RefundResult> {
+  return sensitive("rewards.refundToBank", password, { amountPaise, details: { payment_id: paymentId, reason } }, async (ctx): Promise<RefundResult> => {
+    if (!paymentId) return { ok: false, error: "Pick the payment to refund." }
+    if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
+    if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
+    const r = await bankRefund(ctx, paymentId, amountPaise, reason)
     revalidatePath("/rewards")
-    return { ok: false, error: body?.error ?? `Refund failed (${res.status}).` }
-  }
+    revalidatePath("/money")
+    if (!r.ok) return r
+    await notifyEvent("refund_bank_started", [await recipient(r.userId)], { amount: rupees(amountPaise) })
+    return {
+      ok: true,
+      message: r.status === "completed"
+        ? `${rupees(amountPaise)} refunded to the customer's bank.`
+        : `${rupees(amountPaise)} refund sent to Cashfree — it shows as completed once the bank confirms.`,
+    }
+  })
+}
 
-  await notifyEvent("refund_bank_started", [await recipient(body.user_id)], { amount: rupees(amountPaise) })
-
-  revalidatePath("/rewards")
-  return {
-    ok: true,
-    message: body.status === "completed"
-      ? `${rupees(amountPaise)} refunded to the customer's bank.`
-      : `${rupees(amountPaise)} refund sent to Cashfree — it shows as completed once the bank confirms.`,
-  }
+// Money handed back outside Cashfree — cash, UPI from our account, a bank
+// transfer — with its reference (admin_refund_offline). Taken from the wallet.
+export async function refundOffline(
+  userId: string, amountPaise: number, method: "cash" | "upi" | "bank_transfer", reference: string, reason: string, password: string
+): Promise<RefundResult> {
+  return sensitive("rewards.refundOffline", password, { userId, amountPaise, details: { method, reference, reason } }, async (ctx): Promise<RefundResult> => {
+    if (!userId) return { ok: false, error: "Pick a customer." }
+    if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
+    if (!reason.trim()) return { ok: false, error: "Add a reason." }
+    const { data: refundId, error } = await supabaseAdmin.rpc("admin_refund_offline", {
+      p_user: userId, p_amount: amountPaise, p_method: method, p_reference: reference, p_reason: reason.trim(),
+      p_admin: ctx.admin.id, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
+    ctx.note({ ref: refundId as string })
+    revalidatePath("/rewards")
+    revalidatePath("/money")
+    return { ok: true, message: `${rupees(amountPaise)} refund recorded and taken from the wallet.` }
+  })
 }
 
 // ── Gifts (081) ─────────────────────────────────────────────────────────────
@@ -97,16 +96,19 @@ export async function mealWorth(userId: string): Promise<number | null> {
 }
 
 // Gift meals: a meal's worth × meals into the wallet, recorded and messaged
-// (template meal_gift) by gift_meals().
-export async function giftMeals(userId: string, meals: number, reason: string): Promise<RefundResult> {
-  const admin = await requireAdminStrict()
-  if (!Number.isInteger(meals) || meals < 1 || meals > 30) return { ok: false, error: "Gift between 1 and 30 meals." }
-  if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
-  const { data, error } = await supabaseAdmin.rpc("gift_meals", {
-    p_user: userId, p_meals: meals, p_reason: reason.trim(), p_admin: admin.email ?? admin.id,
+// (template meal_gift) by gift_meals(), stamped with the admin (092).
+export async function giftMeals(userId: string, meals: number, reason: string, password: string): Promise<RefundResult> {
+  return sensitive("rewards.giftMeals", password, { userId, details: { meals, reason } }, async (ctx): Promise<RefundResult> => {
+    if (!Number.isInteger(meals) || meals < 1 || meals > 30) return { ok: false, error: "Gift between 1 and 30 meals." }
+    if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
+    const { data, error } = await supabaseAdmin.rpc("admin_gift_meals", {
+      p_user: userId, p_meals: meals, p_reason: reason.trim(), p_admin: ctx.admin.id, p_admin_email: ctx.admin.email, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not gift the meals.") }
+    const amount = (data as { amount?: number } | null)?.amount ?? 0
+    ctx.note({ amountPaise: amount })
+    revalidatePath("/rewards")
+    revalidatePath("/money")
+    return { ok: true, message: `${meals} meal${meals === 1 ? "" : "s"} (${rupees(amount)}) added to their wallet — they've been told.` }
   })
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/rewards")
-  const amount = (data as { amount?: number } | null)?.amount ?? 0
-  return { ok: true, message: `${meals} meal${meals === 1 ? "" : "s"} (${rupees(amount)}) added to their wallet — they've been told.` }
 }

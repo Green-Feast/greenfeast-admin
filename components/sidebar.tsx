@@ -25,6 +25,7 @@ import {
   Store,
   PanelLeftClose,
   PanelLeftOpen,
+  ShieldCheck,
 } from "lucide-react";
 import { logout } from "@/app/login/actions";
 import { setDataMode } from "@/app/(admin)/mode-actions";
@@ -45,6 +46,7 @@ const navItems = [
   { href: "/rewards", label: "Referrals, refunds & gifts", icon: Gift },
   { href: "/coupons", label: "Coupons", icon: TicketPercent },
   { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/security", label: "Security & admin log", icon: ShieldCheck },
 ];
 
 export function Sidebar({

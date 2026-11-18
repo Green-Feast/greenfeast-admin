@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState, useTransition } from "react"
 import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2, CupSoda } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { istToday } from "@/lib/ist"
+import { useActionPassword } from "@/components/action-password"
 import { isDrinkCategory, DRINK_NOT_PICKED } from "@/lib/drinks"
 import {
   getSlotContext,
@@ -74,6 +75,7 @@ export function OrderEditor({
   const [ctx, setCtx] = useState<SlotContext | null>(null)
   const [loadError, setLoadError] = useState("")
   const [pending, startTransition] = useTransition()
+  const askPassword = useActionPassword()
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   // Dish picker: which order it changes, or "new" for an extra dish.
   const [picking, setPicking] = useState<string | "new" | null>(null)
@@ -258,7 +260,8 @@ export function OrderEditor({
                       disabled={pending}
                       onClick={() => {
                         if (!window.confirm(`Undo — ${ctx.customerName}'s ${o.mealName} on ${dayLabel(target.date)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return
-                        run(() => adminUndoDelivered(o.id))
+                        askPassword(`Undo ${ctx.customerName}'s ${o.mealName} on ${dayLabel(target.date)} — the charge goes back to their wallet.`)
+                          .then((pw) => { if (pw !== null) run(() => adminUndoDelivered(o.id, pw)) })
                       }}
                       className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
                     >

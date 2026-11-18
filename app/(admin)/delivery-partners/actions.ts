@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
+import { audited } from "@/lib/audit"
 import { tempPassword } from "@/lib/temp-password"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,56 +102,73 @@ async function newLogin(partnerId: string): Promise<LoginResult> {
 }
 
 export async function createPartnerLogin(partnerId: string): Promise<LoginResult> {
-  await requireAdminStrict()
-  return newLogin(partnerId)
+  return audited("delivery-partners.createPartnerLogin", { ref: partnerId }, async () => {
+    await requireAdminStrict()
+    return newLogin(partnerId)
+  })
 }
 
 export async function resetPartnerPassword(partnerId: string): Promise<LoginResult> {
-  await requireAdminStrict()
-  return newLogin(partnerId)
+  return audited("delivery-partners.resetPartnerPassword", { ref: partnerId }, async () => {
+    await requireAdminStrict()
+    return newLogin(partnerId)
+  })
 }
 
 export async function removePartnerLogin(partnerId: string): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
-  const { data: p } = await supabaseAdmin.from("delivery_partners").select("user_id").eq("id", partnerId).maybeSingle()
-  if (!p?.user_id) return { ok: true }
-  await supabaseAdmin.from("delivery_partners").update({ user_id: null }).eq("id", partnerId)
-  const { error } = await supabaseAdmin.auth.admin.deleteUser(p.user_id)
-  revalidatePath("/delivery-partners")
-  return error ? { ok: false, error: error.message } : { ok: true }
+  return audited("delivery-partners.removePartnerLogin", { ref: partnerId }, async () => {
+    await requireAdminStrict()
+    const { data: p } = await supabaseAdmin.from("delivery_partners").select("user_id").eq("id", partnerId).maybeSingle()
+    if (!p?.user_id) return { ok: true }
+    await supabaseAdmin.from("delivery_partners").update({ user_id: null }).eq("id", partnerId)
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(p.user_id)
+    revalidatePath("/delivery-partners")
+    return error ? { ok: false, error: error.message } : { ok: true }
+  })
 }
 
 // A message from the office to one partner or every active partner with a
 // login — a push on their phone plus the app's bell. Sent as typed; the title
 // ("Message from the office") is in each partner's language (migration 062).
 export async function sendPartnerMessage(target: "all" | string, message: string): Promise<{ ok: true; sent: number } | { ok: false; error: string }> {
-  await requireAdminStrict()
-  const text = message.trim()
-  if (!text) return { ok: false, error: "Type a message." }
-  if (text.length > 500) return { ok: false, error: "Keep it under 500 characters." }
-  let q = supabaseAdmin.from("delivery_partners").select("id").eq("status", "active").not("user_id", "is", null)
-  if (target !== "all") q = q.eq("id", target)
-  const { data: partners, error } = await q
-  if (error) return { ok: false, error: error.message }
-  if (!partners?.length) return { ok: false, error: "No active partner with a login to send to." }
-  for (const p of partners) {
-    const { error: sendErr } = await supabaseAdmin.rpc("notify_partner", {
-      p_partner: p.id,
-      p_key: "office_message",
-      p_vars: { message: text },
-      p_data: {},
-    })
-    if (sendErr) return { ok: false, error: sendErr.message }
-  }
-  return { ok: true, sent: partners.length }
+  return audited(
+    "delivery-partners.sendPartnerMessage",
+    {
+      ref: target === "all" ? null : target,
+      details: { target, message: typeof message === "string" ? message.slice(0, 200) : message },
+    },
+    async () => {
+      await requireAdminStrict()
+      const text = message.trim()
+      if (!text) return { ok: false, error: "Type a message." }
+      if (text.length > 500) return { ok: false, error: "Keep it under 500 characters." }
+      let q = supabaseAdmin.from("delivery_partners").select("id").eq("status", "active").not("user_id", "is", null)
+      if (target !== "all") q = q.eq("id", target)
+      const { data: partners, error } = await q
+      if (error) return { ok: false, error: error.message }
+      if (!partners?.length) return { ok: false, error: "No active partner with a login to send to." }
+      for (const p of partners) {
+        const { error: sendErr } = await supabaseAdmin.rpc("notify_partner", {
+          p_partner: p.id,
+          p_key: "office_message",
+          p_vars: { message: text },
+          p_data: {},
+        })
+        if (sendErr) return { ok: false, error: sendErr.message }
+      }
+      return { ok: true, sent: partners.length }
+    }
+  )
 }
 
 // A test partner sees only test customers' meals (Test mode in the admin).
 export async function setPartnerTest(partnerId: string, isTest: boolean) {
-  await requireAdmin()
-  const { error } = await supabaseAdmin.from("delivery_partners").update({ is_test: isTest }).eq("id", partnerId)
-  if (error) throw error
-  revalidatePath("/delivery-partners")
+  return audited("delivery-partners.setPartnerTest", { ref: partnerId, details: { isTest } }, async () => {
+    await requireAdmin()
+    const { error } = await supabaseAdmin.from("delivery_partners").update({ is_test: isTest }).eq("id", partnerId)
+    if (error) throw error
+    revalidatePath("/delivery-partners")
+  })
 }
 
 export async function upsertPartner(data: {
@@ -165,43 +183,56 @@ export async function upsertPartner(data: {
   notes?: string
   status: "active" | "inactive"
 }) {
-  await requireAdmin()
-  const { id, ...rest } = data
-  if (id) {
-    const { error } = await supabaseAdmin.from("delivery_partners").update(rest).eq("id", id)
-    if (error) throw error
-  } else {
-    const { error } = await supabaseAdmin.from("delivery_partners").insert(rest)
-    if (error) throw error
-  }
-  revalidatePath("/delivery-partners")
+  // Identity numbers (Aadhaar, PAN, licence, RC) are deliberately not logged.
+  return audited(
+    "delivery-partners.upsertPartner",
+    { ref: data.id, details: { name: data.name, status: data.status, isNew: !data.id } },
+    async () => {
+      await requireAdmin()
+      const { id, ...rest } = data
+      if (id) {
+        const { error } = await supabaseAdmin.from("delivery_partners").update(rest).eq("id", id)
+        if (error) throw error
+      } else {
+        const { error } = await supabaseAdmin.from("delivery_partners").insert(rest)
+        if (error) throw error
+      }
+      revalidatePath("/delivery-partners")
+    }
+  )
 }
 
 export async function createSignedUploadUrl(partnerId: string, docType: string, fileName: string) {
-  await requireAdmin()
-  const ext = fileName.split(".").pop() ?? "pdf"
-  const path = `${partnerId}/${docType}.${ext}`
-  const { data, error } = await supabaseAdmin.storage
-    .from("partner-docs")
-    .createSignedUploadUrl(path, { upsert: true })
-  if (error) throw error
-  return { token: data.token, path }
+  return audited("delivery-partners.createSignedUploadUrl", { ref: partnerId, details: { docType, fileName } }, async () => {
+    await requireAdmin()
+    const ext = fileName.split(".").pop() ?? "pdf"
+    const path = `${partnerId}/${docType}.${ext}`
+    const { data, error } = await supabaseAdmin.storage
+      .from("partner-docs")
+      .createSignedUploadUrl(path, { upsert: true })
+    if (error) throw error
+    return { token: data.token, path }
+  })
 }
 
 export async function saveDocUrl(partnerId: string, docType: string, path: string) {
-  await requireAdmin()
-  const field = `${docType}_doc_url`
-  const { error } = await supabaseAdmin.from("delivery_partners")
-    .update({ [field]: path })
-    .eq("id", partnerId)
-  if (error) throw error
-  revalidatePath("/delivery-partners")
+  return audited("delivery-partners.saveDocUrl", { ref: partnerId, details: { docType, path } }, async () => {
+    await requireAdmin()
+    const field = `${docType}_doc_url`
+    const { error } = await supabaseAdmin.from("delivery_partners")
+      .update({ [field]: path })
+      .eq("id", partnerId)
+    if (error) throw error
+    revalidatePath("/delivery-partners")
+  })
 }
 
 export async function getSignedViewUrl(path: string) {
-  await requireAdmin()
-  const { data } = await supabaseAdmin.storage
-    .from("partner-docs")
-    .createSignedUrl(path, 60)
-  return data?.signedUrl ?? null
+  return audited("delivery-partners.getSignedViewUrl", { details: { path } }, async () => {
+    await requireAdmin()
+    const { data } = await supabaseAdmin.storage
+      .from("partner-docs")
+      .createSignedUrl(path, 60)
+    return data?.signedUrl ?? null
+  })
 }

@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist"
 import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 import { ProfileClient } from "./profile-client"
+import { refundablePayments } from "@/lib/money-ops"
 
 export default async function SubscriberProfilePage({
   params,
@@ -38,6 +39,13 @@ export default async function SubscriberProfilePage({
 
   const user = Array.isArray(sub.users) ? sub.users[0] : sub.users
   const userId = (user as any).id as string
+  // For the Cancel dialog: a balance left with no other plan needs a decision
+  // (keep / refund / forfeit, migration 092).
+  const [refundable, { count: otherLive }] = await Promise.all([
+    refundablePayments(userId),
+    supabaseAdmin.from("subscriptions").select("id", { count: "exact", head: true })
+      .eq("user_id", userId).neq("id", id).in("status", ["active", "paused", "pending"]),
+  ])
   const today = istToday()
 
   const [
@@ -253,6 +261,8 @@ export default async function SubscriberProfilePage({
           addons: (addons ?? []) as { id: string; name: string; price_per_meal: number }[],
           plans: (plans ?? []) as { id: string; name: string; base_price: number; meals_total: number }[],
         }}
+        refundable={refundable}
+        otherLivePlans={otherLive ?? 0}
       />
     </div>
   )

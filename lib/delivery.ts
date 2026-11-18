@@ -165,10 +165,20 @@ export async function skipUndelivered(orderIds: string[]): Promise<number> {
  * A meal marked delivered that wasn't (068, undo_order_delivered): refunds
  * exactly what it was charged, puts it back on the plan, tells the customer.
  */
-export async function undoDelivered(orderId: string): Promise<{ refunded: number; mealsBack: number }> {
-  const { data, error } = await supabaseAdmin.rpc("undo_order_delivered", { p_order: orderId });
+export async function undoDelivered(
+  orderId: string,
+  ctx: { admin: { id: string }; actionId: string }
+): Promise<{ refunded: number; mealsBack: number; userId: string | null; subscriptionId: string | null }> {
+  const { data: order } = await supabaseAdmin.from("orders").select("user_id, subscription_id").eq("id", orderId).maybeSingle();
+  // admin_undo_delivered stamps the admin and the action on the refund (092).
+  const { data, error } = await supabaseAdmin.rpc("admin_undo_delivered", { p_order: orderId, p_admin: ctx.admin.id, p_action: ctx.actionId });
   if (error) throw new Error(error.message);
-  return { refunded: data?.refunded ?? 0, mealsBack: data?.meals_back ?? 0 };
+  return {
+    refunded: data?.refunded ?? 0,
+    mealsBack: data?.meals_back ?? 0,
+    userId: order?.user_id ?? null,
+    subscriptionId: order?.subscription_id ?? null,
+  };
 }
 
 /**

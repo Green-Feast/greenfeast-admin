@@ -1,5 +1,6 @@
 "use client"
 
+import { planMealRate } from "@/lib/pricing"
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import {
@@ -8,6 +9,8 @@ import {
   Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useActionPassword } from "@/components/action-password"
+import { SettleBalanceFields, emptySettle, settleProblem, toSettleInput, type RefundablePayment, type SettleValue } from "@/components/settle-balance"
 import { isPlanFinished } from "@/lib/plan-status"
 import { OrderEditor, type EditorTarget } from "@/components/order-editor"
 import { setFixedDish, clearFixedDish } from "@/app/(admin)/kitchen/order-actions"
@@ -18,14 +21,12 @@ import {
   pauseSubscription,
   resumeSubscription,
   cancelSubscription,
-  extendSubscription,
   updateCustomerIdentity,
   saveDietaryProfile,
   updatePlanSettings,
   recordCashPayment,
   setCashDue,
   activatePendingPlan,
-  adjustWallet,
   saveCustomerAddress,
   makeDefaultAddress,
   removeCustomerAddress,
@@ -33,7 +34,7 @@ import {
 } from "./actions"
 import {
   ModalOverlay, ModalCard, ModalFooter, Field, GhostBtn, PrimaryBtn, DangerBtn, inputCls, fmtRupees,
-  IdentityModal, PlanModal, DietaryModal, AddressModal, WalletModal, CashModal, ActivateModal, FixedDishModal,
+  IdentityModal, PlanModal, DietaryModal, AddressModal, CashModal, ActivateModal, FixedDishModal,
   type DietaryValue, type AddressFormValue,
 } from "./profile-editors"
 
@@ -166,8 +167,8 @@ export type WalletTx = {
 }
 
 type Modal =
-  | "pause" | "extend" | "cancel" | "identity" | "plan" | "dietary" | "address"
-  | "wallet" | "cash" | "activate" | "fixed" | null
+  | "pause" | "cancel" | "identity" | "plan" | "dietary" | "address"
+  | "cash" | "activate" | "fixed" | null
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -187,6 +188,8 @@ export function ProfileClient({
   unmarked,
   rules,
   catalogue,
+  refundable,
+  otherLivePlans,
 }: {
   subscriptionId: string
   subscription: Subscription
@@ -203,6 +206,10 @@ export function ProfileClient({
   unmarked: { id: string; date: string; slot: "lunch" | "dinner"; status: string; quantity: number; extra: boolean; mealName: string }[]
   rules: Rule[]
   catalogue: Catalogue
+  /** Cashfree payments that can still be refunded (cancel → refund to bank). */
+  refundable: RefundablePayment[]
+  /** Other active / paused / pending plans of this customer. */
+  otherLivePlans: number
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -212,7 +219,9 @@ export function ProfileClient({
 
   const [pauseFrom, setPauseFrom]   = useState(today())
   const [pauseUntil, setPauseUntil] = useState("")
-  const [extendMeals, setExtendMeals] = useState(15)
+  const [cashReport, setCashReport] = useState<{ id: string; amount: number; partner: string } | null>(null)
+  const [settle, setSettle] = useState<SettleValue>(emptySettle)
+  const askPassword = useActionPassword()
   const [notes, setNotes] = useState(subscription.specialNotes)
   const lunchBatches = allBatches.filter(b => b.meal_slot === "lunch")
   const dinnerBatches = allBatches.filter(b => b.meal_slot === "dinner")
@@ -270,11 +279,19 @@ export function ProfileClient({
     })
   }
 
+  // Sensitive actions (migration 092): the action password first, then act().
+  function secure(what: string, action: (password: string) => Promise<ActionResult | { ok: false; error: string }>, close = true) {
+    askPassword(what).then((pw) => { if (pw !== null) act(() => action(pw), close) })
+  }
+
   const isPaused      = subscription.status === "paused"
   // A pause set for later: the plan stays active until its first day (076).
   const pauseForLater = !isPaused && subscription.status === "active" && !!subscription.pauseFrom
   const isCancelled   = subscription.status === "cancelled"
   const isPendingPlan = subscription.status === "pending"
+  // Cancelling the customer's only plan with money in the wallet needs a
+  // decision on that money (keep / refund / forfeit).
+  const needsBalanceDecision = (walletBalance ?? 0) > 0 && otherLivePlans === 0
   const shownStatus   = isPlanFinished(subscription.status, subscription.deliveriesRemaining) ? "finished" : subscription.status
   const progress    = subscription.mealsTotal > 0
     ? Math.min(100, Math.round((subscription.deliveriesRemaining / subscription.mealsTotal) * 100))
@@ -282,7 +299,7 @@ export function ProfileClient({
 
   const slotsPerDay = (subscription.mealsLunch ?? 0) + (subscription.mealsDinner ?? 0)
   const regularMealRate = subscription.mealsTotal > 0
-    ? Math.round(subscription.basePrice / Math.max(subscription.mealsTotal, 1))
+    ? planMealRate({ base_price: subscription.basePrice, meals_total: subscription.mealsTotal })
     : 0
   // A plan bought with a coupon is billed at its coupon price (migration 066).
   const baseMealRate = subscription.couponMealPrice ?? regularMealRate
@@ -400,13 +417,6 @@ export function ProfileClient({
                     onClick={() => setModal("pause")}
                   />
                 )}
-                <ActionBtn
-                  icon={<Plus className="w-3.5 h-3.5" />}
-                  label="Add meals"
-                  color="blue"
-                  disabled={isPending}
-                  onClick={() => setModal("extend")}
-                />
               </>
             )}
             <ActionBtn
@@ -433,7 +443,7 @@ export function ProfileClient({
             </span>
           </div>
           <button
-            onClick={() => setModal("cash")}
+            onClick={() => { setCashReport(null); setModal("cash") }}
             className="px-3 py-1.5 rounded-lg bg-[#1B5E20] text-white text-xs font-medium hover:bg-[#155116]"
           >
             Record cash received
@@ -448,10 +458,10 @@ export function ProfileClient({
               <span className="flex gap-1.5">
                 <button
                   disabled={isPending}
-                  onClick={() => act(() => recordCashReport(r.id), false)}
+                  onClick={() => { setCashReport({ id: r.id, amount: r.amount, partner: r.partner }); setModal("cash") }}
                   className="px-2.5 py-1 rounded-md bg-[#1B5E20] text-white text-xs font-medium hover:bg-[#155116] disabled:opacity-40"
                 >
-                  Record {fmtRupees(r.amount)}
+                  Record…
                 </button>
                 <button
                   disabled={isPending}
@@ -963,44 +973,23 @@ export function ProfileClient({
         </ModalOverlay>
       )}
 
-      {modal === "extend" && (
-        <ModalOverlay onClose={() => setModal(null)}>
-          <ModalCard title="Add meals" onClose={() => setModal(null)}>
-            <div className="space-y-4">
-              <Field label="Meals to add">
-                <input type="number" min={1} max={90} value={extendMeals} onChange={(e) => setExtendMeals(Number(e.target.value))} className={inputCls} />
-              </Field>
-              <p className="text-sm text-gray-500">
-                Adds {extendMeals} default meal{extendMeals === 1 ? "" : "s"}&apos; worth of money to their wallet
-                (their plan&apos;s meal price plus default add-ons). Meals left goes from about{" "}
-                <strong>{subscription.deliveriesRemaining}</strong> to about{" "}
-                <strong>{subscription.deliveriesRemaining + extendMeals}</strong>.
-              </p>
-            </div>
-            <ModalFooter>
-              <GhostBtn onClick={() => setModal(null)}>Cancel</GhostBtn>
-              <PrimaryBtn
-                disabled={extendMeals < 1 || isPending}
-                onClick={() => run(() => extendSubscription(subscriptionId, extendMeals), `Added ${extendMeals} meals' worth to the wallet.`, () => setModal(null))}
-              >
-                Add meals
-              </PrimaryBtn>
-            </ModalFooter>
-          </ModalCard>
-        </ModalOverlay>
-      )}
-
       {modal === "cancel" && (
         <ModalOverlay onClose={() => setModal(null)}>
           <ModalCard title="Cancel subscription?" onClose={() => setModal(null)}>
             <p className="text-sm text-gray-600 leading-relaxed">
               All upcoming scheduled orders will be cancelled. This cannot be undone from the app.
             </p>
+            {needsBalanceDecision && (
+              <SettleBalanceFields value={settle} onChange={setSettle} balance={walletBalance ?? 0} payments={refundable} />
+            )}
             <ModalFooter>
               <GhostBtn onClick={() => setModal(null)}>Keep it</GhostBtn>
               <DangerBtn
-                disabled={isPending}
-                onClick={() => run(() => cancelSubscription(subscriptionId), "Subscription cancelled.", () => setModal(null))}
+                disabled={isPending || (needsBalanceDecision && !!settleProblem(settle, walletBalance ?? 0, refundable))}
+                onClick={() => secure(
+                  `Cancel ${subscription.planName} for ${user.name || "this customer"}${needsBalanceDecision ? ` and settle the ${fmtRupees(walletBalance ?? 0)} balance` : ""}.`,
+                  (pw) => cancelSubscription(subscriptionId, needsBalanceDecision ? toSettleInput(settle) : null, pw),
+                )}
               >
                 Cancel Plan
               </DangerBtn>
@@ -1056,22 +1045,20 @@ export function ProfileClient({
         />
       )}
 
-      {modal === "wallet" && (
-        <WalletModal
-          balance={walletBalance}
-          pending={isPending}
-          onClose={() => setModal(null)}
-          onSave={(amount, direction, reason) => act(() => adjustWallet(subscriptionId, user.id, amount, direction, reason))}
-        />
-      )}
-
       {modal === "cash" && (
         <CashModal
           due={subscription.codDue}
+          report={cashReport}
           pending={isPending}
-          onClose={() => setModal(null)}
-          onRecord={(amount) => act(() => recordCashPayment(subscriptionId, amount))}
-          onSetDue={(due, onCredit) => act(() => setCashDue(subscriptionId, due, onCredit))}
+          onClose={() => { setModal(null); setCashReport(null) }}
+          onRecord={(v) => secure(
+            `Record ${fmtRupees(v.cashPaise + v.upiPaise)} (cash ${fmtRupees(v.cashPaise)} + UPI ${fmtRupees(v.upiPaise)}) from ${user.name || "this customer"}.`,
+            (pw) => cashReport ? recordCashReport(cashReport.id, v, pw) : recordCashPayment(subscriptionId, v, pw),
+          )}
+          onSetDue={(due, onCredit, reason) => secure(
+            `Change the cash due to ${fmtRupees(due)} (${reason}).`,
+            (pw) => setCashDue(subscriptionId, due, onCredit, reason, pw),
+          )}
         />
       )}
 
@@ -1080,7 +1067,10 @@ export function ProfileClient({
           total={planPrice}
           pending={isPending}
           onClose={() => setModal(null)}
-          onSave={(paid, due) => act(() => activatePendingPlan(subscriptionId, paid, due))}
+          onSave={(paid, due, proof, key) => secure(
+            `Activate ${subscription.planName} for ${user.name || "this customer"}${paid > 0 ? ` with ${fmtRupees(paid)} received` : ""}.`,
+            (pw) => activatePendingPlan(subscriptionId, paid, due, proof, key, pw),
+          )}
         />
       )}
 

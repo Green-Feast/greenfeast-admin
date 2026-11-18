@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
+import { audited, sensitive, type SensitiveCtx } from "@/lib/audit"
+import { recordOfficePayment, validProof } from "@/lib/money-ops"
 import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { isTestMode } from "@/lib/mode"
@@ -15,25 +17,25 @@ import type { CreateSubInput, NewCustomer } from "./types"
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Delete every app-data row that belongs to a user, child-first so foreign keys
- * never block the delete. Several FKs to public.users / public.subscriptions have
- * NO cascade (payments, orders, wallet_transactions), so order matters:
- *   payments → wallet_transactions → orders → subscriptions (cascades schedule/
- *   addons/order_*) → dietary_profiles → addresses → wallets → questionnaire →
- *   notifications.
- * The auth + public.users rows themselves are left intact (reset) or removed by
- * the caller afterwards (delete).
+ * Wipe a user's app data. Their money records are never deleted: they move to
+ * money_archives / deleted_money_records first (archive_customer_money,
+ * migration 092 — a balance left in the wallet is recorded as closed), then
+ * the rest goes, child-first so foreign keys never block it:
+ *   orders → subscriptions (cascades schedule / addons / order_*) →
+ *   dietary_profiles → addresses → questionnaire → notifications.
+ * The auth + public.users rows themselves are left intact (reset) or removed
+ * by the caller afterwards (delete).
  */
-async function wipeUserData(userId: string) {
-  await supabaseAdmin.from("payments").delete().eq("user_id", userId)
-  await supabaseAdmin.from("wallet_transactions").delete().eq("user_id", userId)
-  await supabaseAdmin.from("orders").delete().eq("user_id", userId)
-  await supabaseAdmin.from("subscriptions").delete().eq("user_id", userId)
-  await supabaseAdmin.from("dietary_profiles").delete().eq("user_id", userId)
-  await supabaseAdmin.from("addresses").delete().eq("user_id", userId)
-  await supabaseAdmin.from("wallets").delete().eq("user_id", userId)
-  await supabaseAdmin.from("questionnaire_responses").delete().eq("user_id", userId)
-  await supabaseAdmin.from("notifications").delete().eq("user_id", userId)
+async function wipeUserData(userId: string, reason: "admin_reset" | "admin_deleted", ctx: SensitiveCtx) {
+  const { data: archiveId, error: archiveErr } = await supabaseAdmin.rpc("archive_customer_money", {
+    p_user: userId, p_reason: reason, p_admin: ctx.admin.id, p_action: ctx.actionId,
+  })
+  if (archiveErr) throw new Error(`Could not archive their money records: ${archiveErr.message}`)
+  ctx.note({ userId, details: { archive_id: archiveId ?? null } })
+  for (const table of ["orders", "subscriptions", "dietary_profiles", "addresses", "questionnaire_responses", "notifications"]) {
+    const { error } = await supabaseAdmin.from(table).delete().eq("user_id", userId)
+    if (error) throw new Error(`Could not clear ${table}: ${error.message}`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,20 @@ async function wipeUserData(userId: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function createSubscription(
-  input: CreateSubInput
+  input: CreateSubInput,
+  password: string
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
+  return sensitive("users.createSubscription", password, {
+    userId: input.userId, amountPaise: input.walletCredit ?? 0,
+    details: { plan: input.planId, activation: input.activation, cash_due: input.cashDue ?? 0, meals_left: input.mealsLeft, coupon: input.couponId ?? null },
+  }, async (ctx) => createSubscriptionCore(input, ctx))
+}
+
+async function createSubscriptionCore(input: CreateSubInput, ctx: SensitiveCtx): Promise<{ ok: boolean; error?: string }> {
   const {
     userId, name, phone, hasPublicRow, planId, days,
     mealsLunch, mealsDinner, activation, address,
-    mealsLeft, walletCredit, addonIds, startDate, cashDue, couponId,
+    mealsLeft, walletCredit, addonIds, startDate, cashDue, couponId, proof, idempotencyKey,
   } = input
 
   if (!planId) return { ok: false, error: "Pick a plan." }
@@ -64,6 +73,9 @@ export async function createSubscription(
   if (!Number.isInteger(walletCredit) || (walletCredit as number) < 0 || (walletCredit as number) > 20_000_000) {
     return { ok: false, error: "Amount paid must be between ₹0 and ₹2,00,000." }
   }
+  // Money is only credited with its proof (migration 092).
+  const proofErr = validProof(proof, walletCredit as number)
+  if (proofErr) return { ok: false, error: proofErr }
   const due = isCod ? (cashDue ?? 0) : 0
   if (!Number.isInteger(due) || due < 0 || due > 20_000_000) {
     return { ok: false, error: "Cash to collect must be between ₹0 and ₹2,00,000." }
@@ -202,27 +214,22 @@ export async function createSubscription(
   //    spreadsheet would be skipped (cash-on-delivery plans run on credit).
   const saved = coupon ? (coupon.regular - coupon.mealPrice) * (mealsLeft as number) : 0
   let paymentId: string | null = null
-  if ((walletCredit as number) > 0) {
-    const { data: payment, error: payErr } = await supabaseAdmin.from("payments").insert({
-      user_id: userId,
-      subscription_id: sub.id,
-      amount: walletCredit,
-      status: "paid",
-      coupon_id: coupon?.id ?? null,
-      meal_price_paise: coupon?.mealPrice ?? null,
-      discount_paise: coupon ? saved : null,
-    }).select("id").single()
-    if (payErr) console.error("createSubscription: payment record failed:", payErr.message)
-    paymentId = (payment?.id as string | undefined) ?? null
-
-    const { error: creditErr } = await supabaseAdmin.rpc("wallet_credit", {
-      p_user: userId,
-      p_amount: walletCredit,
-      p_reason: isCod ? "Paid upfront — cash on delivery plan" : "Opening balance — moved from previous records",
-      p_reference_id: sub.id,
+  if ((walletCredit as number) > 0 && proof) {
+    const pay = await recordOfficePayment(ctx, {
+      userId,
+      subId: sub.id,
+      amountPaise: walletCredit as number,
+      proof,
+      source: "admin_onboarding",
+      reason: isCod ? "Paid upfront — cash on delivery plan"
+        : proof.method === "previous_records" ? "Opening balance — moved from previous records"
+        : "Payment received — plan set up by GreenFeast",
+      idempotencyKey: idempotencyKey ?? null,
     })
-    if (creditErr) return { ok: false, error: `Plan created, but the wallet credit failed: ${creditErr.message}` }
+    if (!pay.ok) return { ok: false, error: `Plan created, but the payment wasn't recorded: ${pay.error}` }
+    paymentId = pay.paymentId
   }
+  ctx.note({ subscriptionId: sub.id })
 
   if (coupon) {
     const { error: redErr } = await supabaseAdmin.from("coupon_redemptions").insert({
@@ -264,31 +271,37 @@ export async function createSubscription(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wipe app data but keep the login, so onboarding can be re-tested fresh. */
-export async function resetUserData(userId: string): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
-  try {
-    await wipeUserData(userId)
-    await supabaseAdmin.from("users").update({ onboarded: false }).eq("id", userId)
-    revalidatePath("/users")
-    return { ok: true }
-  } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Reset failed." }
-  }
+export async function resetUserData(userId: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  return sensitive("users.resetUserData", password, { userId }, async (ctx) => {
+    try {
+      await wipeUserData(userId, "admin_reset", ctx)
+      await supabaseAdmin.from("users").update({ onboarded: false }).eq("id", userId)
+      revalidatePath("/users")
+      revalidatePath("/money")
+      return { ok: true }
+    } catch (e: any) {
+      return { ok: false, error: e?.message ?? "Reset failed." }
+    }
+  })
 }
 
-/** Remove the user entirely — app data first, then the auth + public.users rows. */
-export async function deleteUser(userId: string): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
-  try {
-    await wipeUserData(userId)
-    await supabaseAdmin.from("users").delete().eq("id", userId)
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
-    if (error) return { ok: false, error: error.message }
-    revalidatePath("/users")
-    return { ok: true }
-  } catch (e: any) {
-    return { ok: false, error: e?.message ?? "Delete failed." }
-  }
+/** Remove the user — money archived, app data cleared, then the auth + public.users rows. */
+export async function deleteUser(userId: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  return sensitive("users.deleteUser", password, { userId }, async (ctx) => {
+    try {
+      const { data: who } = await supabaseAdmin.from("users").select("customer_code, name").eq("id", userId).maybeSingle()
+      ctx.note({ details: { customer_code: who?.customer_code ?? null, name: who?.name ?? null } })
+      await wipeUserData(userId, "admin_deleted", ctx)
+      await supabaseAdmin.from("users").delete().eq("id", userId)
+      const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
+      if (error) return { ok: false, error: error.message }
+      revalidatePath("/users")
+      revalidatePath("/money")
+      return { ok: true }
+    } catch (e: any) {
+      return { ok: false, error: e?.message ?? "Delete failed." }
+    }
+  })
 }
 
 export async function editUserProfile(
@@ -296,23 +309,25 @@ export async function editUserProfile(
   name: string,
   phone: string
 ): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
-  const { data: existing } = await supabaseAdmin
-    .from("users")
-    .select("id")
-    .eq("id", userId)
-    .maybeSingle()
+  return audited<{ ok: boolean; error?: string }>("users.editUserProfile", { userId }, async () => {
+    await requireAdminStrict()
+    const { data: existing } = await supabaseAdmin
+      .from("users")
+      .select("id")
+      .eq("id", userId)
+      .maybeSingle()
 
-  const payload = { name: name.trim() || null, phone: phone.trim() }
-  const { error } = existing
-    ? await supabaseAdmin.from("users").update(payload).eq("id", userId)
-    : await supabaseAdmin.from("users").insert({ id: userId, ...payload, onboarded: false })
+    const payload = { name: name.trim() || null, phone: phone.trim() }
+    const { error } = existing
+      ? await supabaseAdmin.from("users").update(payload).eq("id", userId)
+      : await supabaseAdmin.from("users").insert({ id: userId, ...payload, onboarded: false })
 
-  if (error) {
-    return { ok: false, error: error.code === "23505" ? "That phone number is already in use." : error.message }
-  }
-  revalidatePath("/users")
-  return { ok: true }
+    if (error) {
+      return { ok: false, error: error.code === "23505" ? "That phone number is already in use." : error.message }
+    }
+    revalidatePath("/users")
+    return { ok: true }
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,35 +335,8 @@ export async function editUserProfile(
 // revalidates /users so the table updates in place)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function pauseSub(subId: string, from: string, until: string) {
-  await requireAdmin()
-  await supabaseAdmin.from("subscriptions")
-    .update({ status: "paused", pause_from: from, pause_until: until })
-    .eq("id", subId)
-  await supabaseAdmin.from("orders").update({ status: "cancelled" })
-    .eq("subscription_id", subId)
-    .gte("delivery_date", from)
-    .lte("delivery_date", until)
-    .in("status", ["scheduled", "confirmed"])
-  revalidatePath("/users")
-}
-
-export async function resumeSub(subId: string) {
-  await requireAdmin()
-  await supabaseAdmin.from("subscriptions")
-    .update({ status: "active", pause_from: null, pause_until: null })
-    .eq("id", subId)
-  revalidatePath("/users")
-}
-
-export async function cancelSub(subId: string) {
-  await requireAdminStrict()
-  await supabaseAdmin.from("subscriptions").update({ status: "cancelled" }).eq("id", subId)
-  await supabaseAdmin.from("orders").update({ status: "cancelled" })
-    .eq("subscription_id", subId)
-    .in("status", ["scheduled", "confirmed"])
-  revalidatePath("/users")
-}
+// (Pause / resume / cancel live on the subscriber profile — cancelling there
+// settles the wallet balance, migration 092.)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Live / Test
@@ -356,11 +344,13 @@ export async function cancelSub(subId: string) {
 
 /** Move an account between Live and Test. Going Live gives a test account a real GF- code. */
 export async function setUserTestFlag(userId: string, isTest: boolean): Promise<{ ok: boolean; error?: string }> {
-  await requireAdminStrict()
-  const { error } = await supabaseAdmin.rpc("set_user_test_flag", { p_user: userId, p_is_test: isTest })
-  if (error) return { ok: false, error: error.message }
-  revalidatePath("/users")
-  return { ok: true }
+  return audited<{ ok: boolean; error?: string }>("users.setUserTestFlag", { userId }, async () => {
+    await requireAdminStrict()
+    const { error } = await supabaseAdmin.rpc("set_user_test_flag", { p_user: userId, p_is_test: isTest })
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/users")
+    return { ok: true }
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -378,31 +368,33 @@ export async function setUserTestFlag(userId: string, isTest: boolean): Promise<
 export async function generateCustomerPassword(userId: string): Promise<
   { ok: true; password: string; email: string; name: string; phone: string | null; provider: string } | { ok: false; error: string }
 > {
-  await requireAdminStrict()
-  const { data: found, error: findErr } = await supabaseAdmin.auth.admin.getUserById(userId)
-  const authUser = found?.user
-  if (findErr || !authUser) return { ok: false, error: "Login not found." }
-  if (authUser.user_metadata?.gf_account === "partner") return { ok: false, error: "That's a delivery partner — use Delivery Partners → App login." }
-  const email = authUser.email?.trim()
-  if (!email) return { ok: false, error: "This account has no email to log in with." }
+  return audited<{ ok: true; password: string; email: string; name: string; phone: string | null; provider: string } | { ok: false; error: string }>("users.generateCustomerPassword", { userId }, async () => {
+    await requireAdminStrict()
+    const { data: found, error: findErr } = await supabaseAdmin.auth.admin.getUserById(userId)
+    const authUser = found?.user
+    if (findErr || !authUser) return { ok: false, error: "Login not found." }
+    if (authUser.user_metadata?.gf_account === "partner") return { ok: false, error: "That's a delivery partner — use Delivery Partners → App login." }
+    const email = authUser.email?.trim()
+    if (!email) return { ok: false, error: "This account has no email to log in with." }
 
-  const password = tempPassword()
-  // user_metadata is merged, not replaced — only the flag changes.
-  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-    password,
-    user_metadata: { must_change_password: true },
+    const password = tempPassword()
+    // user_metadata is merged, not replaced — only the flag changes.
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password,
+      user_metadata: { must_change_password: true },
+    })
+    if (error) return { ok: false, error: `Couldn't set the password: ${error.message}` }
+
+    const { data: profile } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
+    return {
+      ok: true,
+      password,
+      email,
+      name: profile?.name?.trim() || (authUser.user_metadata?.full_name as string | undefined) || "there",
+      phone: profile?.phone ?? null,
+      provider: (authUser.app_metadata?.provider as string | undefined) ?? "email",
+    }
   })
-  if (error) return { ok: false, error: `Couldn't set the password: ${error.message}` }
-
-  const { data: profile } = await supabaseAdmin.from("users").select("name, phone").eq("id", userId).maybeSingle()
-  return {
-    ok: true,
-    password,
-    email,
-    name: profile?.name?.trim() || (authUser.user_metadata?.full_name as string | undefined) || "there",
-    phone: profile?.phone ?? null,
-    provider: (authUser.app_metadata?.provider as string | undefined) ?? "email",
-  }
 }
 
 /**
@@ -417,54 +409,56 @@ export async function createCustomerAccount(input: {
   email: string
   phone: string
 }): Promise<{ ok: true; customer: NewCustomer; tempPassword: string } | { ok: false; error: string }> {
-  await requireAdminStrict()
-  const isTest = await isTestMode()
+  return audited<{ ok: true; customer: NewCustomer; tempPassword: string } | { ok: false; error: string }>("users.createCustomerAccount", { details: { name: input.name, email: input.email } }, async () => {
+      await requireAdminStrict()
+      const isTest = await isTestMode()
 
-  const name = input.name.trim()
-  const email = input.email.trim().toLowerCase()
-  const digits = input.phone.replace(/\D/g, "").slice(-10)
-  if (!name) return { ok: false, error: "Enter their name." }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Enter a valid email address." }
-  if (!/^[6-9]\d{9}$/.test(digits)) return { ok: false, error: "Enter a 10-digit Indian mobile number." }
-  const phone = `+91${digits}`
+      const name = input.name.trim()
+      const email = input.email.trim().toLowerCase()
+      const digits = input.phone.replace(/\D/g, "").slice(-10)
+      if (!name) return { ok: false, error: "Enter their name." }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Enter a valid email address." }
+      if (!/^[6-9]\d{9}$/.test(digits)) return { ok: false, error: "Enter a 10-digit Indian mobile number." }
+      const phone = `+91${digits}`
 
-  const { data: taken } = await supabaseAdmin
-    .from("users").select("customer_code").eq("phone", phone).maybeSingle()
-  if (taken) return { ok: false, error: `That phone number already belongs to ${taken.customer_code ?? "another account"}.` }
+      const { data: taken } = await supabaseAdmin
+        .from("users").select("customer_code").eq("phone", phone).maybeSingle()
+      if (taken) return { ok: false, error: `That phone number already belongs to ${taken.customer_code ?? "another account"}.` }
 
-  const password = tempPassword()
-  const { data: created, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { full_name: name, must_change_password: true },
+      const password = tempPassword()
+      const { data: created, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { full_name: name, must_change_password: true },
+      })
+      if (authErr || !created?.user) {
+        const msg = authErr?.message ?? "Could not create the login."
+        return { ok: false, error: /already|registered|exists/i.test(msg) ? "An account with this email already exists — find them in the list." : msg }
+      }
+      const userId = created.user.id
+
+      // handle_new_auth_user has created the profile row; fill it in.
+      const { error: profileErr } = await supabaseAdmin
+        .from("users").update({ name, phone, is_test: isTest }).eq("id", userId)
+      if (profileErr) {
+        await supabaseAdmin.auth.admin.deleteUser(userId)
+        return { ok: false, error: `Could not save the profile: ${profileErr.message}` }
+      }
+      if (isTest) {
+        // Created while in Test mode: keep it out of the real GF- numbering.
+        const { data: row } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
+        if (row?.customer_code?.startsWith("GF-")) {
+          await supabaseAdmin.from("users").update({ customer_code: "GT-" + row.customer_code.slice(3) }).eq("id", userId)
+        }
+      }
+
+      const { data: final } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
+      revalidatePath("/users")
+      return {
+        ok: true,
+        tempPassword: password,
+        customer: { id: userId, name, email, phone, customerCode: final?.customer_code ?? null },
+      }
   })
-  if (authErr || !created?.user) {
-    const msg = authErr?.message ?? "Could not create the login."
-    return { ok: false, error: /already|registered|exists/i.test(msg) ? "An account with this email already exists — find them in the list." : msg }
-  }
-  const userId = created.user.id
-
-  // handle_new_auth_user has created the profile row; fill it in.
-  const { error: profileErr } = await supabaseAdmin
-    .from("users").update({ name, phone, is_test: isTest }).eq("id", userId)
-  if (profileErr) {
-    await supabaseAdmin.auth.admin.deleteUser(userId)
-    return { ok: false, error: `Could not save the profile: ${profileErr.message}` }
-  }
-  if (isTest) {
-    // Created while in Test mode: keep it out of the real GF- numbering.
-    const { data: row } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
-    if (row?.customer_code?.startsWith("GF-")) {
-      await supabaseAdmin.from("users").update({ customer_code: "GT-" + row.customer_code.slice(3) }).eq("id", userId)
-    }
-  }
-
-  const { data: final } = await supabaseAdmin.from("users").select("customer_code").eq("id", userId).single()
-  revalidatePath("/users")
-  return {
-    ok: true,
-    tempPassword: password,
-    customer: { id: userId, name, email, phone, customerCode: final?.customer_code ?? null },
-  }
 }
