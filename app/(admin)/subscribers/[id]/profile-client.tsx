@@ -188,6 +188,7 @@ export function ProfileClient({
   upcoming,
   unmarked,
   rules,
+  history,
   catalogue,
   refundable,
   otherLivePlans,
@@ -206,6 +207,8 @@ export function ProfileClient({
   upcoming: Upcoming[]
   unmarked: { id: string; date: string; slot: "lunch" | "dinner"; status: string; quantity: number; extra: boolean; mealName: string }[]
   rules: Rule[]
+  /** Plan change log (095), newest first. */
+  history: { id: string; at: string; by: string; field: string; from: string | null; to: string | null }[]
   catalogue: Catalogue
   /** Cashfree payments that can still be refunded (cancel → refund to bank). */
   refundable: RefundablePayment[]
@@ -950,6 +953,33 @@ export function ProfileClient({
               >
                 Save notes
               </button>
+            </div>
+          </Card>
+
+          {/* Plan history (095): who changed what, newest first */}
+          <Card>
+            <CardHeader title="Plan history" icon={<StickyNote className="w-3.5 h-3.5" />} />
+            <div className="px-5 pb-5">
+              {history.length === 0 ? (
+                <p className="text-xs text-gray-400">No changes recorded yet (recording started 19 Nov 2026).</p>
+              ) : (
+                <ul className="space-y-2 max-h-80 overflow-y-auto">
+                  {history.map((h) => (
+                    <li key={h.id} className="text-xs border-b border-[#e2e8d5] last:border-0 pb-2">
+                      <p className="text-gray-400">
+                        {new Date(h.at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })}
+                        {" · "}
+                        <span className={cn("font-medium", h.by === "customer" ? "text-blue-700" : h.by.startsWith("office") ? "text-[#1B5E20]" : "text-gray-500")}>
+                          {h.by === "customer" ? "Customer (app)" : h.by.startsWith("office") ? "Office" : h.by.replace(/^system:?s*/, "System ")}
+                        </span>
+                      </p>
+                      <p className="text-[#1A1A1A]">
+                        <span className="capitalize">{h.field}</span>: {h.from ?? "—"} → <b>{h.to ?? "—"}</b>
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </Card>
         </div>

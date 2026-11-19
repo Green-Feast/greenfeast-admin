@@ -47,6 +47,13 @@ export default async function SubscriberProfilePage({
       .eq("user_id", userId).neq("id", id).in("status", ["active", "paused", "pending"]),
   ])
   const today = istToday()
+  // Plan change log (095): who changed what on this customer's plans.
+  const { data: historyRows } = await supabaseAdmin
+    .from("plan_change_log")
+    .select("id, created_at, changed_by, field, old_value, new_value")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(80)
 
   const [
     { data: plan },
@@ -248,6 +255,14 @@ export default async function SubscriberProfilePage({
               const n = (l.quantity ?? 1) * (l.unit_price == null && !o.extra_dish ? (o.quantity ?? 1) : 1)
               return n > 1 ? `${l.addons.name} ×${n}` : l.addons.name
             }),
+        }))}
+        history={((historyRows as any[]) ?? []).map((h) => ({
+          id: String(h.id),
+          at: h.created_at as string,
+          by: (h.changed_by ?? "") as string,
+          field: (h.field ?? "") as string,
+          from: (h.old_value ?? null) as string | null,
+          to: (h.new_value ?? null) as string | null,
         }))}
         rules={((rules as any[]) ?? []).map((r) => ({
           id: r.id as string,
