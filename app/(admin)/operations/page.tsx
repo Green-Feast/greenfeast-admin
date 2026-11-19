@@ -56,6 +56,7 @@ export default async function OperationsPage({
         users!inner ( name, phone, is_test )
       ),
       drink_template_id,
+      item_kind,
       meal_templates ( name ),
       addresses ( label, type, line1, line2, landmark, city, time_window ),
       order_addons ( kind, quantity, unit_price, sub_option, addons ( name, is_drink ) )
@@ -247,9 +248,25 @@ export default async function OperationsPage({
     };
   });
 
+  // Drink items (097) print in their meal's Drink column; acting on that row
+  // acts on them too (operations/actions withDrinkItems). A cart with only a
+  // drink keeps its own row (no meal, 0 portions in the dish tally).
+  const kindById = new Map(((data ?? []) as any[]).map((o) => [o.id as string, (o.item_kind ?? "meal") as string]));
+  const rows = subscribers.filter((r) => kindById.get(r.orderId) !== "drink");
+  for (const d of subscribers.filter((r) => kindById.get(r.orderId) === "drink")) {
+    const entry = { name: d.meal, qty: d.quantity };
+    const host = rows.find((r) => r.subscriptionId === d.subscriptionId && r.mealSlot === d.mealSlot && r.meal !== "—");
+    if (host) {
+      host.drinkList = [...host.drinkList, entry];
+      host.drink = host.drinkList.map((x) => (x.qty > 1 ? `${x.name} ×${x.qty}` : x.name)).join(", ");
+    } else {
+      rows.push({ ...d, meal: "—", quantity: 0, addonList: [], addons: "", drinkList: [entry], drink: entry.qty > 1 ? `${entry.name} ×${entry.qty}` : entry.name });
+    }
+  }
+
   return (
     <OperationsClient
-      initialSubscribers={subscribers}
+      initialSubscribers={rows}
       serverDate={date}
       closures={(closureRows ?? []) as KitchenClosure[]}
       batches={(batchRows ?? []) as { id: string; name: string; meal_slot: "lunch" | "dinner" }[]}

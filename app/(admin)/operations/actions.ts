@@ -79,15 +79,29 @@ export async function advanceBatchStatus(
  * (migration 036), which mirrors advance_batch_delivered's billing/counter
  * logic exactly so the two paths can never diverge.
  */
+// A lunch / dinner's drink items (097) go with its meal: the sheets show them
+// on the meal's row, so acting on that row acts on them too.
+async function withDrinkItems(orderId: string): Promise<string[]> {
+  const { data: o } = await supabaseAdmin
+    .from("orders").select("subscription_id, delivery_date, meal_slot, item_kind, walk_in").eq("id", orderId).maybeSingle()
+  if (!o || o.item_kind === "drink" || o.walk_in) return [orderId]
+  const { data: drinks } = await supabaseAdmin
+    .from("orders").select("id")
+    .eq("subscription_id", o.subscription_id).eq("delivery_date", o.delivery_date).eq("meal_slot", o.meal_slot)
+    .eq("item_kind", "drink").eq("walk_in", false)
+  return [orderId, ...((drinks ?? []) as { id: string }[]).map((d) => d.id)]
+}
+
 export async function advanceOrderStatus(orderId: string, newStatus: DeliveryStatus, slot: MealSlot) {
   return audited("operations.advanceOrderStatus", { ref: orderId, details: { newStatus, slot } }, async () => {
     await requireAdminStrict()
     let result: "billed" | "skipped_insufficient" | "already_settled" | null = null
 
+    const ids = await withDrinkItems(orderId)
     if (newStatus === "delivered") {
-      result = (await deliverOrders([orderId], slot))[orderId] ?? null
+      result = (await deliverOrders(ids, slot))[orderId] ?? null
     } else {
-      await advanceOrder(orderId, newStatus, slot)
+      for (const id of ids) await advanceOrder(id, newStatus, slot)
     }
 
     revalidatePath("/operations")
@@ -101,7 +115,7 @@ export async function skipOrderNoCharge(orderId: string): Promise<{ ok: true; me
   return audited<{ ok: true; message: string } | { ok: false; error: string }>("operations.skipOrderNoCharge", { ref: orderId }, async () => {
     await requireAdminStrict()
     try {
-      const n = await skipUndelivered([orderId])
+      const n = await skipUndelivered(await withDrinkItems(orderId))
       if (n === 0) return { ok: false, error: "This meal is already delivered, skipped or cancelled." }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "Could not skip it." }
@@ -178,7 +192,7 @@ export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "s
     const data = { batch_id: order.batch_id }
 
     if (outcome === "deliver") {
-      const result = (await deliverOrders([orderId], order.meal_slot as MealSlot))[orderId]
+      const result = (await deliverOrders(await withDrinkItems(orderId), order.meal_slot as MealSlot))[orderId]
       revalidatePath("/operations")
       revalidatePath("/dashboard")
       if (result === "skipped_insufficient") return { ok: true, message: "Wallet was short — skipped and the customer was told." }
@@ -189,7 +203,7 @@ export async function resolveFailedDrop(orderId: string, outcome: "deliver" | "s
     const { error } = await supabaseAdmin
       .from("orders")
       .update({ status: "skipped", skip_reason: "not_delivered", updated_at: new Date().toISOString() })
-      .eq("id", orderId)
+      .in("id", await withDrinkItems(orderId))
       .not("status", "in", "(delivered,cancelled,skipped)")
     if (error) return { ok: false, error: error.message }
     await tellPartner(order.delivery_partner_id, "drop_skipped", vars, data)

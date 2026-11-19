@@ -143,7 +143,7 @@ type OrderRow = {
 async function editableOrder(orderId: string): Promise<OrderRow | string> {
   const { data } = await supabaseAdmin
     .from("orders")
-    .select("id, user_id, subscription_id, status, delivery_date, meal_slot, quantity, unit_price, extra_dish")
+    .select("id, user_id, subscription_id, status, delivery_date, meal_slot, quantity, unit_price, extra_dish, item_kind")
     .eq("id", orderId)
     .maybeSingle()
   if (!data) return "Meal not found."
@@ -153,6 +153,30 @@ async function editableOrder(orderId: string): Promise<OrderRow | string> {
       : "The kitchen has already started on this meal."
   }
   return data as OrderRow
+}
+
+// The cart minimum (097) — the office follows it too: a slot the plan delivers
+// keeps the plan's meals, drinks and plan add-ons; less than that is a skip.
+// delta = what the change takes away. Returns why not, or null.
+async function minimumProblem(
+  order: { subscription_id: string; delivery_date: string; meal_slot: string },
+  delta: { meals?: number; drinks?: number; addonId?: string; addonBy?: number },
+): Promise<string | null> {
+  const { data: st } = await supabaseAdmin.rpc("slot_cart_state", {
+    p_sub: order.subscription_id, p_date: order.delivery_date, p_slot: order.meal_slot,
+  })
+  if (!st?.applies) return null
+  if (delta.meals && st.meals - delta.meals < st.need_meals) {
+    return `Their plan has ${st.need_meals} meal${st.need_meals === 1 ? "" : "s"} here — swap a dish instead, or skip the meal. (Fewer meals every day is a plan change.)`
+  }
+  if (delta.drinks && st.drinks - delta.drinks < st.need_drinks) {
+    return `Their plan has ${st.need_drinks} drink${st.need_drinks === 1 ? "" : "s"} here — pick another drink instead, or skip the meal.`
+  }
+  if (delta.addonId && delta.addonBy) {
+    const pa = ((st.plan_addons ?? []) as { id: string; have: number }[]).find((x) => x.id === delta.addonId)
+    if (pa && pa.have - delta.addonBy < st.need_meals) return "That add-on comes with their plan's meals — it stays (removing it is a plan change)."
+  }
+  return null
 }
 
 async function recompute(orderId: string) {
@@ -325,6 +349,11 @@ export async function adminSetOrderQuantity(orderId: string, quantity: number): 
     }
     const order = await editableOrder(orderId)
     if (typeof order === "string") return { ok: false, error: order }
+    const fewer = (order.quantity ?? 1) - quantity
+    if (fewer > 0) {
+      const problem = await minimumProblem(order, (order as any).item_kind === "drink" ? { drinks: fewer } : { meals: fewer })
+      if (problem) return { ok: false, error: problem }
+    }
     const { error } = await supabaseAdmin
       .from("orders").update({ quantity, cart_edited: true, updated_at: new Date().toISOString() }).eq("id", orderId)
     if (error) return { ok: false, error: error.message }
@@ -453,6 +482,11 @@ export async function adminSetAddonQty(orderId: string, addonId: string, quantit
         .from("order_addons").select("id, quantity, unit_price")
         .eq("order_id", orderId).eq("addon_id", addonId).eq("kind", "addon").maybeSingle(),
     ])
+    const lower = (line?.quantity ?? 0) - quantity
+    if (lower > 0) {
+      const problem = await minimumProblem(order, { addonId, addonBy: lower })
+      if (problem) return { ok: false, error: problem }
+    }
     if (!addon) return { ok: false, error: "Add-on not found." }
 
     if (line && line.unit_price == null && !order.extra_dish) {
@@ -714,6 +748,9 @@ export async function adminRemoveExtraDish(orderId: string): Promise<EditResult>
     const order = await editableOrder(orderId)
     if (typeof order === "string") return { ok: false, error: order }
     if (!order.extra_dish) return { ok: false, error: "Only an extra dish can be removed — skip the meal instead." }
+    const q = order.quantity ?? 1
+    const problem = await minimumProblem(order, (order as any).item_kind === "drink" ? { drinks: q } : { meals: q })
+    if (problem) return { ok: false, error: problem }
     const { error } = await supabaseAdmin
       .from("orders").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", orderId)
     if (error) return { ok: false, error: error.message }

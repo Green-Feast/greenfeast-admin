@@ -69,138 +69,29 @@ async function mealRates(subscriptionId: string, before: PlanShape, after: PlanS
   return [oldRate, couponPrice ?? newPlanRate, dropped];
 }
 
+// Since 097 a cart is items (meals, drinks, priced add-on lines) and the
+// database owns the rules: resync_plan_orders remakes every upcoming slot
+// nobody changed by hand from the plan's defaults (dish, portions, drinks,
+// add-ons) and cancels slots that are now off; the order run then fills new
+// days up to the published Sunday. Slots changed by hand stay as they are.
 export async function syncUpcomingOrders(subscriptionId: string, before: PlanShape, after: PlanShape) {
-  const today = istToday();
-  const { data: rows } = await supabaseAdmin
+  // Plan change: the coupon price follows (or comes off) first (066).
+  const [, newRate, couponDropped] = await mealRates(subscriptionId, before, after);
+
+  const { data: kept } = await supabaseAdmin
     .from("orders")
-    .select("id, delivery_date, meal_slot, quantity, unit_price, extra_dish, is_customized, status, drink_template_id, order_addons ( id, addon_id, kind, unit_price )")
+    .select("delivery_date, meal_slot")
     .eq("subscription_id", subscriptionId)
-    .gte("delivery_date", today)
-    .in("status", ["scheduled", "confirmed"])
-    .order("delivery_date")
-    .order("meal_slot");
-  const open = ((rows ?? []) as any[]).filter((o) => !isSlotLocked(o.delivery_date, o.meal_slot as Slot));
+    .eq("cart_edited", true)
+    .eq("walk_in", false)
+    .gte("delivery_date", istToday())
+    .in("status", ["scheduled", "confirmed"]);
+  const keptSlots = new Set(((kept ?? []) as { delivery_date: string; meal_slot: string }[]).map((o) => `${o.delivery_date}|${o.meal_slot}`));
 
-  const removed: string[] = [];
-  const touched = new Set<string>();
-  let kept = 0;
-
-  const perDay = (shape: PlanShape, slot: Slot) => (slot === "lunch" ? shape.mealsLunch : shape.mealsDinner);
-  const takesDay = (shape: PlanShape, date: string) =>
-    shape.days.length === 0 ? !shape.noDeliveryDays : shape.days.includes(weekday(date));
-
-  // 1. Slots / days / start date no longer on the plan.
-  for (const o of open) {
-    if (o.extra_dish) continue;
-    const slot = o.meal_slot as Slot;
-    if (perDay(after, slot) <= 0 || !takesDay(after, o.delivery_date) || (after.startDate && o.delivery_date < after.startDate)) {
-      removed.push(o.id);
-    }
-  }
-  if (removed.length) await supabaseAdmin.from("orders").delete().in("id", removed);
-  const remaining = open.filter((o) => !removed.includes(o.id));
-
-  // 2. Portions per slot.
-  for (const slot of ["lunch", "dinner"] as Slot[]) {
-    const from = perDay(before, slot);
-    const to = perDay(after, slot);
-    if (from === to || to <= 0) continue;
-    const ids = remaining.filter((o) => !o.extra_dish && o.meal_slot === slot && (o.quantity ?? 1) === from).map((o) => o.id);
-    kept += remaining.filter((o) => !o.extra_dish && o.meal_slot === slot && (o.quantity ?? 1) !== from).length;
-    if (ids.length) {
-      await supabaseAdmin.from("orders").update({ quantity: to }).in("id", ids);
-      ids.forEach((id) => touched.add(id));
-    }
-  }
-
-  // 3. Per-meal rate (plan change) and plan add-ons.
-  const [oldRate, newRate, couponDropped] = await mealRates(subscriptionId, before, after);
-  const addedAddons = after.addonIds.filter((id) => !before.addonIds.includes(id));
-  const droppedAddons = before.addonIds.filter((id) => !after.addonIds.includes(id));
-  const prices = new Map<string, number>();
-  const drinkAddons = new Set<string>();
-  if (addedAddons.length || droppedAddons.length) {
-    const { data } = await supabaseAdmin.from("addons").select("id, price_per_meal, is_drink").in("id", [...addedAddons, ...droppedAddons]);
-    for (const a of (data ?? []) as { id: string; price_per_meal: number; is_drink: boolean | null }[]) {
-      prices.set(a.id, a.price_per_meal);
-      if (a.is_drink) drinkAddons.add(a.id);
-    }
-  }
-  // A line added to an open meal carries the plan's option (cheese etc.). The
-  // drink line (088) carries the name of that meal's own drink instead; the
-  // order has no FK to the drink dish, so the names are fetched by id.
-  const subOptions = new Map<string, string | null>();
-  const drinkNames = new Map<string, string>();
-  if (addedAddons.length) {
-    const { data } = await supabaseAdmin
-      .from("subscription_addons").select("addon_id, sub_option").eq("subscription_id", subscriptionId).in("addon_id", addedAddons);
-    for (const r of (data ?? []) as { addon_id: string; sub_option: string | null }[]) subOptions.set(r.addon_id, r.sub_option);
-    const drinkIds = [...new Set(remaining.map((o) => o.drink_template_id as string | null).filter((id): id is string => !!id))];
-    if (addedAddons.some((id) => drinkAddons.has(id)) && drinkIds.length) {
-      const { data: dishes } = await supabaseAdmin.from("meal_templates").select("id, name").in("id", drinkIds);
-      for (const d of (dishes ?? []) as { id: string; name: string }[]) drinkNames.set(d.id, d.name);
-    }
-  }
-
-  for (const o of remaining) {
-    let price = o.unit_price ?? oldRate;
-    let changed = false;
-    if (newRate !== oldRate) {
-      price += newRate - oldRate;
-      changed = true;
-    }
-    if (!o.extra_dish) {
-      const lines = (o.order_addons ?? []) as { id: string; addon_id: string | null; kind: string; unit_price: number | null }[];
-      for (const id of droppedAddons) {
-        // Only the plan's own (included) line goes; one the customer added
-        // for that day themselves stays.
-        const line = lines.find((l) => l.kind === "addon" && l.addon_id === id && l.unit_price == null);
-        if (!line) continue;
-        await supabaseAdmin.from("order_addons").delete().eq("id", line.id);
-        price -= Math.min(prices.get(id) ?? 0, Math.max(price - newRate, 0));
-        changed = true;
-      }
-      for (const id of addedAddons) {
-        if (lines.some((l) => l.kind === "addon" && l.addon_id === id)) continue;
-        const drinkName = drinkAddons.has(id) && o.drink_template_id ? drinkNames.get(o.drink_template_id) : undefined;
-        await supabaseAdmin.from("order_addons").insert({
-          order_id: o.id, addon_id: id, kind: "addon", quantity: 1, sub_option: drinkName ?? subOptions.get(id) ?? null,
-        });
-        price += prices.get(id) ?? 0;
-        changed = true;
-      }
-    }
-    if (changed) {
-      await supabaseAdmin.from("orders").update({ unit_price: Math.max(price, 0) }).eq("id", o.id);
-      touched.add(o.id);
-    }
-  }
-
-  // 4. Meals left: never more scheduled than the plan has.
-  const { data: live } = await supabaseAdmin
-    .from("orders")
-    .select("id, delivery_date, meal_slot, quantity, extra_dish, is_customized, status")
-    .eq("subscription_id", subscriptionId)
-    .gte("delivery_date", today)
-    .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery"])
-    .order("delivery_date", { ascending: false })
-    .order("meal_slot", { ascending: false });
-  let over = ((live ?? []) as any[]).reduce((n, o) => n + (o.quantity ?? 1), 0) - after.mealsLeft;
-  const trimmed: string[] = [];
-  for (const o of (live ?? []) as any[]) {
-    if (over <= 0) break;
-    if (o.status !== "scheduled" || o.extra_dish || isSlotLocked(o.delivery_date, o.meal_slot)) continue;
-    trimmed.push(o.id);
-    over -= o.quantity ?? 1;
-  }
-  if (trimmed.length) await supabaseAdmin.from("orders").delete().in("id", trimmed);
-
-  for (const id of touched) {
-    if (!trimmed.includes(id)) await supabaseAdmin.rpc("recompute_order_cart", { p_order: id });
-  }
-
-  // 5. New days / slots / meals from the new settings.
+  const { data: res, error } = await supabaseAdmin.rpc("resync_plan_orders", { p_sub: subscriptionId });
+  if (error) throw new Error(`Could not update upcoming meals: ${error.message}`);
   await instantiateOrders(subscriptionId);
 
-  return { removed: removed.length + trimmed.length, updated: touched.size, kept, couponDropped, newRate };
+  const r = (res ?? {}) as { updated?: number; cancelled?: number };
+  return { removed: r.cancelled ?? 0, updated: r.updated ?? 0, kept: keptSlots.size, couponDropped, newRate };
 }

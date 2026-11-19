@@ -45,7 +45,7 @@ export default async function KitchenPage({
       .from("orders")
       .select(`
         id, subscription_id, delivery_date, meal_slot, status, skip_reason, is_customized, extra_dish, quantity, slot_seq,
-        drink_template_id, drink_edited,
+        drink_template_id, drink_edited, item_kind,
         subscriptions!inner ( id, user_id, users!inner ( name, is_test ) ),
         meal_templates ( name ),
         order_addons ( kind, quantity, unit_price, sub_option, addons ( name, is_drink ) )
@@ -138,7 +138,8 @@ export default async function KitchenPage({
       : null
     const drinkCount = drinkLine ? countOf(drinkLine) : 0
     const item: CellItem = {
-      mealName: order.meal_templates?.name ?? "—",
+      // A drink item (097) shows as the drink, marked, in the same cell.
+      mealName: order.item_kind === "drink" ? `Drink: ${order.meal_templates?.name ?? "—"}` : order.meal_templates?.name ?? "—",
       quantity: order.quantity ?? 1,
       status: order.status,
       skipReason: order.skip_reason ?? null,

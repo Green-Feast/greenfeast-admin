@@ -104,14 +104,12 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-// The weekly drink goes to future orders that carry a drink add-on line, the
-// same way the dish does: scheduled/confirmed only, today's slot frozen past its
-// cutoff, and nothing touched once the customer or admin swapped that day's
-// drink (drink_edited). There is no FK from orders to the drink dish (088), so
-// the dish is looked up by id here. A weekly drink that isn't deliverable
-// (inactive or dine-in only) leaves delivery orders with no drink picked (null),
-// exactly like instantiate-orders does. A day with no weekly drink is left alone
-// so a first save with the grid half-filled doesn't wipe anyone's legacy flavour.
+// The weekly drink goes to future drink items (097: a drink is its own order
+// row, item_kind 'drink'), the same way the dish does: scheduled/confirmed
+// only, today's slot frozen past its cutoff, and nothing touched once the
+// customer or office picked that day's drink themselves (is_customized). A
+// weekly drink that can't be delivered (inactive or dine-in only) leaves the
+// drink items as they are. Walk-ins are never the weekly menu's to set.
 async function propagateDrinks(
   rows: WeeklyMenuRow[],
   today: string,
@@ -121,93 +119,65 @@ async function propagateDrinks(
   const drinkRows = rows.filter((r) => r.drinkTemplateId)
   if (drinkRows.length === 0) return
 
-  type Dish = { id: string; name: string; category: string; is_active: boolean; subscription_valid: boolean }
-  const [{ data: drinkAddons, error: addonErr }, { data: dishes, error: dishErr }] = await Promise.all([
-    supabaseAdmin.from("addons").select("id").eq("is_drink", true),
-    supabaseAdmin
-      .from("meal_templates")
-      .select("id, name, category, is_active, subscription_valid")
-      .in("id", [...new Set(drinkRows.map((r) => r.drinkTemplateId!))]),
-  ])
-  if (addonErr) throw addonErr
+  type Dish = { id: string; category: string; is_active: boolean; subscription_valid: boolean }
+  const { data: dishes, error: dishErr } = await supabaseAdmin
+    .from("meal_templates")
+    .select("id, category, is_active, subscription_valid")
+    .in("id", [...new Set(drinkRows.map((r) => r.drinkTemplateId!))])
   if (dishErr) throw dishErr
-  const drinkAddonIds = ((drinkAddons ?? []) as { id: string }[]).map((a) => a.id)
-  if (drinkAddonIds.length === 0) return
   const dishById = new Map(((dishes ?? []) as Dish[]).map((d) => [d.id, d]))
-
-  const targetFor = (drinkId: string): { id: string | null; name: string | null } => {
-    const d = dishById.get(drinkId)
-    return d && d.is_active && d.subscription_valid && DRINK_CATEGORIES.includes(d.category)
-      ? { id: d.id, name: d.name }
-      : { id: null, name: null }
+  const deliverable = (id: string) => {
+    const d = dishById.get(id)
+    return !!d && d.is_active && d.subscription_valid && DRINK_CATEGORIES.includes(d.category)
   }
 
-  type DrinkOrder = {
-    id: string
-    delivery_date: string
-    drink_template_id: string | null
-    order_addons: { id: string; sub_option: string | null }[]
-  }
-  const ordersBySlot = new Map<string, DrinkOrder[]>()
+  type DrinkItem = { id: string; delivery_date: string; meal_template_id: string | null }
+  const itemsBySlot = new Map<string, DrinkItem[]>()
   await Promise.all(
     [...new Set(drinkRows.map((r) => r.mealSlot))].map(async (slot) => {
       const batches = await Promise.all(
         chunk(subIds, ID_CHUNK).map(async (ids) => {
           const { data, error } = await supabaseAdmin
             .from("orders")
-            .select("id, delivery_date, drink_template_id, order_addons!inner ( id, sub_option )")
+            .select("id, delivery_date, meal_template_id")
             .in("subscription_id", ids)
             .eq("meal_slot", slot)
-            .eq("extra_dish", false)
-            .eq("walk_in", false) // a walk-in's own drink (maybe a coffee) is never the weekly menu's to set
-            .eq("drink_edited", false)
+            .eq("item_kind", "drink")
+            .eq("walk_in", false)
+            .eq("is_customized", false)
             .gte("delivery_date", today)
             .in("status", ["scheduled", "confirmed"])
-            .eq("order_addons.kind", "addon")
-            .in("order_addons.addon_id", drinkAddonIds)
           if (error) throw error
-          return (data ?? []) as unknown as DrinkOrder[]
+          return (data ?? []) as DrinkItem[]
         })
       )
-      ordersBySlot.set(slot, batches.flat())
+      itemsBySlot.set(slot, batches.flat())
     })
   )
 
-  // One update per target drink, over every order (and its drink line) moving to it.
-  const byDrink = new Map<string, { id: string | null; name: string | null; orderIds: string[]; lineIds: string[] }>()
+  const byDrink = new Map<string, string[]>()
   for (const row of drinkRows) {
+    if (!deliverable(row.drinkTemplateId!)) continue
     const todayFrozen = isSlotLocked(today, row.mealSlot)
-    const target = targetFor(row.drinkTemplateId!)
-    for (const order of ordersBySlot.get(row.mealSlot) ?? []) {
-      const orderDow = ((new Date(order.delivery_date + "T00:00:00Z").getUTCDay() + 6) % 7)
-      if (orderDow !== row.dayOfWeek) continue
-      const inSync =
-        (order.drink_template_id ?? null) === target.id &&
-        order.order_addons.every((l) => (l.sub_option ?? null) === target.name)
-      if (inSync) continue
-      if (order.delivery_date === today && todayFrozen) {
-        frozenIds.add(order.id)
+    for (const item of itemsBySlot.get(row.mealSlot) ?? []) {
+      const dow = (new Date(item.delivery_date + "T00:00:00Z").getUTCDay() + 6) % 7
+      if (dow !== row.dayOfWeek || item.meal_template_id === row.drinkTemplateId) continue
+      if (item.delivery_date === today && todayFrozen) {
+        frozenIds.add(item.id)
         continue
       }
-      const bucket = byDrink.get(target.id ?? "") ?? { ...target, orderIds: [], lineIds: [] }
-      bucket.orderIds.push(order.id)
-      bucket.lineIds.push(...order.order_addons.map((l) => l.id))
-      byDrink.set(target.id ?? "", bucket)
+      byDrink.set(row.drinkTemplateId!, [...(byDrink.get(row.drinkTemplateId!) ?? []), item.id])
     }
   }
 
   await Promise.all(
-    [...byDrink.values()].flatMap((b) => [
-      ...chunk(b.orderIds, ID_CHUNK).map(async (part) => {
-        const { error } = await supabaseAdmin.from("orders").update({ drink_template_id: b.id }).in("id", part)
+    [...byDrink.entries()].flatMap(([drinkId, ids]) =>
+      chunk(ids, ID_CHUNK).map(async (part) => {
+        const { error } = await supabaseAdmin.from("orders").update({ meal_template_id: drinkId }).in("id", part)
         if (error) throw error
-      }),
-      // The drink line's sub_option is what name-only readers print (Operations, partner app, Counter).
-      ...chunk(b.lineIds, ID_CHUNK).map(async (part) => {
-        const { error } = await supabaseAdmin.from("order_addons").update({ sub_option: b.name }).in("id", part)
-        if (error) throw error
-      }),
-    ])
+        for (const id of part) await supabaseAdmin.rpc("snapshot_order_ingredients", { p_order: id })
+      })
+    )
   )
 }
 
