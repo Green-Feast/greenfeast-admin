@@ -2,6 +2,7 @@ import "server-only";
 import { supabaseAdmin } from "./supabase-admin";
 import { notifyEvent, logBroadcast } from "./notifications";
 import { istToday } from "./ist";
+import { background } from "./background";
 
 // The admin's delivery path (Operations batch and per-customer buttons). The
 // GreenFeast Partner app does the same through the database's partner_*
@@ -187,7 +188,18 @@ export async function undoDelivered(
  * orders that are at that status now — a wallet-short skip doesn't get a
  * "Delivered!". Best-effort: a failed message never undoes the status change.
  */
+// Sent after the response (lib/background) — the office doesn't wait on Expo.
 export async function notifyStatus(
+  orderIds: string[],
+  status: "out_for_delivery" | "delivered",
+  slot: MealSlot,
+  rider: Rider,
+  audience: string
+) {
+  background(() => sendStatus(orderIds, status, slot, rider, audience));
+}
+
+async function sendStatus(
   orderIds: string[],
   status: "out_for_delivery" | "delivered",
   slot: MealSlot,

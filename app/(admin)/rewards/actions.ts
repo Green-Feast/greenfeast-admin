@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { notifyEvent } from "@/lib/notifications"
+import { background } from "@/lib/background"
 import { dbError, sensitive } from "@/lib/audit"
 import { bankRefund } from "@/lib/money-ops"
 
@@ -35,7 +36,7 @@ export async function refundToWallet(userId: string, amountPaise: number, reason
     })
     if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
     ctx.note({ ref: refundId as string })
-    await notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() })
+    background(async () => notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() }))
     revalidatePath("/rewards")
     revalidatePath("/money")
     return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
@@ -53,7 +54,7 @@ export async function refundToBank(paymentId: string, amountPaise: number, reaso
     revalidatePath("/rewards")
     revalidatePath("/money")
     if (!r.ok) return r
-    await notifyEvent("refund_bank_started", [await recipient(r.userId)], { amount: rupees(amountPaise) })
+    background(async () => notifyEvent("refund_bank_started", [await recipient(r.userId)], { amount: rupees(amountPaise) }))
     return {
       ok: true,
       message: r.status === "completed"

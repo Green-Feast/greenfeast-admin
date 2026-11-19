@@ -1,6 +1,7 @@
 import "server-only";
 import { supabaseAdmin } from "./supabase-admin";
 import { notifyEvent } from "./notifications";
+import { background } from "./background";
 import { dbError, type SensitiveCtx } from "./audit";
 import { rupees } from "./money-labels";
 import type { ProofInput } from "@/components/payment-proof";
@@ -90,7 +91,8 @@ export async function recordCod(ctx: SensitiveCtx, subId: string, input: CodInpu
     details: { cash: input.cashPaise, upi: input.upiPaise, upi_reference: input.upiReference, paid_on: input.paidOn, cash_report: cashReportId, duplicate: res.duplicate } });
   if (res.duplicate) return { ok: true, message: "Already recorded.", paymentId: res.payment_id };
   if (res.user_id) {
-    await notifyEvent("cash_received", [await recipient(res.user_id)], { amount: rupees(res.amount ?? 0), cash_due: rupees(0) });
+    const uid = res.user_id;
+    background(async () => notifyEvent("cash_received", [await recipient(uid)], { amount: rupees(res.amount ?? 0), cash_due: rupees(0) }));
   }
   const parts = [input.cashPaise > 0 ? `${rupees(input.cashPaise)} cash` : null, input.upiPaise > 0 ? `${rupees(input.upiPaise)} UPI` : null].filter(Boolean);
   return { ok: true, message: `${parts.join(" + ")} recorded — all cash collected.`, paymentId: res.payment_id };
