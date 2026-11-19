@@ -399,10 +399,10 @@ export function ProfileClient({
                 {isPaused ? (
                   <ActionBtn
                     icon={<Play className="w-3.5 h-3.5" />}
-                    label="Resume"
+                    label="Resume deliveries"
                     color="green"
                     disabled={isPending}
-                    onClick={() => run(() => resumeSubscription(subscriptionId), "Subscription resumed.")}
+                    onClick={() => run(() => resumeSubscription(subscriptionId), "Deliveries resumed.")}
                   />
                 ) : pauseForLater ? (
                   <ActionBtn
@@ -415,7 +415,7 @@ export function ProfileClient({
                 ) : (
                   <ActionBtn
                     icon={<Pause className="w-3.5 h-3.5" />}
-                    label="Pause"
+                    label="Pause deliveries"
                     color="yellow"
                     disabled={isPending}
                     onClick={() => setModal("pause")}
@@ -569,7 +569,7 @@ export function ProfileClient({
                 {perDayCost > 0 && <InfoRow label="Default cart/day" value={fmtRupees(perDayCost)} />}
                 {isPaused && (
                   <>
-                    <InfoRow label="Paused from"  value={fmtDate(subscription.pauseFrom)} />
+                    <InfoRow label="Deliveries paused from"  value={fmtDate(subscription.pauseFrom)} />
                     <InfoRow label="Paused until" value={fmtDate(subscription.pauseUntil)} highlight />
                   </>
                 )}
@@ -989,7 +989,7 @@ export function ProfileClient({
 
       {modal === "pause" && (
         <ModalOverlay onClose={() => setModal(null)}>
-          <ModalCard title="Pause subscription" onClose={() => setModal(null)}>
+          <ModalCard title="Pause deliveries" onClose={() => setModal(null)}>
             <div className="space-y-4">
               <Field label="Pause from">
                 <input type="date" min={today()} value={pauseFrom} onChange={(e) => setPauseFrom(e.target.value)} className={inputCls} />
@@ -997,13 +997,13 @@ export function ProfileClient({
               <Field label="Pause until">
                 <input type="date" min={pauseFrom || today()} value={pauseUntil} onChange={(e) => setPauseUntil(e.target.value)} className={inputCls} />
               </Field>
-              <p className="text-xs text-gray-400">All scheduled orders in this range will be cancelled.</p>
+              <p className="text-xs text-gray-400">All deliveries in this range will be cancelled. Walk-ins stay open.</p>
             </div>
             <ModalFooter>
               <GhostBtn onClick={() => setModal(null)}>Cancel</GhostBtn>
               <PrimaryBtn
                 disabled={!pauseFrom || !pauseUntil || isPending}
-                onClick={() => run(() => pauseSubscription(subscriptionId, pauseFrom, pauseUntil), "Subscription paused.", () => setModal(null))}
+                onClick={() => run(() => pauseSubscription(subscriptionId, pauseFrom, pauseUntil), "Deliveries paused.", () => setModal(null))}
               >
                 Confirm Pause
               </PrimaryBtn>
