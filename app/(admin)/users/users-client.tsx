@@ -767,11 +767,19 @@ function CreateSubModal({
   const [mealsLunch, setMealsLunch] = useState(choices ? choices.mealsLunch : 1)
   const [mealsDinner, setMealsDinner] = useState(choices ? choices.mealsDinner : 0)
   const [activation, setActivation] = useState<"active" | "cod">("active")
-  // First delivery: the next morning's meals by default — today until the
-  // 9 AM lunch cutoff (a plan set up after midnight starts that same day),
-  // else tomorrow.
-  const [startDate, setStartDate] = useState(() =>
-    istHour() < SLOT_CUTOFF_HOUR.lunch ? istToday() : addDaysISO(istToday(), 1))
+  // First delivery by default: today if the plan's first meal of the day can
+  // still be made — before 9 AM with lunches, before 2 PM for a dinner-only
+  // plan — else tomorrow. (A dinner-only plan set up at 10:47 AM used to start
+  // the next day, losing that evening's dinner.) A date the office picks
+  // itself is never changed.
+  const defaultStart = (lunches: number) =>
+    istHour() < (lunches > 0 ? SLOT_CUTOFF_HOUR.lunch : SLOT_CUTOFF_HOUR.dinner) ? istToday() : addDaysISO(istToday(), 1)
+  const [startDate, setStartDateRaw] = useState(() => defaultStart(mealsLunch))
+  const [startPicked, setStartPicked] = useState(false)
+  const setStartDate = (d: string) => { setStartPicked(true); setStartDateRaw(d) }
+  useEffect(() => {
+    if (!startPicked) setStartDateRaw(defaultStart(mealsLunch))
+  }, [mealsLunch, mealsDinner]) // eslint-disable-line react-hooks/exhaustive-deps
   const startDay = new Date(startDate + "T00:00:00Z")
   const plan = plans.find((p) => p.id === planId)
   const [mealsLeft, setMealsLeft] = useState(plans.find((p) => p.id === planId)?.meals_total ?? plans[0]?.meals_total ?? 1)
