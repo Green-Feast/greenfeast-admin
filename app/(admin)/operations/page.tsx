@@ -2,7 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAdmin } from "@/lib/auth"
 import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist";
 import { isTestMode } from "@/lib/mode";
-import { DRINK_NOT_PICKED } from "@/lib/drinks";
+import { drinkNotPicked } from "@/lib/drinks";
 import { OperationsClient, type OperationsSubscriber, type CashReportRow, type EarlierDay } from "./operations-client";
 import type { KitchenClosure } from "./kitchen-closure";
 import { fullAddressText } from "@/lib/address"
@@ -209,7 +209,7 @@ export default async function OperationsPage({
     const drinkDish = drinkId ? drinkNameById.get(drinkId) : undefined;
     const drinkList = lines
       .filter((l) => l.isDrink)
-      .map((l) => ({ name: drinkDish ?? (l.subOption?.trim() || DRINK_NOT_PICKED), qty: l.qty }));
+      .map((l) => ({ name: drinkDish ?? (l.subOption?.trim() || drinkNotPicked(l.name)), qty: l.qty }));
 
     return {
       orderId: o.id as string,

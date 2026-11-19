@@ -26,7 +26,7 @@ export type ListRow = {
   constraints: string
   addons: string
   addonList: { name: string; qty: number }[]
-  // The meal's drink, apart from add-ons: "Blue Mind", "Drink not picked", or ""
+  // The meal's drink, apart from add-ons: "Blue Mind", "Smoothie — flavour not picked", or ""
   // when the plan has no drink. drinkList feeds the per-drink tally.
   drink: string
   drinkList: { name: string; qty: number }[]
@@ -104,7 +104,7 @@ export function buildSections(rows: ListRow[], slots: Slot[]): Section[] {
 
 // "Burrito Bowl: 28 | Italian Harvest: 1 | Drinks: Blue Mind ×12, Avo Clarity ×4"
 // — portions per dish, then the drinks per drink (made separately; other
-// add-ons go on the bowl). A drink line with no dish picked tallies as "Drink not picked".
+// add-ons go on the bowl). A drink line with no dish picked tallies as "Smoothie — flavour not picked".
 function tally(rows: ListRow[]) {
   const meals = new Map<string, number>()
   const drinks = new Map<string, number>()
