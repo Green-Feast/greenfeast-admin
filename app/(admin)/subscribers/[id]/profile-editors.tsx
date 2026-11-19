@@ -574,14 +574,18 @@ export function AddPaidMealsModal({ mealUnit, pending, onClose, onSave }: {
   mealUnit: number
   pending: boolean
   onClose: () => void
-  onSave: (meals: number, collect: boolean, proof: ProofInput | null, idempotencyKey: string) => void
+  onSave: (meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string) => void
 }) {
   const [meals, setMeals] = useState(1)
+  const [reason, setReason] = useState("")
   const [collect, setCollect] = useState(false)
   const [proof, setProof] = useState<ProofInput>(emptyProof)
   const [key] = useState(() => crypto.randomUUID())
   const amount = mealUnit * meals
-  const problem = mealUnit <= 0 ? "This plan has no meal price." : collect ? null : proofProblem(proof, amount)
+  const problem =
+    mealUnit <= 0 ? "This plan has no meal price." :
+    reason.trim().length < 3 ? "Write why these meals are being added." :
+    collect ? null : proofProblem(proof, amount)
   return (
     <ModalOverlay onClose={onClose}>
       <ModalCard title="Add paid meals" onClose={onClose}>
@@ -608,11 +612,21 @@ export function AddPaidMealsModal({ mealUnit, pending, onClose, onSave }: {
           ) : (
             <PaymentProofFields value={proof} onChange={setProof} amountPaise={amount} />
           )}
-          <p className="text-xs text-gray-400">Free meals (a trial, a goodwill gesture) go through Gift meals in Rewards instead.</p>
+          <Field label="Reason (required)" hint="Kept in the admin log and on the wallet entry.">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              placeholder="e.g. Paid ₹1,296 on WhatsApp for 4 more meals before renewing"
+              className="w-full rounded-lg border border-[#e2e8d5] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+            />
+          </Field>
+          {reason.trim().length < 3 && <p className="text-xs text-amber-700">Write why these meals are being added.</p>}
+          <p className="text-xs text-gray-400">Free meals (a trial, a goodwill gesture) go through Gift meals in Rewards instead. You'll be asked for your action password.</p>
         </div>
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(meals, collect, collect ? null : proof, key)}>
+          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(meals, collect, collect ? null : proof, reason.trim(), key)}>
             Add {meals} meal{meals === 1 ? "" : "s"}
           </PrimaryBtn>
         </ModalFooter>
@@ -791,7 +805,7 @@ export function RecordDeliveryModal({
             </div>
           </div>
 
-          <Field label="Why it wasn't in the app">
+          <Field label="Reason (required) — why it wasn't in the app" hint="Kept in the admin log and on the order. You'll be asked for your action password.">
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}

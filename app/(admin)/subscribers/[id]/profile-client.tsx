@@ -1149,9 +1149,9 @@ export function ProfileClient({
           mealUnit={adjust.mealUnit}
           pending={isPending}
           onClose={() => setModal(null)}
-          onSave={(meals, collect, proof, key) => secure(
-            `Add ${meals} paid meal${meals === 1 ? "" : "s"} (${fmtRupees(meals * adjust.mealUnit)}${collect ? ", cash to collect" : " received"}) for ${user.name || "this customer"}.`,
-            (pw) => addPaidMeals(subscriptionId, meals, collect, proof, key, pw),
+          onSave={(meals, collect, proof, reason, key) => secure(
+            `Add ${meals} paid meal${meals === 1 ? "" : "s"} (${fmtRupees(meals * adjust.mealUnit)}${collect ? ", cash to collect" : " received"}) for ${user.name || "this customer"} — ${reason}`,
+            (pw) => addPaidMeals(subscriptionId, meals, collect, proof, reason, key, pw),
           )}
         />
       )}
@@ -1170,7 +1170,7 @@ export function ProfileClient({
           pending={isPending}
           onClose={() => setModal(null)}
           onSave={(v) => secure(
-            `Record ${user.name || "this customer"}'s ${v.slot} on ${v.date} as delivered and charge the wallet.`,
+            `Record ${user.name || "this customer"}'s ${v.slot} on ${v.date} as delivered and charge the wallet — ${v.reason}`,
             (pw) => recordDelivery(subscriptionId, v, pw),
           )}
         />

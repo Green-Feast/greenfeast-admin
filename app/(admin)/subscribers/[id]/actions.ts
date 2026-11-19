@@ -525,9 +525,10 @@ export async function removeCustomerAddress(subId: string, addressId: string): P
 // (a payment with its proof, into the wallet) or cash still to collect (added
 // to cash due; the meals run on credit). Free meals are Gift meals instead.
 export async function addPaidMeals(
-  subId: string, meals: number, collect: boolean, proof: ProofInput | null, idempotencyKey: string, password: string
+  subId: string, meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string, password: string
 ): Promise<ActionResult> {
-  return sensitive("subscribers.addPaidMeals", password, { subscriptionId: subId, details: { meals, collect } }, async (ctx): Promise<ActionResult> => {
+  return sensitive("subscribers.addPaidMeals", password, { subscriptionId: subId, details: { meals, collect, reason } }, async (ctx): Promise<ActionResult> => {
+    if (reason.trim().length < 3) return { ok: false, error: "Say why these meals are being added." }
     if (!Number.isInteger(meals) || meals < 1 || meals > 90) return { ok: false, error: "Add between 1 and 90 meals." }
     const { data: unit } = await supabaseAdmin.rpc("default_meal_cost", { p_sub: subId })
     const amount = ((unit as number | null) ?? 0) * meals
@@ -543,6 +544,7 @@ export async function addPaidMeals(
       p_reference: collect ? null : proof!.reference,
       p_paid_on: collect ? null : proof!.paidOn,
       p_note: collect ? null : (proof!.note || null),
+      p_reason: reason.trim(),
       p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: collect ? null : idempotencyKey,
     })
     if (error) return { ok: false, error: dbError(error, "Could not add the meals.") }
