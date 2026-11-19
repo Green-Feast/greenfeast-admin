@@ -8,7 +8,9 @@ function isAuthorized(req: NextRequest) {
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
-// Every subscription only ever gets orders for the *next 14 days* at the
+// 094: this nightly run only fills gaps up to the published Sunday (pause
+// endings, money arriving); the Sunday 7 PM /api/cron/weekly-menu run makes
+// the next week. History: every subscription only got orders for the *next 14 days* at the
 // moment instantiate-orders is called (subscription creation, resume, or a
 // one-time client-side check when the app's My Plan screen loads with zero
 // upcoming orders) — nothing re-invokes it on an ongoing basis. A subscriber

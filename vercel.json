@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/instantiate-orders",
       "schedule": "30 19 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-menu",
+      "schedule": "30 13 * * 0"
     }
   ]
 }

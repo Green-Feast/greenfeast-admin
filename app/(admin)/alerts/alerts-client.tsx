@@ -21,6 +21,7 @@ const KIND_TONE: Record<string, string> = {
   bad_rating: "bg-red-100 text-red-700",
   app_feedback: "bg-blue-100 text-blue-700",
   address_moved: "bg-amber-100 text-amber-800",
+  menu_reminder: "bg-amber-100 text-amber-800",
   test: "bg-gray-100 text-gray-600",
 }
 const KIND_LABEL: Record<string, string> = {
@@ -34,6 +35,7 @@ const KIND_LABEL: Record<string, string> = {
   bad_rating: "Rating",
   app_feedback: "Feedback",
   address_moved: "Address",
+  menu_reminder: "Menu",
   test: "Test",
 }
 

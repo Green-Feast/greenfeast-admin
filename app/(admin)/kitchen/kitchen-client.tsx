@@ -314,6 +314,7 @@ export function KitchenClient({
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Kitchen Menu</h1>
         <p className="text-gray-600">One weekly menu for every subscriber. Changes apply to future meals nobody has changed.</p>
+        <p className="mt-1 text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 inline-block">Next week&apos;s meals are made every <b>Sunday at 7 PM</b> from this menu — finish changes by <b>6 PM</b>. Whatever isn&apos;t changed stays as this week&apos;s.</p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
