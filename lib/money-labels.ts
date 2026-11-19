@@ -43,6 +43,7 @@ export const SOURCE: Record<string, string> = {
   admin_activation: "Activated by admin",
   cod_collection: "Cash on delivery",
   partner_cod: "Cash on delivery (partner)",
+  admin_paid_meals: "Paid meals (admin)",
 }
 export const sourceLabel = (s: string | null | undefined) => (s ? SOURCE[s] ?? s : "—")
 

@@ -3,7 +3,8 @@
 // Edit dialogs for the subscriber profile — everything a customer can tell
 // us on WhatsApp, the admin can now set here: details, plan, food
 // preferences, addresses, wallet, cash-on-delivery, fixed dishes. (Wallet money only moves through payments,
-// gifts, referrals and refunds — there is no manual wallet adjustment.)
+// gifts, referrals and refunds — no manual wallet adjustment. Add paid meals
+// (099) is a payment with proof, always meals × the plan's meal price.)
 
 import { planMealRate } from "@/lib/pricing"
 import { useState } from "react"
@@ -560,6 +561,269 @@ export function FixedDishModal({ meals, pending, onClose, onSave }: {
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
           <PrimaryBtn disabled={pending || !meal} onClick={() => onSave(slot, day === "every" ? null : Number(day), meal)}>Save</PrimaryBtn>
+        </ModalFooter>
+      </ModalCard>
+    </ModalOverlay>
+  )
+}
+
+// ── Add paid meals (099) ──────────────────────────────────────────────────
+
+export function AddPaidMealsModal({ mealUnit, pending, onClose, onSave }: {
+  /** One meal of "meals left": the plan's meal with its add-ons and drink share. */
+  mealUnit: number
+  pending: boolean
+  onClose: () => void
+  onSave: (meals: number, collect: boolean, proof: ProofInput | null, idempotencyKey: string) => void
+}) {
+  const [meals, setMeals] = useState(1)
+  const [collect, setCollect] = useState(false)
+  const [proof, setProof] = useState<ProofInput>(emptyProof)
+  const [key] = useState(() => crypto.randomUUID())
+  const amount = mealUnit * meals
+  const problem = mealUnit <= 0 ? "This plan has no meal price." : collect ? null : proofProblem(proof, amount)
+  return (
+    <ModalOverlay onClose={onClose}>
+      <ModalCard title="Add paid meals" onClose={onClose}>
+        <div className="space-y-4">
+          <Field label="Meals">
+            <Stepper value={meals} setValue={setMeals} min={1} max={90} />
+          </Field>
+          <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm">
+            <p>
+              {meals} × {fmtRupees(mealUnit)} = <span className="font-semibold">{fmtRupees(amount)}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">The plan&apos;s meal price, with its add-ons and drink — the amount can&apos;t be changed.</p>
+          </div>
+          <Field label="Payment">
+            <Chips
+              single
+              options={[{ value: "received", label: "Received" }, { value: "collect", label: "Cash to collect" }]}
+              value={[collect ? "collect" : "received"]}
+              onChange={(v) => setCollect(v[0] === "collect")}
+            />
+          </Field>
+          {collect ? (
+            <p className="text-xs text-gray-500">Added to the cash to collect — the meals run on credit until you record the cash.</p>
+          ) : (
+            <PaymentProofFields value={proof} onChange={setProof} amountPaise={amount} />
+          )}
+          <p className="text-xs text-gray-400">Free meals (a trial, a goodwill gesture) go through Gift meals in Rewards instead.</p>
+        </div>
+        <ModalFooter>
+          <GhostBtn onClick={onClose}>Cancel</GhostBtn>
+          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(meals, collect, collect ? null : proof, key)}>
+            Add {meals} meal{meals === 1 ? "" : "s"}
+          </PrimaryBtn>
+        </ModalFooter>
+      </ModalCard>
+    </ModalOverlay>
+  )
+}
+
+// ── Record a delivery (099) ───────────────────────────────────────────────
+
+type RecordRow = { kind: "meal" | "drink"; dish: string; qty: number; addons: Record<string, number> }
+
+export type RecordDeliveryValue = {
+  date: string
+  slot: "lunch" | "dinner"
+  mode: "delivery" | "dine_in" | "pickup"
+  addressId: string | null
+  locationId: string | null
+  reason: string
+  items: { kind: "meal" | "drink"; dish: string; qty: number; addons: { id: string; qty: number }[] }[]
+}
+
+export function RecordDeliveryModal({
+  meals, drinks, addons, addresses, locations, mealRate, drinkPrice, premium, walletBalance, pending, onClose, onSave,
+}: {
+  meals: { id: string; name: string; category: string }[]
+  drinks: { id: string; name: string; category: string }[]
+  addons: { id: string; name: string; price_per_meal: number }[]
+  addresses: { id: string; label: string | null; type: string | null; line1: string | null; is_default: boolean }[]
+  locations: { id: string; name: string }[]
+  mealRate: number
+  drinkPrice: number
+  premium: Record<string, number>
+  walletBalance: number
+  pending: boolean
+  onClose: () => void
+  onSave: (v: RecordDeliveryValue) => void
+}) {
+  const today = istToday()
+  const [date, setDate] = useState(today)
+  const [slot, setSlot] = useState<"lunch" | "dinner">("lunch")
+  const [mode, setMode] = useState<"delivery" | "dine_in" | "pickup">("delivery")
+  const [addressId, setAddressId] = useState(addresses.find((a) => a.is_default)?.id ?? addresses[0]?.id ?? "")
+  const [locationId, setLocationId] = useState(locations[0]?.id ?? "")
+  const [reason, setReason] = useState("")
+  const [rows, setRows] = useState<RecordRow[]>([{ kind: "meal", dish: meals[0]?.id ?? "", qty: 1, addons: {} }])
+
+  const setRow = (i: number, patch: Partial<RecordRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const rowCost = (r: RecordRow) =>
+    r.kind === "drink"
+      ? drinkPrice * r.qty
+      : (mealRate + (premium[r.dish] ?? 0)) * r.qty +
+        Object.entries(r.addons).reduce((n, [id, q]) => n + (addons.find((a) => a.id === id)?.price_per_meal ?? 0) * q, 0)
+  const total = rows.reduce((n, r) => n + rowCost(r), 0)
+
+  const problem =
+    !date || date > today ? "Only today or an earlier day." :
+    rows.length === 0 || rows.some((r) => !r.dish) ? "Add what was delivered." :
+    mode === "delivery" && !addressId ? "Pick the address it went to." :
+    mode !== "delivery" && !locationId ? "Pick the counter." :
+    reason.trim().length < 3 ? "Say why it wasn't in the app." :
+    total > walletBalance ? `The wallet has ${fmtRupees(walletBalance)} — this costs ${fmtRupees(total)}. Add paid meals first.` :
+    null
+
+  return (
+    <ModalOverlay onClose={onClose} wide>
+      <ModalCard title="Record a delivery" onClose={onClose}>
+        <div className="space-y-4">
+          <p className="text-xs text-gray-500">
+            For a meal that went out but isn&apos;t in the app — it was skipped, had no batch, or the customer called.
+            It&apos;s charged to the wallet like any delivery and shows in their order history. If the meal is still
+            in the app, use Mark delivered in the day editor instead.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Day">
+              <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="Meal">
+              <select value={slot} onChange={(e) => setSlot(e.target.value as "lunch" | "dinner")} className={inputCls}>
+                <option value="lunch">Lunch</option>
+                <option value="dinner">Dinner</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="How">
+              <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} className={inputCls}>
+                <option value="delivery">Delivered</option>
+                <option value="dine_in">Dine-in at a counter</option>
+                <option value="pickup">Takeaway from a counter</option>
+              </select>
+            </Field>
+            {mode === "delivery" ? (
+              <Field label="Address">
+                <select value={addressId} onChange={(e) => setAddressId(e.target.value)} className={inputCls}>
+                  {addresses.length === 0 && <option value="">No address on file</option>}
+                  {addresses.map((a) => (
+                    <option key={a.id} value={a.id}>{a.label || a.type || "Address"} — {a.line1 ?? ""}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : (
+              <Field label="Counter">
+                <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className={inputCls}>
+                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+              </Field>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-[#1A1A1A]">What went out</p>
+            {rows.map((r, i) => (
+              <div key={i} className="rounded-xl border border-[#e2e8d5] p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <select value={r.dish} onChange={(e) => setRow(i, { dish: e.target.value })} className={cn(inputCls, "flex-1")}>
+                    {(r.kind === "meal" ? meals : drinks).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.category}){premium[m.id] ? ` +${fmtRupees(premium[m.id])}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <Stepper value={r.qty} setValue={(n) => setRow(i, { qty: n })} min={1} max={10} />
+                  <button
+                    type="button"
+                    onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                    className="w-9 h-9 rounded-lg border border-[#e2e8d5] text-gray-400 hover:bg-gray-50"
+                    aria-label="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+                {r.kind === "meal" && addons.length > 0 && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                    {addons.map((a) => (
+                      <label key={a.id} className="flex items-center gap-1.5 text-xs text-gray-600">
+                        {a.name} +{fmtRupees(a.price_per_meal)}
+                        <input
+                          type="number" min={0} max={20} value={r.addons[a.id] ?? 0}
+                          onChange={(e) => {
+                            const q = Math.max(0, Math.min(20, parseInt(e.target.value) || 0))
+                            const next = { ...r.addons }
+                            if (q > 0) next[a.id] = q
+                            else delete next[a.id]
+                            setRow(i, { addons: next })
+                          }}
+                          className="w-14 h-8 rounded-md border border-[#e2e8d5] px-2 text-xs"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-gray-500 text-right">
+                  {r.kind === "drink" ? "Drink" : "Meal"} · {fmtRupees(rowCost(r))}
+                </p>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setRows((rs) => [...rs, { kind: "meal", dish: meals[0]?.id ?? "", qty: 1, addons: {} }])}
+                className="px-3 py-1.5 rounded-lg border border-[#e2e8d5] text-xs font-medium hover:bg-gray-50"
+              >
+                + Meal
+              </button>
+              {drinks.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRows((rs) => [...rs, { kind: "drink", dish: drinks[0].id, qty: 1, addons: {} }])}
+                  className="px-3 py-1.5 rounded-lg border border-[#e2e8d5] text-xs font-medium hover:bg-gray-50"
+                >
+                  + Drink
+                </button>
+              )}
+            </div>
+          </div>
+
+          <Field label="Why it wasn't in the app">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              placeholder="e.g. Customer called at 1 PM — the lunch was skipped but they wanted it"
+              className="w-full rounded-lg border border-[#e2e8d5] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+            />
+          </Field>
+
+          <div className="flex items-center justify-between rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm">
+            <span>Charged to the wallet <span className="text-xs text-gray-500">(has {fmtRupees(walletBalance)})</span></span>
+            <span className="font-semibold">{fmtRupees(total)}</span>
+          </div>
+          {problem && <p className="text-xs text-amber-700">{problem}</p>}
+        </div>
+        <ModalFooter>
+          <GhostBtn onClick={onClose}>Cancel</GhostBtn>
+          <PrimaryBtn
+            disabled={pending || !!problem}
+            onClick={() => onSave({
+              date, slot, mode,
+              addressId: mode === "delivery" ? addressId : null,
+              locationId: mode === "delivery" ? null : locationId,
+              reason: reason.trim(),
+              items: rows.map((r) => ({
+                kind: r.kind, dish: r.dish, qty: r.qty,
+                addons: r.kind === "meal" ? Object.entries(r.addons).map(([id, qty]) => ({ id, qty })) : [],
+              })),
+            })}
+          >
+            Record and charge {fmtRupees(total)}
+          </PrimaryBtn>
         </ModalFooter>
       </ModalCard>
     </ModalOverlay>

@@ -4,7 +4,7 @@ import Link from "next/link"
 import { ChevronRight } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { istToday, addDaysISO, earlierDaysStart } from "@/lib/ist"
-import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
+import { DRINK_CATEGORIES, DRINK_CATEGORY_LIST } from "@/lib/drinks"
 import { ProfileClient } from "./profile-client"
 import { refundablePayments } from "@/lib/money-ops"
 
@@ -132,7 +132,7 @@ export default async function SubscriberProfilePage({
       .not("category", "in", DRINK_CATEGORY_LIST) // a drink comes with the meal, it isn't one
       .order("category")
       .order("name"),
-    supabaseAdmin.from("addons").select("id, name, price_per_meal").eq("is_active", true).order("name"),
+    supabaseAdmin.from("addons").select("id, name, price_per_meal, is_drink").eq("is_active", true).order("name"),
     supabaseAdmin.from("plans").select("id, name, base_price, meals_total").eq("is_active", true).order("base_price"),
     supabaseAdmin.auth.admin.getUserById(userId),
     // Cash a delivery partner reported collecting — recorded by the office.
@@ -157,6 +157,18 @@ export default async function SubscriberProfilePage({
   ])
 
   const userName = (user as any).name ?? "Unknown"
+  // Add paid meals / Record a delivery (099): the plan's meal price (what one
+  // meal of "meals left" costs), the prices a recorded delivery charges, and
+  // the drinks and counters it can name.
+  const [{ data: mealUnit }, { data: mealRate }, { data: drinkPrice }, { data: drinkRows }, { data: locationRows }, { data: premiumRows }] = await Promise.all([
+    supabaseAdmin.rpc("default_meal_cost", { p_sub: id }),
+    supabaseAdmin.rpc("subscription_meal_rate", { p_sub: id }),
+    supabaseAdmin.rpc("drink_price"),
+    supabaseAdmin.from("meal_templates").select("id, name, category").eq("is_active", true).in("category", DRINK_CATEGORIES).order("name"),
+    supabaseAdmin.from("pickup_locations").select("id, name").order("name"),
+    supabaseAdmin.from("meal_templates").select("id, premium_paise").gt("premium_paise", 0),
+  ])
+
   const addrLabel = new Map(((addresses ?? []) as any[]).map((a) => [a.id, a.label || a.type || "Address"]))
 
   return (
@@ -273,11 +285,19 @@ export default async function SubscriberProfilePage({
         }))}
         catalogue={{
           meals: (meals ?? []) as { id: string; name: string; category: string }[],
-          addons: (addons ?? []) as { id: string; name: string; price_per_meal: number }[],
+          addons: (addons ?? []) as { id: string; name: string; price_per_meal: number; is_drink?: boolean }[],
           plans: (plans ?? []) as { id: string; name: string; base_price: number; meals_total: number }[],
         }}
         refundable={refundable}
         otherLivePlans={otherLive ?? 0}
+        adjust={{
+          mealUnit: (mealUnit as number | null) ?? 0,
+          mealRate: (mealRate as number | null) ?? 0,
+          drinkPrice: (drinkPrice as number | null) ?? 0,
+          drinks: (drinkRows ?? []) as { id: string; name: string; category: string }[],
+          locations: (locationRows ?? []) as { id: string; name: string }[],
+          premium: Object.fromEntries(((premiumRows ?? []) as { id: string; premium_paise: number }[]).map((r) => [r.id, r.premium_paise])),
+        }}
       />
     </div>
   )

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import {
   Phone, Calendar, MapPin, Utensils, StickyNote, Pencil, Mail,
   Pause, Play, X, Plus, CheckCircle, AlertCircle, Pin,
-  Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle,
+  Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle, PackageCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useActionPassword } from "@/components/action-password"
@@ -30,11 +30,14 @@ import {
   saveCustomerAddress,
   makeDefaultAddress,
   removeCustomerAddress,
+  addPaidMeals,
+  recordDelivery,
   type ActionResult,
 } from "./actions"
 import {
   ModalOverlay, ModalCard, ModalFooter, Field, GhostBtn, PrimaryBtn, DangerBtn, inputCls, fmtRupees,
   IdentityModal, PlanModal, DietaryModal, AddressModal, CashModal, ActivateModal, FixedDishModal,
+  AddPaidMealsModal, RecordDeliveryModal,
   type DietaryValue, type AddressFormValue,
 } from "./profile-editors"
 import { mapsLink } from "@/lib/address"
@@ -102,7 +105,7 @@ type Rule = { id: string; slot: "lunch" | "dinner"; dayOfWeek: number | null; me
 
 type Catalogue = {
   meals: { id: string; name: string; category: string }[]
-  addons: { id: string; name: string; price_per_meal: number }[]
+  addons: { id: string; name: string; price_per_meal: number; is_drink?: boolean }[]
   plans: { id: string; name: string; base_price: number; meals_total: number }[]
 }
 
@@ -169,7 +172,7 @@ export type WalletTx = {
 
 type Modal =
   | "pause" | "cancel" | "identity" | "plan" | "dietary" | "address"
-  | "cash" | "activate" | "fixed" | null
+  | "cash" | "activate" | "fixed" | "paidMeals" | "recordDelivery" | null
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -192,6 +195,7 @@ export function ProfileClient({
   catalogue,
   refundable,
   otherLivePlans,
+  adjust,
 }: {
   subscriptionId: string
   subscription: Subscription
@@ -214,6 +218,15 @@ export function ProfileClient({
   refundable: RefundablePayment[]
   /** Other active / paused / pending plans of this customer. */
   otherLivePlans: number
+  /** Add paid meals / Record a delivery (099). */
+  adjust: {
+    mealUnit: number
+    mealRate: number
+    drinkPrice: number
+    drinks: { id: string; name: string; category: string }[]
+    locations: { id: string; name: string }[]
+    premium: Record<string, number>
+  }
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -421,6 +434,24 @@ export function ProfileClient({
                     onClick={() => setModal("pause")}
                   />
                 )}
+              </>
+            )}
+            {!isPendingPlan && (
+              <>
+                <ActionBtn
+                  icon={<Plus className="w-3.5 h-3.5" />}
+                  label="Add paid meals"
+                  color="blue"
+                  disabled={isPending}
+                  onClick={() => setModal("paidMeals")}
+                />
+                <ActionBtn
+                  icon={<PackageCheck className="w-3.5 h-3.5" />}
+                  label="Record a delivery"
+                  color="blue"
+                  disabled={isPending}
+                  onClick={() => setModal("recordDelivery")}
+                />
               </>
             )}
             <ActionBtn
@@ -1109,6 +1140,38 @@ export function ProfileClient({
           onSave={(paid, due, proof, key) => secure(
             `Activate ${subscription.planName} for ${user.name || "this customer"}${paid > 0 ? ` with ${fmtRupees(paid)} received` : ""}.`,
             (pw) => activatePendingPlan(subscriptionId, paid, due, proof, key, pw),
+          )}
+        />
+      )}
+
+      {modal === "paidMeals" && (
+        <AddPaidMealsModal
+          mealUnit={adjust.mealUnit}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(meals, collect, proof, key) => secure(
+            `Add ${meals} paid meal${meals === 1 ? "" : "s"} (${fmtRupees(meals * adjust.mealUnit)}${collect ? ", cash to collect" : " received"}) for ${user.name || "this customer"}.`,
+            (pw) => addPaidMeals(subscriptionId, meals, collect, proof, key, pw),
+          )}
+        />
+      )}
+
+      {modal === "recordDelivery" && (
+        <RecordDeliveryModal
+          meals={catalogue.meals}
+          drinks={adjust.drinks}
+          addons={catalogue.addons.filter((a) => !a.is_drink)}
+          addresses={addresses}
+          locations={adjust.locations}
+          mealRate={adjust.mealRate}
+          drinkPrice={adjust.drinkPrice}
+          premium={adjust.premium}
+          walletBalance={walletBalance ?? 0}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(v) => secure(
+            `Record ${user.name || "this customer"}'s ${v.slot} on ${v.date} as delivered and charge the wallet.`,
+            (pw) => recordDelivery(subscriptionId, v, pw),
           )}
         />
       )}

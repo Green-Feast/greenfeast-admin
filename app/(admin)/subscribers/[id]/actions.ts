@@ -8,7 +8,7 @@ import { istToday, isSlotLocked } from "@/lib/ist"
 import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { syncUpcomingOrders, type PlanShape } from "@/lib/plan-sync"
-import { audited, sensitive } from "@/lib/audit"
+import { audited, dbError, sensitive } from "@/lib/audit"
 import { recordCod, recordOfficePayment, settleBalance, validProof, type CodInput, type SettleInput } from "@/lib/money-ops"
 import { servicePincodeError } from "@/lib/address-server"
 import type { ProofInput } from "@/components/payment-proof"
@@ -516,5 +516,87 @@ export async function removeCustomerAddress(subId: string, addressId: string): P
     revalidatePath(`/subscribers/${subId}`)
     revalidatePath("/batches")
     return { ok: true, message: data === "archived" ? "Address removed (kept on past orders)." : "Address deleted." }
+  })
+}
+
+// ── Office adjustments (099) ──────────────────────────────────────────────
+
+// Add paid meals: always meals × the plan's meal price — money received
+// (a payment with its proof, into the wallet) or cash still to collect (added
+// to cash due; the meals run on credit). Free meals are Gift meals instead.
+export async function addPaidMeals(
+  subId: string, meals: number, collect: boolean, proof: ProofInput | null, idempotencyKey: string, password: string
+): Promise<ActionResult> {
+  return sensitive("subscribers.addPaidMeals", password, { subscriptionId: subId, details: { meals, collect } }, async (ctx): Promise<ActionResult> => {
+    if (!Number.isInteger(meals) || meals < 1 || meals > 90) return { ok: false, error: "Add between 1 and 90 meals." }
+    const { data: unit } = await supabaseAdmin.rpc("default_meal_cost", { p_sub: subId })
+    const amount = ((unit as number | null) ?? 0) * meals
+    if (!collect) {
+      const bad = validProof(proof, amount)
+      if (bad) return { ok: false, error: bad }
+    }
+    const { data, error } = await supabaseAdmin.rpc("admin_add_paid_meals", {
+      p_sub: subId, p_meals: meals, p_collect: collect,
+      p_method: collect ? null : proof!.method,
+      p_cash: !collect && proof!.method === "cash_upi" ? proof!.cashPaise : null,
+      p_upi: !collect && proof!.method === "cash_upi" ? proof!.upiPaise : null,
+      p_reference: collect ? null : proof!.reference,
+      p_paid_on: collect ? null : proof!.paidOn,
+      p_note: collect ? null : (proof!.note || null),
+      p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: collect ? null : idempotencyKey,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not add the meals.") }
+    const r = data as { amount: number; unit: number; meals_left: number | null; user_id: string; payment_id?: string; duplicate?: boolean }
+    if (r.duplicate) return { ok: true, message: "Already added — that was a double click." }
+    ctx.note({ userId: r.user_id, amountPaise: r.amount, ref: r.payment_id ?? null, details: { unit: r.unit, meals_left: r.meals_left } })
+    // New money can bring back meals the run skipped for a short wallet.
+    await instantiateOrders(subId)
+    revalidatePath(`/subscribers/${subId}`)
+    revalidatePath("/money")
+    revalidatePath("/dashboard")
+    return {
+      ok: true,
+      message: collect
+        ? `${meals} meal${meals === 1 ? "" : "s"} added — ${rupees(r.amount)} added to the cash to collect. About ${r.meals_left ?? "—"} meals left.`
+        : `${meals} meal${meals === 1 ? "" : "s"} added — ${rupees(r.amount)} in the wallet. About ${r.meals_left ?? "—"} meals left.`,
+    }
+  })
+}
+
+export type RecordedItem = { kind: "meal" | "drink"; dish: string; qty: number; addons?: { id: string; qty: number }[] }
+export type RecordDeliveryInput = {
+  date: string
+  slot: "lunch" | "dinner"
+  items: RecordedItem[]
+  mode: "delivery" | "dine_in" | "pickup"
+  addressId: string | null
+  locationId: string | null
+  reason: string
+}
+
+// Record a delivery: a meal that went out but isn't in the app. Charged to
+// the wallet like any delivery; refused when the wallet doesn't cover it.
+export async function recordDelivery(subId: string, input: RecordDeliveryInput, password: string): Promise<ActionResult> {
+  return sensitive("subscribers.recordDelivery", password, { subscriptionId: subId, details: { ...input } }, async (ctx): Promise<ActionResult> => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return { ok: false, error: "Pick the day." }
+    if (input.date > istToday()) return { ok: false, error: "Only today or an earlier day." }
+    if (!input.items.length) return { ok: false, error: "Add what was delivered." }
+    if (input.reason.trim().length < 3) return { ok: false, error: "Say why it wasn't in the app." }
+    const { data, error } = await supabaseAdmin.rpc("admin_record_delivery", {
+      p_sub: subId, p_date: input.date, p_slot: input.slot,
+      p_items: input.items.map((i) => ({ kind: i.kind, dish: i.dish, qty: i.qty, addons: i.kind === "meal" ? (i.addons ?? []) : [] })),
+      p_mode: input.mode,
+      p_address: input.mode === "delivery" ? input.addressId : null,
+      p_location: input.mode === "delivery" ? null : input.locationId,
+      p_reason: input.reason.trim(),
+      p_admin: ctx.admin.id, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not record the delivery.") }
+    const r = data as { total: number; user_id: string; orders: string[] }
+    ctx.note({ userId: r.user_id, amountPaise: r.total, details: { orders: r.orders } })
+    revalidatePath(`/subscribers/${subId}`)
+    revalidatePath("/operations")
+    revalidatePath("/money")
+    return { ok: true, message: `Recorded — ${rupees(r.total)} charged to the wallet for ${input.slot} on ${input.date}.` }
   })
 }
