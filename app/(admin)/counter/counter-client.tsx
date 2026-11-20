@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
-import { Store, ChefHat, CheckCircle2, AlertCircle, Loader2, Settings, X, Footprints, UtensilsCrossed } from "lucide-react"
+import { Store, ChefHat, CheckCircle2, AlertCircle, Loader2, Settings, X, Footprints, UtensilsCrossed, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { handOver, savePlace, type PlaceInput } from "./actions"
+import { useActionPassword } from "@/components/action-password"
+import { handOver, savePlace, chargeMissedWalkIn, dismissMissedWalkIn, type PlaceInput } from "./actions"
 
 export type Place = {
   id: string
@@ -23,6 +24,9 @@ export type Place = {
 
 export type CounterOrder = {
   id: string
+  date: string
+  /** The cart's total (paise). */
+  cost: number
   status: string
   slot: "lunch" | "dinner"
   quantity: number
@@ -52,11 +56,13 @@ const hhmm = (t: string) => {
 const timeOf = (iso: string) =>
   new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })
 
-export function CounterClient({ places, place, slot, orders, today }: {
+export function CounterClient({ places, place, slot, orders, missedWalkIns, today }: {
   places: Place[]
   place: Place | null
   slot: "lunch" | "dinner"
   orders: CounterOrder[]
+  /** Codes nobody handed over within an hour, last 7 days (103). */
+  missedWalkIns: CounterOrder[]
   today: string
 }) {
   const router = useRouter()
@@ -83,6 +89,30 @@ export function CounterClient({ places, place, slot, orders, today }: {
   const walkIns = slotOrders.filter((o) => OPEN.includes(o.status) && o.walkIn)
   const collected = slotOrders.filter((o) => o.status === "delivered" && !o.missed)
   const missed = slotOrders.filter((o) => o.missed || o.skipReason === "walk_in_expired")
+  const askPassword = useActionPassword()
+  const [serving, setServing] = useState<string | null>(null) // missed walk-in being marked served
+  const [reason, setReason] = useState("")
+
+  // Served: charged as ordered (action password + what happened).
+  async function markServed(o: CounterOrder) {
+    if (reason.trim().length < 3) { setMsg({ ok: false, text: "Say what happened — e.g. who handed it over." }); return }
+    const pw = await askPassword(`Charge ${o.name}'s walk-in of ${dayOf(o.date)} (${rupees(o.cost)}) — ${reason.trim()}`)
+    if (pw === null) return
+    start(async () => {
+      const r = await chargeMissedWalkIn(o.id, reason.trim(), pw)
+      setMsg(r.ok ? { ok: true, text: `${o.name}: ${r.message}` } : { ok: false, text: r.error })
+      if (r.ok) { setServing(null); setReason("") }
+      router.refresh()
+    })
+  }
+  function markNotServed(o: CounterOrder) {
+    if (!window.confirm(`${o.name}'s walk-in of ${dayOf(o.date)} wasn't served? It comes off the list, uncharged.`)) return
+    start(async () => {
+      const r = await dismissMissedWalkIn(o.id)
+      setMsg(r.ok ? { ok: true, text: `${o.name}: ${r.message}` } : { ok: false, text: r.error })
+      router.refresh()
+    })
+  }
 
   // What this place has to cook for the slot (only places that cook their own).
   const toCook = useMemo(() => {
@@ -186,7 +216,9 @@ export function CounterClient({ places, place, slot, orders, today }: {
                 </button>
               ) : (
                 <span className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
-                  {match.status === "delivered" ? `Already handed over${match.collectedAt ? ` at ${timeOf(match.collectedAt)}` : ""}` : "Cancelled"}
+                  {match.status === "delivered"
+                    ? `Already handed over${match.collectedAt ? ` at ${timeOf(match.collectedAt)}` : ""}`
+                    : match.skipReason === "walk_in_missed" ? "Over an hour old — it's in Missed walk-ins below" : "Cancelled"}
                 </span>
               )}
             </div>
@@ -225,14 +257,79 @@ export function CounterClient({ places, place, slot, orders, today }: {
           <OrderList orders={collected} done />
         </Panel>
         <Panel title="Didn't come" icon={<UtensilsCrossed className="w-4 h-4" />} count={missed.length}>
-          {missed.length === 0 ? <Empty text={`Walk-in codes not used by ${hhmm(place.closes_at)} are cancelled, uncharged, and listed here.`} /> : (
+          {missed.length === 0 ? <Empty text="Walk-ins marked not served, and older ones nobody answered." /> : (
             <OrderList orders={missed} done />
           )}
         </Panel>
       </div>
+
+      {/* Missed walk-ins (103): codes nobody handed over within an hour */}
+      <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/40 p-5">
+        <div className="mb-1 flex items-center justify-between">
+          <p className="flex items-center gap-2 text-sm font-semibold text-[#1A1A1A]"><Clock className="w-4 h-4" />Missed walk-ins</p>
+          <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-xs font-bold text-amber-800">{missedWalkIns.length}</span>
+        </div>
+        <p className="mb-3 text-xs text-gray-500">
+          Codes nobody handed over within an hour, last 7 days. If the meal was served anyway, mark it served — it&apos;s
+          charged as ordered. If it wasn&apos;t, mark it not served or leave it; after 7 days it drops off, uncharged.
+        </p>
+        {missedWalkIns.length === 0 ? <Empty text="None." /> : (
+          <div className="divide-y divide-amber-200">
+            {missedWalkIns.map((o) => (
+              <div key={o.id} className="py-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="text-sm">
+                    <p className="font-medium text-[#1A1A1A]">
+                      {o.name} <span className="font-mono text-xs font-normal text-gray-500">{o.customerCode}</span>
+                    </p>
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      {dayOf(o.date)} · {o.slot} · {timeOf(o.createdAt)} · {o.mode === "dine_in" ? "dine-in" : "takeaway"} · code <span className="font-mono">{o.code}</span>
+                    </p>
+                    <p className="text-xs text-gray-700 mt-0.5">
+                      {o.meal}{o.addons.length > 0 ? ` + ${o.addons.map((a) => (a.qty > 1 ? `${a.name} ×${a.qty}` : a.name)).join(", ")}` : ""} · <b>{rupees(o.cost)}</b>
+                    </p>
+                  </div>
+                  {serving !== o.id && (
+                    <div className="flex gap-2">
+                      <button disabled={pending} onClick={() => { setServing(o.id); setReason(""); setMsg(null) }}
+                        className="h-9 px-3 rounded-lg bg-[#1B5E20] text-white text-xs font-semibold hover:bg-[#0D3F12] disabled:opacity-50">
+                        Served — charge it
+                      </button>
+                      <button disabled={pending} onClick={() => markNotServed(o)}
+                        className="h-9 px-3 rounded-lg border border-[#e2e8d5] bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                        Not served
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {serving === o.id && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      autoFocus
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="What happened (required) — e.g. counter handed it over, no admin around"
+                      className="h-9 flex-1 min-w-[260px] rounded-lg border border-[#e2e8d5] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+                    />
+                    <button disabled={pending || reason.trim().length < 3} onClick={() => markServed(o)}
+                      className="h-9 px-3 rounded-lg bg-[#1B5E20] text-white text-xs font-semibold disabled:opacity-40 flex items-center gap-1.5">
+                      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Charge {rupees(o.cost)}
+                    </button>
+                    <button onClick={() => setServing(null)} className="h-9 px-3 text-xs text-gray-500">Cancel</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
+
+const rupees = (p: number) => `₹${(p / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+const dayOf = (iso: string) =>
+  new Date(iso + "T00:00:00Z").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" })
 
 function Panel({ title, icon, count, children }: { title: string; icon: React.ReactNode; count: number; children: React.ReactNode }) {
   return (

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
-import { audited } from "@/lib/audit"
+import { audited, dbError, sensitive } from "@/lib/audit"
 
 export type CounterResult = { ok: true; message: string } | { ok: false; error: string }
 
@@ -85,4 +85,34 @@ export async function savePlace(id: string, v: PlaceInput): Promise<CounterResul
       return { ok: true, message: "Saved." }
     }
   )
+}
+
+// ── Missed walk-ins (103) ─────────────────────────────────────────────────
+
+// Served after all: the cart is charged as ordered, dated the day it was
+// eaten. Action password + what happened.
+export async function chargeMissedWalkIn(orderId: string, reason: string, password: string): Promise<CounterResult> {
+  return sensitive("counter.chargeMissedWalkIn", password, { ref: orderId, details: { reason } }, async (ctx): Promise<CounterResult> => {
+    if (reason.trim().length < 3) return { ok: false, error: "Say what happened — e.g. who handed it over." }
+    const { data, error } = await supabaseAdmin.rpc("admin_charge_missed_walk_in", {
+      p_order: orderId, p_reason: reason.trim(), p_admin: ctx.admin.id, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not charge it.") }
+    const r = data as { total: number; items: number; user_id: string }
+    ctx.note({ userId: r.user_id, amountPaise: r.total })
+    revalidatePath("/counter")
+    revalidatePath("/money")
+    return { ok: true, message: `Marked served — ₹${(r.total / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })} charged from their wallet.` }
+  })
+}
+
+// Not served: off the list, never charged.
+export async function dismissMissedWalkIn(orderId: string): Promise<CounterResult> {
+  return audited("counter.dismissMissedWalkIn", { ref: orderId }, async () => {
+    await requireAdmin()
+    const { error } = await supabaseAdmin.rpc("admin_dismiss_missed_walk_in", { p_order: orderId })
+    if (error) return { ok: false, error: error.message }
+    revalidatePath("/counter")
+    return { ok: true, message: "Marked not served — nothing charged." }
+  })
 }

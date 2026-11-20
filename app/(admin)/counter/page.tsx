@@ -1,13 +1,15 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { isTestMode } from "@/lib/mode"
-import { istToday } from "@/lib/ist"
+import { istToday, addDaysISO } from "@/lib/ist"
 import { CounterClient, type CounterOrder, type Place } from "./counter-client"
 
 export const dynamic = "force-dynamic"
 
-// Counter (082, 087): today's walk-ins at one place — what to cook
-// (places that cook their own), codes to hand over, and who didn't come.
+// Counter (082, 087, 103): today's walk-ins at one place — what to cook
+// (places that cook their own), codes to hand over, who didn't come — and
+// Missed walk-ins: codes nobody handed over within an hour, last 7 days, to
+// mark served (charged) or not.
 export default async function CounterPage({
   searchParams,
 }: {
@@ -37,12 +39,13 @@ export default async function CounterPage({
     const { data } = await supabaseAdmin
       .from("orders")
       .select(`
-        id, status, meal_slot, quantity, walk_in, fulfilment, pickup_code, collected_at, pickup_missed, created_at, skip_reason, item_kind, slot_seq,
+        id, status, meal_slot, quantity, walk_in, fulfilment, pickup_code, collected_at, pickup_missed, created_at, skip_reason, item_kind, slot_seq, delivery_date, cart_total,
         meal_templates ( name ),
         order_addons ( kind, quantity, unit_price, sub_option, addons ( name ) ),
         users!inner ( name, phone, customer_code, is_test )
       `)
-      .eq("delivery_date", today)
+      .gte("delivery_date", addDaysISO(today, -7))
+      .lte("delivery_date", today)
       .eq("pickup_location_id", place.id)
       .eq("users.is_test", isTest)
       .order("created_at")
@@ -61,6 +64,8 @@ export default async function CounterPage({
         .filter(Boolean) as { name: string; qty: number }[]
       return {
         id: o.id,
+        date: o.delivery_date as string,
+        cost: (o.cart_total ?? 0) as number,
         status: o.status,
         slot: o.meal_slot,
         quantity: qty,
@@ -83,7 +88,7 @@ export default async function CounterPage({
     const byCode = new Map<string, CounterOrder>()
     orders = []
     for (const r of rows) {
-      const key = r.code ? `${r.customerCode}|${r.code}|${r.slot}` : r.id
+      const key = r.code ? `${r.customerCode}|${r.date}|${r.code}|${r.slot}` : r.id
       const head = byCode.get(key)
       if (!head) {
         const entry = { ...r, items: [...r.items], addons: [...r.addons] }
@@ -92,6 +97,7 @@ export default async function CounterPage({
         continue
       }
       head.items.push(...r.items)
+      head.cost += r.cost
       for (const a of r.addons) {
         const same = head.addons.find((x) => x.name === a.name)
         if (same) same.qty += a.qty
@@ -105,5 +111,9 @@ export default async function CounterPage({
     }
   }
 
-  return <CounterClient places={places} place={place} slot={slot} orders={orders} today={today} />
+  const missedWalkIns = orders.filter((o) => o.skipReason === "walk_in_missed")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  orders = orders.filter((o) => o.date === today)
+
+  return <CounterClient places={places} place={place} slot={slot} orders={orders} missedWalkIns={missedWalkIns} today={today} />
 }
