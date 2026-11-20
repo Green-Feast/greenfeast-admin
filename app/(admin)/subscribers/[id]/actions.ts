@@ -625,6 +625,8 @@ export type RenewInput = {
   proof: ProofInput | null
   reason: string
   idempotencyKey: string
+  /** A coupon (admin → Coupons) sets the new plan's meal price, as in Create subscription. */
+  couponId?: string | null
 }
 
 // Renews a customer's plan from the office — the same thing as Renew in the
@@ -637,7 +639,7 @@ export type RenewInput = {
 export async function renewPlan(subId: string, input: RenewInput, password: string): Promise<ActionResult> {
   return sensitive("subscribers.renewPlan", password, {
     subscriptionId: subId, amountPaise: input.paidPaise,
-    details: { plan: input.planId, lunch: input.mealsLunch, dinner: input.mealsDinner, days: input.days, addons: input.addonIds, cash_due: input.cashDuePaise, reason: input.reason },
+    details: { plan: input.planId, lunch: input.mealsLunch, dinner: input.mealsDinner, days: input.days, addons: input.addonIds, cash_due: input.cashDuePaise, coupon: input.couponId ?? null, reason: input.reason },
   }, async (ctx): Promise<ActionResult> => {
     if (input.reason.trim().length < 3) return { ok: false, error: "Say why the office is renewing this plan." }
     const okCount = (n: number) => Number.isInteger(n) && n >= 0 && n <= 3
@@ -664,6 +666,20 @@ export async function renewPlan(subId: string, input: RenewInput, password: stri
     const { data: plan } = await supabaseAdmin
       .from("plans").select("id, name, base_price, meals_total, is_active").eq("id", input.planId).maybeSingle()
     if (!plan || !plan.is_active) return { ok: false, error: "That plan isn't available." }
+
+    // A coupon: checked by coupon_quote (working today, priced for this plan);
+    // the admin may use any working coupon, whoever it's for.
+    let coupon: { id: string; code: string; mealPrice: number; regular: number } | null = null
+    if (input.couponId) {
+      const { data: c } = await supabaseAdmin.from("coupons").select("code").eq("id", input.couponId).maybeSingle()
+      if (!c) return { ok: false, error: "That coupon no longer exists." }
+      const { data: quote, error: quoteErr } = await supabaseAdmin.rpc("coupon_quote", {
+        p_user: old.user_id, p_code: c.code, p_plan: plan.id, p_addon_per_meal: 0, p_kind: "admin", p_exclude_sub: null,
+      })
+      if (quoteErr) return { ok: false, error: quoteErr.message }
+      if (!quote?.ok) return { ok: false, error: `Coupon ${c.code}: ${quote?.error ?? "not valid"}` }
+      coupon = { id: input.couponId, code: c.code, mealPrice: quote.meal_price_paise, regular: quote.regular_meal_price_paise }
+    }
 
     const addonIds = Array.from(new Set(input.addonIds))
     const [{ data: validAddons }, { data: oldAddons }, { data: oldSchedule }] = await Promise.all([
@@ -699,6 +715,8 @@ export async function renewPlan(subId: string, input: RenewInput, password: stri
         pickup_location_dinner: old.pickup_location_dinner,
         renewed_from: old.id,
         no_delivery_days: days.length === 0,
+        meal_price_paise: coupon?.mealPrice ?? null,
+        coupon_id: coupon?.id ?? null,
       })
       .select("id")
       .single()
@@ -731,6 +749,23 @@ export async function renewPlan(subId: string, input: RenewInput, password: stri
 
     // 3. Paid for and live — the same steps as Activate plan.
     const res = await activatePlan(ctx, created.id, input.paidPaise, input.cashDuePaise, input.proof, input.idempotencyKey, true)
+    if (res.ok && coupon) {
+      const { data: pay } = await supabaseAdmin
+        .from("payments").select("id").eq("subscription_id", created.id).order("created_at", { ascending: false }).limit(1).maybeSingle()
+      const { error: redErr } = await supabaseAdmin.from("coupon_redemptions").insert({
+        coupon_id: coupon.id,
+        user_id: old.user_id,
+        subscription_id: created.id,
+        payment_id: pay?.id ?? null,
+        plan_id: plan.id,
+        kind: "admin",
+        meal_price_paise: coupon.mealPrice,
+        regular_meal_price_paise: coupon.regular,
+        meals: plan.meals_total,
+        discount_paise: (coupon.regular - coupon.mealPrice) * plan.meals_total,
+      })
+      if (redErr) console.error("renewPlan: coupon use not recorded:", redErr.message)
+    }
     revalidatePath(`/subscribers/${subId}`)
     revalidatePath(`/subscribers/${created.id}`)
     revalidatePath("/subscribers")

@@ -160,13 +160,21 @@ export default async function SubscriberProfilePage({
   // Add paid meals / Record a delivery (099): the plan's meal price (what one
   // meal of "meals left" costs), the prices a recorded delivery charges, and
   // the drinks and counters it can name.
-  const [{ data: mealUnit }, { data: mealRate }, { data: drinkPrice }, { data: drinkRows }, { data: locationRows }, { data: premiumRows }] = await Promise.all([
+  const [{ data: mealUnit }, { data: mealRate }, { data: drinkPrice }, { data: drinkRows }, { data: locationRows }, { data: premiumRows }, { data: couponRows }] = await Promise.all([
     supabaseAdmin.rpc("default_meal_cost", { p_sub: id }),
     supabaseAdmin.rpc("subscription_meal_rate", { p_sub: id }),
     supabaseAdmin.rpc("drink_price"),
     supabaseAdmin.from("meal_templates").select("id, name, category").eq("is_active", true).in("category", DRINK_CATEGORIES).order("name"),
     supabaseAdmin.from("pickup_locations").select("id, name").order("name"),
     supabaseAdmin.from("meal_templates").select("id, premium_paise").gt("premium_paise", 0),
+    // Coupons that work today, for Renew plan (same list as Create subscription).
+    supabaseAdmin
+      .from("coupons")
+      .select("id, code, name, coupon_plans ( plan_id, meal_price_paise )")
+      .eq("active", true)
+      .lte("starts_on", today)
+      .gte("ends_on", today)
+      .order("code"),
   ])
 
   const addrLabel = new Map(((addresses ?? []) as any[]).map((a) => [a.id, a.label || a.type || "Address"]))
@@ -296,6 +304,10 @@ export default async function SubscriberProfilePage({
           drinkPrice: (drinkPrice as number | null) ?? 0,
           drinks: (drinkRows ?? []) as { id: string; name: string; category: string }[],
           locations: (locationRows ?? []) as { id: string; name: string }[],
+          coupons: ((couponRows ?? []) as { id: string; code: string; name: string | null; coupon_plans: { plan_id: string; meal_price_paise: number }[] }[]).map((c) => ({
+            id: c.id, code: c.code, name: c.name,
+            prices: Object.fromEntries((c.coupon_plans ?? []).map((p) => [p.plan_id, p.meal_price_paise])) as Record<string, number>,
+          })),
           premium: Object.fromEntries(((premiumRows ?? []) as { id: string; premium_paise: number }[]).map((r) => [r.id, r.premium_paise])),
         }}
       />

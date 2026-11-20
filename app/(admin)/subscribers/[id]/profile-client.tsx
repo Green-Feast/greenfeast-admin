@@ -227,6 +227,7 @@ export function ProfileClient({
     drinks: { id: string; name: string; category: string }[]
     locations: { id: string; name: string }[]
     premium: Record<string, number>
+    coupons: { id: string; code: string; name: string | null; prices: Record<string, number> }[]
   }
 }) {
   const router = useRouter()
@@ -1165,6 +1166,7 @@ export function ProfileClient({
           walletBalance={walletBalance ?? 0}
           plans={catalogue.plans}
           addons={catalogue.addons}
+          coupons={adjust.coupons}
           pending={isPending}
           onClose={() => setModal(null)}
           onSave={(v) => {

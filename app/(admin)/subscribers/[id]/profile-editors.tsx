@@ -857,18 +857,22 @@ export type RenewFormValue = {
   proof: ProofInput | null
   reason: string
   idempotencyKey: string
+  couponId: string | null
 }
 
-export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addons, pending, onClose, onSave }: {
+export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addons, coupons, pending, onClose, onSave }: {
   initial: { planId: string; mealsLunch: number; mealsDinner: number; days: string[]; addonIds: string[] }
   noDeliveryDays: boolean
   walletBalance: number
   plans: { id: string; name: string; base_price: number; meals_total: number }[]
   addons: { id: string; name: string; price_per_meal: number }[]
+  /** Coupons that work today; only those with a price for the chosen plan are offered. */
+  coupons: { id: string; code: string; name: string | null; prices: Record<string, number> }[]
   pending: boolean
   onClose: () => void
   onSave: (v: RenewFormValue) => void
 }) {
+  const [couponId, setCouponId] = useState("")
   const [planId, setPlanId] = useState(plans.some((p) => p.id === initial.planId) ? initial.planId : (plans[0]?.id ?? ""))
   const [mealsLunch, setMealsLunch] = useState(initial.mealsLunch)
   const [mealsDinner, setMealsDinner] = useState(initial.mealsDinner)
@@ -882,7 +886,12 @@ export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addo
 
   const plan = plans.find((p) => p.id === planId)
   const addonPerMeal = addons.filter((a) => addonIds.includes(a.id)).reduce((n, a) => n + a.price_per_meal, 0)
-  const total = plan ? plan.base_price + addonPerMeal * plan.meals_total : 0
+  const planCoupons = coupons.filter((c) => c.prices[planId])
+  const coupon = planCoupons.find((c) => c.id === couponId) ?? null
+  const regularMeal = plan ? planMealRate(plan) : 0
+  const mealPrice = coupon ? coupon.prices[planId] : regularMeal
+  // Same as the app: the plan price, or the coupon's meal price × meals; add-ons per meal on top.
+  const total = plan ? (coupon ? mealPrice * plan.meals_total : plan.base_price) + addonPerMeal * plan.meals_total : 0
   const paidPaise = rupeesToPaise(paid)
   const duePaise = due.trim() ? rupeesToPaise(due) : Math.max(total - paidPaise, 0)
 
@@ -904,7 +913,14 @@ export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addo
             ({fmtRupees(walletBalance)}) carries on into the new one.
           </p>
           <Field label="Plan">
-            <select value={planId} onChange={(e) => setPlanId(e.target.value)} className={inputCls}>
+            <select
+              value={planId}
+              onChange={(e) => {
+                setPlanId(e.target.value)
+                if (couponId && !coupons.find((c) => c.id === couponId)?.prices[e.target.value]) setCouponId("")
+              }}
+              className={inputCls}
+            >
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} · {p.meals_total} meals · ₹{(planMealRate(p) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}/meal
@@ -930,8 +946,28 @@ export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addo
             />
           </Field>
 
+          {planCoupons.length > 0 ? (
+            <Field label="Coupon (optional)">
+              <select value={couponId} onChange={(e) => setCouponId(e.target.value)} className={inputCls}>
+                <option value="">No coupon — {fmtRupees(regularMeal)} per meal</option>
+                {planCoupons.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} — {fmtRupees(c.prices[planId])} per meal{c.name ? ` · ${c.name}` : ""}
+                  </option>
+                ))}
+              </select>
+              {coupon && plan && (
+                <p className="mt-1 text-xs text-[#1B5E20]">
+                  {fmtRupees(mealPrice)} per meal instead of {fmtRupees(regularMeal)} — saves {fmtRupees((regularMeal - mealPrice) * plan.meals_total)} on {plan.meals_total} meals.
+                </p>
+              )}
+            </Field>
+          ) : (
+            <p className="text-xs text-gray-400">No coupon that works today has a price for this plan.</p>
+          )}
+
           <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm flex items-center justify-between">
-            <span>Plan price</span>
+            <span>Plan price{coupon ? ` (${coupon.code})` : ""}</span>
             <span className="font-semibold">{fmtRupees(total)}</span>
           </div>
           <Field label="Paid (₹)" hint="Money received outside the app — it goes into the wallet with its proof.">
@@ -960,7 +996,7 @@ export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addo
             onClick={() => onSave({
               planId, mealsLunch, mealsDinner, days, addonIds,
               paidPaise, cashDuePaise: duePaise, proof: paidPaise > 0 ? proof : null,
-              reason: reason.trim(), idempotencyKey: key,
+              reason: reason.trim(), idempotencyKey: key, couponId: coupon?.id ?? null,
             })}
           >
             Renew plan
