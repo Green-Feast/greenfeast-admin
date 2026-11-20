@@ -577,31 +577,57 @@ export function AddPaidMealsModal({ mealUnit, pending, onClose, onSave }: {
   mealUnit: number
   pending: boolean
   onClose: () => void
-  onSave: (meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string) => void
+  onSave: (meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string, amountPaise: number | null) => void
 }) {
   const [meals, setMeals] = useState(1)
+  // Meals × the plan's meal price, or an amount — meals left follows the wallet (104).
+  const [by, setBy] = useState<"meals" | "amount">("meals")
+  const [amountText, setAmountText] = useState("")
   const [reason, setReason] = useState("")
   const [collect, setCollect] = useState(false)
   const [proof, setProof] = useState<ProofInput>(emptyProof)
   const [key] = useState(() => crypto.randomUUID())
-  const amount = mealUnit * meals
+  const amount = by === "amount" ? rupeesToPaise(amountText) : mealUnit * meals
   const problem =
     mealUnit <= 0 ? "This plan has no meal price." :
+    by === "amount" && amount < 100 ? "Enter an amount." :
     reason.trim().length < 3 ? "Write why these meals are being added." :
     collect ? null : proofProblem(proof, amount)
   return (
     <ModalOverlay onClose={onClose}>
-      <ModalCard title="Add paid meals" onClose={onClose}>
+      <ModalCard title="Add paid meals or money" onClose={onClose}>
         <div className="space-y-4">
-          <Field label="Meals">
-            <Stepper value={meals} setValue={setMeals} min={1} max={90} />
+          <Field label="Add">
+            <Chips
+              single
+              options={[{ value: "meals", label: "Meals" }, { value: "amount", label: "Amount (₹)" }]}
+              value={[by]}
+              onChange={(v) => setBy(v[0] === "amount" ? "amount" : "meals")}
+            />
           </Field>
-          <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm">
-            <p>
-              {meals} × {fmtRupees(mealUnit)} = <span className="font-semibold">{fmtRupees(amount)}</span>
-            </p>
-            <p className="text-xs text-gray-500 mt-0.5">The plan&apos;s meal price, with its add-ons and drink — the amount can&apos;t be changed.</p>
-          </div>
+          {by === "meals" ? (
+            <>
+              <Field label="Meals">
+                <Stepper value={meals} setValue={setMeals} min={1} max={90} />
+              </Field>
+              <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm">
+                <p>
+                  {meals} × {fmtRupees(mealUnit)} = <span className="font-semibold">{fmtRupees(amount)}</span>
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">The plan&apos;s meal price, with its add-ons and drink.</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <Field label="Amount (₹)">
+                <input inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value.replace(/[^\d.]/g, ""))} placeholder="₹" className={inputCls} />
+              </Field>
+              <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm">
+                <p>≈ {mealUnit > 0 ? Math.floor(amount / mealUnit) : 0} meals at {fmtRupees(mealUnit)} a meal</p>
+                <p className="text-xs text-gray-500 mt-0.5">Meals left follows the wallet — the rest stays in it for add-ons and extras.</p>
+              </div>
+            </>
+          )}
           <Field label="Payment">
             <Chips
               single
@@ -629,8 +655,8 @@ export function AddPaidMealsModal({ mealUnit, pending, onClose, onSave }: {
         </div>
         <ModalFooter>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(meals, collect, collect ? null : proof, reason.trim(), key)}>
-            Add {meals} meal{meals === 1 ? "" : "s"}
+          <PrimaryBtn disabled={pending || !!problem} onClick={() => onSave(meals, collect, collect ? null : proof, reason.trim(), key, by === "amount" ? amount : null)}>
+            {by === "amount" ? `Add ${fmtRupees(amount)}` : `Add ${meals} meal${meals === 1 ? "" : "s"}`}
           </PrimaryBtn>
         </ModalFooter>
       </ModalCard>

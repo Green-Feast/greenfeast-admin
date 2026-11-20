@@ -1195,9 +1195,9 @@ export function ProfileClient({
           mealUnit={adjust.mealUnit}
           pending={isPending}
           onClose={() => setModal(null)}
-          onSave={(meals, collect, proof, reason, key) => secure(
-            `Add ${meals} paid meal${meals === 1 ? "" : "s"} (${fmtRupees(meals * adjust.mealUnit)}${collect ? ", cash to collect" : " received"}) for ${user.name || "this customer"} — ${reason}`,
-            (pw) => addPaidMeals(subscriptionId, meals, collect, proof, reason, key, pw),
+          onSave={(meals, collect, proof, reason, key, amountPaise) => secure(
+            `Add ${amountPaise != null ? fmtRupees(amountPaise) : `${meals} paid meal${meals === 1 ? "" : "s"} (${fmtRupees(meals * adjust.mealUnit)})`}${collect ? ", cash to collect" : " received"} for ${user.name || "this customer"} — ${reason}`,
+            (pw) => addPaidMeals(subscriptionId, meals, collect, proof, reason, key, pw, amountPaise),
           )}
         />
       )}

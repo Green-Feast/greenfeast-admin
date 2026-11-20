@@ -113,3 +113,20 @@ export async function giftMeals(userId: string, meals: number, reason: string, p
     return { ok: true, message: `${meals} meal${meals === 1 ? "" : "s"} (${rupees(amount)}) added to their wallet — they've been told.` }
   })
 }
+
+// Gift money (104): an amount into the wallet, recorded as a gift; the
+// customer is told it's about N meals. Up to 30 meals' worth.
+export async function giftMoney(userId: string, amountPaise: number, reason: string, password: string): Promise<RefundResult> {
+  return sensitive("rewards.giftMoney", password, { userId, amountPaise, details: { reason } }, async (ctx): Promise<RefundResult> => {
+    if (!Number.isInteger(amountPaise) || amountPaise < 100) return { ok: false, error: "Enter an amount." }
+    if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
+    const { data, error } = await supabaseAdmin.rpc("admin_gift_money", {
+      p_user: userId, p_amount: amountPaise, p_reason: reason.trim(), p_admin: ctx.admin.id, p_admin_email: ctx.admin.email, p_action: ctx.actionId,
+    })
+    if (error) return { ok: false, error: dbError(error, "Could not add the gift.") }
+    const about = (data as { about_meals?: number } | null)?.about_meals ?? 0
+    revalidatePath("/rewards")
+    revalidatePath("/money")
+    return { ok: true, message: `${rupees(amountPaise)} added to their wallet${about ? ` (about ${about} meal${about === 1 ? "" : "s"})` : ""} — they've been told.` }
+  })
+}

@@ -5,7 +5,7 @@ import { useActionPassword } from "@/components/action-password";
 import { Gift, Undo2, Search, X, Loader2, CheckCircle2, AlertCircle, Users, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RefundDialog, type RefundCustomer, type RefundablePayment } from "./refund-dialog";
-import { giftMeals, mealWorth } from "./actions";
+import { giftMeals, giftMoney, mealWorth } from "./actions";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -25,7 +25,7 @@ export type GiftRow = {
   id: string;
   name: string;
   code: string;
-  meals: number;
+  meals: number | null; // null: a gift in rupees (104)
   amount: number;
   reason: string;
   by: string | null;
@@ -103,7 +103,7 @@ export function RewardsClient({
 
   const kpis = [
     { label: "Refunded", value: rupees(refunds.filter((r) => r.status !== "failed").reduce((s, r) => s + r.amount, 0)), hint: `${refunds.length} refunds` },
-    { label: "Meals gifted", value: String(gifts.reduce((s, g) => s + g.meals, 0)), hint: rupees(gifts.reduce((s, g) => s + g.amount, 0)) },
+    { label: "Meals gifted", value: String(gifts.reduce((s, g) => s + (g.meals ?? 0), 0)), hint: rupees(gifts.reduce((s, g) => s + g.amount, 0)) },
     { label: "Friends referred", value: String(rewarded.length), hint: `${rupees(rewarded.reduce((s, r) => s + r.referrerCredit + r.refereeCredit, 0))} in free meals` },
   ];
 
@@ -134,7 +134,7 @@ export function RewardsClient({
             onClick={() => setShowGift(true)}
             className="h-9 px-4 flex items-center gap-2 rounded-lg border border-[#1B5E20] text-[#1B5E20] text-sm font-medium hover:bg-green-50 transition-colors"
           >
-            <Gift className="w-4 h-4" /> Gift meals
+            <Gift className="w-4 h-4" /> Gift meals or money
           </button>
           <button
             onClick={() => setShowRefund(true)}
@@ -239,7 +239,7 @@ export function RewardsClient({
                       <p className="font-medium text-[#1A1A1A]">{g.name}</p>
                       <p className="font-mono text-xs text-gray-400">{g.code}</p>
                     </td>
-                    <td className="px-5 py-3 whitespace-nowrap text-gray-700">{g.meals}</td>
+                    <td className="px-5 py-3 whitespace-nowrap text-gray-700">{g.meals ?? "money"}</td>
                     <td className="px-5 py-3 font-semibold text-[#1A1A1A] whitespace-nowrap">{rupees(g.amount)}</td>
                     <td className="px-5 py-3 text-gray-600 max-w-[280px] truncate" title={g.reason}>{g.reason}</td>
                     <td className="px-5 py-3 text-gray-400 text-xs whitespace-nowrap">{g.by ?? "—"}</td>
@@ -302,6 +302,10 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
   const [query, setQuery] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [meals, setMeals] = useState(1);
+  // Meals (× a meal's worth) or an amount — the meal counter follows the wallet either way (104).
+  const [by, setBy] = useState<"meals" | "amount">("meals");
+  const [amountText, setAmountText] = useState("");
+  const amountPaise = Math.round((parseFloat(amountText) || 0) * 100);
   const [reason, setReason] = useState("");
   const [worth, setWorth] = useState<number | null>(null);
   const askPassword = useActionPassword();
@@ -323,15 +327,21 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
     return () => { live = false; };
   }, [userId]);
 
-  const problem = !customer ? "Pick a customer." : !reason.trim() ? "Add a reason — the customer sees it." : null;
+  const giftAmount = by === "amount" ? amountPaise : worth ? worth * meals : 0;
+  const aboutMeals = worth && by === "amount" ? Math.floor(amountPaise / worth) : null;
+  const problem = !customer ? "Pick a customer."
+    : by === "amount" && amountPaise < 100 ? "Enter an amount."
+    : by === "amount" && worth != null && amountPaise > worth * 30 ? `Up to ${rupees(worth * 30)} (30 meals' worth).`
+    : !reason.trim() ? "Add a reason — the customer sees it." : null;
+  const label = by === "amount" ? `Gift ${rupees(amountPaise)}` : `Gift ${meals} meal${meals === 1 ? "" : "s"}`;
 
   async function submit() {
     if (problem || !customer) return;
-    const pw = await askPassword(`Gift ${meals} meal${meals === 1 ? "" : "s"}${worth ? ` (${rupees(worth * meals)})` : ""} to ${customer.name}.`);
+    const pw = await askPassword(`${label}${by === "meals" && worth ? ` (${rupees(worth * meals)})` : ""} to ${customer.name}.`);
     if (pw === null) return;
     setResult(null);
     startTransition(async () => {
-      const r = await giftMeals(customer.id, meals, reason, pw);
+      const r = by === "amount" ? await giftMoney(customer.id, amountPaise, reason, pw) : await giftMeals(customer.id, meals, reason, pw);
       setResult(r.ok ? { ok: true, text: r.message } : { ok: false, text: r.error });
       if (r.ok) setReason("");
     });
@@ -341,7 +351,7 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-[#e2e8d5] px-5 py-4">
-          <h2 className="text-lg font-bold text-[#1A1A1A]">Gift meals</h2>
+          <h2 className="text-lg font-bold text-[#1A1A1A]">Gift meals or money</h2>
           <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100" aria-label="Close">
             <X className="h-4 w-4" />
           </button>
@@ -384,7 +394,25 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
           </div>
 
           <div>
-            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">Meals</p>
+            <div className="mb-2 flex gap-1.5">
+              {(["meals", "amount"] as const).map((k) => (
+                <button key={k} onClick={() => setBy(k)}
+                  className={cn("px-3 py-1 rounded-lg text-xs font-medium border", by === k ? "bg-[#1B5E20] text-white border-[#1B5E20]" : "border-[#e2e8d5] text-gray-600 hover:bg-gray-50")}>
+                  {k === "meals" ? "Meals" : "Amount (₹)"}
+                </button>
+              ))}
+            </div>
+            {by === "amount" ? (
+              <div className="flex items-center gap-3">
+                <input inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value.replace(/[^\d.]/g, ""))}
+                  placeholder="₹" className="h-10 w-32 rounded-lg border border-[#e2e8d5] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30" />
+                <span className="text-sm text-gray-500">
+                  {customer
+                    ? worth == null ? "Working out a meal's worth…" : `≈ ${aboutMeals ?? 0} meal${aboutMeals === 1 ? "" : "s"} (${rupees(worth)} a meal) — meals left follows the wallet`
+                    : "Meals left follows the wallet"}
+                </span>
+              </div>
+            ) : (
             <div className="flex items-center gap-3">
               <button onClick={() => setMeals((m) => Math.max(1, m - 1))} disabled={meals <= 1}
                 className="h-9 w-9 rounded-full border border-[#1B5E20] text-[#1B5E20] flex items-center justify-center disabled:opacity-30">
@@ -401,6 +429,7 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
                   : "One meal = their plan's meal price + default add-ons"}
               </span>
             </div>
+            )}
           </div>
 
           <div>
@@ -415,7 +444,9 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
             </div>
             <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. sorry about Tuesday's late lunch"
               className="h-10 w-full rounded-lg border border-[#e2e8d5] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30" />
-            <p className="mt-1 text-xs text-gray-400">Message: &quot;We&apos;ve added {meals} meal{meals === 1 ? "" : "s"} (…) to your wallet — {reason || "…"}. Enjoy!&quot;</p>
+            <p className="mt-1 text-xs text-gray-400">
+              Message: &quot;We&apos;ve added {by === "amount" ? `about ${aboutMeals ?? "…"} meals (${rupees(amountPaise)})` : `${meals} meal${meals === 1 ? "" : "s"} (…)`} to your wallet — {reason || "…"}. Enjoy!&quot;
+            </p>
           </div>
 
           {result && (
@@ -428,7 +459,7 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
           <button onClick={submit} disabled={!!problem || pending}
             className="h-10 w-full rounded-lg bg-[#1B5E20] text-sm font-medium text-white hover:bg-[#0D3F12] disabled:opacity-40 flex items-center justify-center gap-2">
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Gift className="h-4 w-4" />}
-            {problem ?? `Gift ${meals} meal${meals === 1 ? "" : "s"}`}
+            {problem ?? label}
           </button>
         </div>
       </div>

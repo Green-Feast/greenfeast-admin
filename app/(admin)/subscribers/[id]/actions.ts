@@ -534,13 +534,16 @@ export async function removeCustomerAddress(subId: string, addressId: string): P
 // (a payment with its proof, into the wallet) or cash still to collect (added
 // to cash due; the meals run on credit). Free meals are Gift meals instead.
 export async function addPaidMeals(
-  subId: string, meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string, password: string
+  subId: string, meals: number, collect: boolean, proof: ProofInput | null, reason: string, idempotencyKey: string, password: string,
+  amountPaise: number | null = null
 ): Promise<ActionResult> {
-  return sensitive("subscribers.addPaidMeals", password, { subscriptionId: subId, details: { meals, collect, reason } }, async (ctx): Promise<ActionResult> => {
-    if (reason.trim().length < 3) return { ok: false, error: "Say why these meals are being added." }
-    if (!Number.isInteger(meals) || meals < 1 || meals > 90) return { ok: false, error: "Add between 1 and 90 meals." }
+  return sensitive("subscribers.addPaidMeals", password, { subscriptionId: subId, details: { meals, collect, reason, amount: amountPaise } }, async (ctx): Promise<ActionResult> => {
+    if (reason.trim().length < 3) return { ok: false, error: "Say why this is being added." }
+    const byAmount = amountPaise != null
+    if (byAmount && (!Number.isInteger(amountPaise) || amountPaise < 100 || amountPaise > 20_000_000)) return { ok: false, error: "Enter ₹1 – ₹2,00,000." }
+    if (!byAmount && (!Number.isInteger(meals) || meals < 1 || meals > 90)) return { ok: false, error: "Add between 1 and 90 meals." }
     const { data: unit } = await supabaseAdmin.rpc("default_meal_cost", { p_sub: subId })
-    const amount = ((unit as number | null) ?? 0) * meals
+    const amount = byAmount ? amountPaise : ((unit as number | null) ?? 0) * meals
     if (!collect) {
       const bad = validProof(proof, amount)
       if (bad) return { ok: false, error: bad }
@@ -555,6 +558,7 @@ export async function addPaidMeals(
       p_note: collect ? null : (proof!.note || null),
       p_reason: reason.trim(),
       p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: collect ? null : idempotencyKey,
+      p_amount: byAmount ? amountPaise : null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not add the meals.") }
     const r = data as { amount: number; unit: number; meals_left: number | null; user_id: string; payment_id?: string; duplicate?: boolean }
@@ -567,9 +571,8 @@ export async function addPaidMeals(
     revalidatePath("/dashboard")
     return {
       ok: true,
-      message: collect
-        ? `${meals} meal${meals === 1 ? "" : "s"} added — ${rupees(r.amount)} added to the cash to collect. About ${r.meals_left ?? "—"} meals left.`
-        : `${meals} meal${meals === 1 ? "" : "s"} added — ${rupees(r.amount)} in the wallet. About ${r.meals_left ?? "—"} meals left.`,
+      message: (byAmount ? `${rupees(r.amount)} added` : `${meals} meal${meals === 1 ? "" : "s"} added — ${rupees(r.amount)}`) +
+        (collect ? " to the cash to collect." : " in the wallet.") + ` About ${r.meals_left ?? "—"} meals left.`,
     }
   })
 }

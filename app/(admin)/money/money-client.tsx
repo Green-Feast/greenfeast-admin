@@ -129,7 +129,7 @@ export function MoneyClient({ data }: { data: MoneyData }) {
       data.refunds.map((r) => [fmtDateTime(r.at), r.code, r.name, r.kind, paiseToRupeesNumber(r.amount), r.status, r.method ?? "", r.proof ?? "", r.reason, r.failureNote ?? "", r.by ?? ""])),
     gifts: () => toCsv(
       ["Date (IST)", "Customer code", "Customer", "Meals", "Meal worth (₹)", "Amount (₹)", "Reason", "By"],
-      data.gifts.map((g) => [fmtDateTime(g.at), g.code, g.name, g.meals, paiseToRupeesNumber(g.mealCost), paiseToRupeesNumber(g.amount), g.reason, g.by ?? ""])),
+      data.gifts.map((g) => [fmtDateTime(g.at), g.code, g.name, g.meals ?? "money", paiseToRupeesNumber(g.mealCost), paiseToRupeesNumber(g.amount), g.reason, g.by ?? ""])),
     referrals: () => toCsv(
       ["Date (IST)", "Referrer code", "Referrer", "Friend code", "Friend", "Status", "Reward (₹)", "Rejected because"],
       data.referrals.map((r) => [fmtDateTime(r.at), r.referrer, r.referrerName, r.friend, r.friendName, r.status, paiseToRupeesNumber(r.reward), r.rejectReason ?? ""])),
@@ -650,7 +650,7 @@ function RewardsTab({ gifts, referrals, onGiftsCsv, onReferralsCsv }: { gifts: G
         </Toolbar>
         <Table head={["Date", "Customer", { label: "Meals", right: true }, { label: "Meal worth", right: true }, { label: "Amount", right: true }, "Reason", "By"]} empty={gifts.length === 0}>
           {gifts.map((g) => (
-            <tr key={g.id}><Td muted>{fmtDateTime(g.at)}</Td><Td><Who code={g.code} name={g.name} /></Td><Td right>{g.meals}</Td><Td right muted>{rupees(g.mealCost)}</Td><Td right>{rupees(g.amount)}</Td><Td wrap>{g.reason}</Td><Td muted>{g.by ?? "—"}</Td></tr>
+            <tr key={g.id}><Td muted>{fmtDateTime(g.at)}</Td><Td><Who code={g.code} name={g.name} /></Td><Td right>{g.meals ?? "money"}</Td><Td right muted>{rupees(g.mealCost)}</Td><Td right>{rupees(g.amount)}</Td><Td wrap>{g.reason}</Td><Td muted>{g.by ?? "—"}</Td></tr>
           ))}
         </Table>
       </div>
