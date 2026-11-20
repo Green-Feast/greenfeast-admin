@@ -255,7 +255,9 @@ export default async function OperationsPage({
   const rows = subscribers.filter((r) => kindById.get(r.orderId) !== "drink");
   for (const d of subscribers.filter((r) => kindById.get(r.orderId) === "drink")) {
     const entry = { name: d.meal, qty: d.quantity };
-    const host = rows.find((r) => r.subscriptionId === d.subscriptionId && r.mealSlot === d.mealSlot && r.meal !== "—");
+    // Same cart: a walk-in's drink goes with its walk-in (same place and code), not the delivery.
+    const host = rows.find((r) => r.subscriptionId === d.subscriptionId && r.mealSlot === d.mealSlot && r.meal !== "—"
+      && r.batch === d.batch && (!d.batch.startsWith("Walk-in") || r.address === d.address));
     if (host) {
       host.drinkList = [...host.drinkList, entry];
       host.drink = host.drinkList.map((x) => (x.qty > 1 ? `${x.name} ×${x.qty}` : x.name)).join(", ");

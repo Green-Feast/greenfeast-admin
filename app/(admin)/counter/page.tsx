@@ -37,7 +37,7 @@ export default async function CounterPage({
     const { data } = await supabaseAdmin
       .from("orders")
       .select(`
-        id, status, meal_slot, quantity, walk_in, fulfilment, pickup_code, collected_at, pickup_missed, created_at, skip_reason,
+        id, status, meal_slot, quantity, walk_in, fulfilment, pickup_code, collected_at, pickup_missed, created_at, skip_reason, item_kind, slot_seq,
         meal_templates ( name ),
         order_addons ( kind, quantity, unit_price, sub_option, addons ( name ) ),
         users!inner ( name, phone, customer_code, is_test )
@@ -46,7 +46,7 @@ export default async function CounterPage({
       .eq("pickup_location_id", place.id)
       .eq("users.is_test", isTest)
       .order("created_at")
-    orders = ((data ?? []) as any[]).map((o) => {
+    const rows = ((data ?? []) as any[]).map((o) => {
       const u = Array.isArray(o.users) ? o.users[0] : o.users
       const meal = Array.isArray(o.meal_templates) ? o.meal_templates[0] : o.meal_templates
       const qty = (o.quantity ?? 1) as number
@@ -72,12 +72,37 @@ export default async function CounterPage({
         skipReason: o.skip_reason ?? null,
         createdAt: o.created_at,
         meal: meal?.name ?? "—",
+        items: [{ name: meal?.name ?? "—", qty, drink: o.item_kind === "drink" }],
         addons,
         name: u?.name ?? "Customer",
         phone: u?.phone ?? "",
         customerCode: u?.customer_code ?? "",
       } satisfies CounterOrder
     })
+    // A walk-in cart (102) is several rows under one code: one entry, all items.
+    const byCode = new Map<string, CounterOrder>()
+    orders = []
+    for (const r of rows) {
+      const key = r.code ? `${r.customerCode}|${r.code}|${r.slot}` : r.id
+      const head = byCode.get(key)
+      if (!head) {
+        const entry = { ...r, items: [...r.items], addons: [...r.addons] }
+        byCode.set(key, entry)
+        orders.push(entry)
+        continue
+      }
+      head.items.push(...r.items)
+      for (const a of r.addons) {
+        const same = head.addons.find((x) => x.name === a.name)
+        if (same) same.qty += a.qty
+        else head.addons.push({ ...a })
+      }
+    }
+    for (const o of orders) {
+      const meals = o.items.filter((i) => !i.drink)
+      o.quantity = meals.reduce((n, i) => n + i.qty, 0) || o.quantity
+      o.meal = o.items.map((i) => `${i.drink ? "Drink: " : ""}${i.name}${i.qty > 1 ? ` ×${i.qty}` : ""}`).join(" + ")
+    }
   }
 
   return <CounterClient places={places} place={place} slot={slot} orders={orders} today={today} />

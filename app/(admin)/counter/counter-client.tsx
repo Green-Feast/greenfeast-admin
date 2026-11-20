@@ -33,7 +33,10 @@ export type CounterOrder = {
   missed: boolean
   skipReason: string | null
   createdAt: string
+  /** Everything under the code, as one line ("Burrito Bowl ×2 + Drink: Avo Clarity"). */
   meal: string
+  /** The cart's items (102); a pre-102 walk-in or booked pickup is one item. */
+  items: { name: string; qty: number; drink: boolean }[]
   addons: { name: string; qty: number }[]
   name: string
   phone: string
@@ -86,7 +89,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
     const dishes = new Map<string, number>()
     const addons = new Map<string, number>()
     for (const o of slotOrders.filter((x) => OPEN.includes(x.status))) {
-      dishes.set(o.meal, (dishes.get(o.meal) ?? 0) + o.quantity)
+      for (const i of o.items) dishes.set(i.drink ? `Drink: ${i.name}` : i.name, (dishes.get(i.drink ? `Drink: ${i.name}` : i.name) ?? 0) + i.qty)
       for (const a of o.addons) addons.set(a.name, (addons.get(a.name) ?? 0) + a.qty)
     }
     return { dishes: [...dishes.entries()].sort((a, b) => b[1] - a[1]), addons: [...addons.entries()] }
@@ -169,7 +172,7 @@ export function CounterClient({ places, place, slot, orders, today }: {
               <div>
                 <p className="text-lg font-bold text-[#1A1A1A]">{match.name} <span className="font-mono text-sm font-normal text-gray-500">{match.customerCode}</span></p>
                 <p className="text-sm text-gray-700 mt-1">
-                  <b>{match.meal}</b>{match.quantity > 1 ? ` ×${match.quantity}` : ""}
+                  <b>{match.meal}</b>
                   {match.addons.length > 0 && ` + ${match.addons.map((a) => (a.qty > 1 ? `${a.name} ×${a.qty}` : a.name)).join(", ")}`}
                 </p>
                 <p className="text-xs text-gray-500 mt-1 capitalize">
@@ -257,7 +260,7 @@ function OrderList({ orders, onPick, done }: { orders: CounterOrder[]; onPick?: 
           <span>
             <span className="font-medium text-[#1A1A1A]">{o.name}</span>
             <span className="block text-xs text-gray-500">
-              {o.meal}{o.quantity > 1 ? ` ×${o.quantity}` : ""} · {o.mode === "dine_in" ? "dine-in" : "takeaway"}
+              {o.meal} · {o.mode === "dine_in" ? "dine-in" : "takeaway"}
               {done && o.collectedAt ? ` · ${timeOf(o.collectedAt)}` : ""}
               {o.missed ? " · charged" : o.skipReason === "walk_in_expired" ? " · walk-in not used" : ""}
             </span>
