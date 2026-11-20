@@ -8,14 +8,14 @@ import { istToday, isSlotLocked } from "@/lib/ist"
 import { notifyEvent } from "@/lib/notifications"
 import { instantiateOrders } from "@/lib/instantiate"
 import { syncUpcomingOrders, type PlanShape } from "@/lib/plan-sync"
-import { audited, dbError, sensitive } from "@/lib/audit"
+import { audited, dbError, sensitive, type SensitiveCtx } from "@/lib/audit"
 import { recordCod, recordOfficePayment, settleBalance, validProof, type CodInput, type SettleInput } from "@/lib/money-ops"
 import { servicePincodeError } from "@/lib/address-server"
 import type { ProofInput } from "@/components/payment-proof"
 import { DRINK_CATEGORY_LIST } from "@/lib/drinks"
 
 type OrderRef = { id: string; delivery_date: string; meal_slot: "lunch" | "dinner" }
-export type ActionResult = { ok: true; message?: string } | { ok: false; error: string }
+export type ActionResult = { ok: true; message?: string; newSubscriptionId?: string } | { ok: false; error: string }
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -382,71 +382,80 @@ export async function setCashDue(subId: string, duePaise: number, onCredit: bool
 export async function activatePendingPlan(
   subId: string, paidPaise: number, cashDuePaise: number, proof: ProofInput | null, idempotencyKey: string, password: string
 ): Promise<ActionResult> {
-  return sensitive("subscribers.activatePendingPlan", password, { subscriptionId: subId, amountPaise: paidPaise, details: { cash_due: cashDuePaise } }, async (ctx): Promise<ActionResult> => {
-    if (![paidPaise, cashDuePaise].every((n) => Number.isInteger(n) && n >= 0 && n <= 20_000_000)) {
-      return { ok: false, error: "Amounts must be between ₹0 and ₹2,00,000." }
-    }
-    const bad = validProof(proof, paidPaise)
-    if (bad) return { ok: false, error: bad }
-    const { data: sub } = await supabaseAdmin
-      .from("subscriptions")
-      .select("user_id, status, payment_method, plan_name, plans ( meals_total, base_price )")
-      .eq("id", subId)
-      .single()
-    if (!sub) return { ok: false, error: "Subscription not found." }
-    if (sub.status !== "pending") return { ok: false, error: "This plan is already live." }
-    const plan = one((sub as any).plans) as { meals_total: number; base_price: number } | null
-    if (!plan) return { ok: false, error: "Plan not found." }
-    ctx.note({ userId: sub.user_id, details: { plan: sub.plan_name } })
+  return sensitive("subscribers.activatePendingPlan", password, { subscriptionId: subId, amountPaise: paidPaise, details: { cash_due: cashDuePaise } }, async (ctx): Promise<ActionResult> =>
+    activatePlan(ctx, subId, paidPaise, cashDuePaise, proof, idempotencyKey, false))
+}
 
-    // The money first, with its proof — the wallet is the plan (079), so the
-    // plan's meals come from it.
-    if (paidPaise > 0 && proof) {
-      const pay = await recordOfficePayment(ctx, {
-        userId: sub.user_id, subId, amountPaise: paidPaise, proof, source: "admin_activation",
-        reason: `Payment received — ${sub.plan_name ?? "plan"}`, idempotencyKey,
-      })
-      if (!pay.ok) return pay
-    }
+// Starts a pending plan: the money first (with its proof, into the wallet),
+// then the previous plan closes and hands over its meals, then this one goes
+// live. Used by Activate plan and by Renew plan.
+async function activatePlan(
+  ctx: SensitiveCtx, subId: string, paidPaise: number, cashDuePaise: number, proof: ProofInput | null,
+  idempotencyKey: string, renewal: boolean
+): Promise<ActionResult> {
+  if (![paidPaise, cashDuePaise].every((n) => Number.isInteger(n) && n >= 0 && n <= 20_000_000)) {
+    return { ok: false, error: "Amounts must be between ₹0 and ₹2,00,000." }
+  }
+  const bad = validProof(proof, paidPaise)
+  if (bad) return { ok: false, error: bad }
+  const { data: sub } = await supabaseAdmin
+    .from("subscriptions")
+    .select("user_id, status, payment_method, plan_name, plans ( meals_total, base_price )")
+    .eq("id", subId)
+    .single()
+  if (!sub) return { ok: false, error: "Subscription not found." }
+  if (sub.status !== "pending") return { ok: false, error: "This plan is already live." }
+  const plan = one((sub as any).plans) as { meals_total: number; base_price: number } | null
+  if (!plan) return { ok: false, error: "Plan not found." }
+  ctx.note({ userId: sub.user_id, details: { plan: sub.plan_name } })
 
-    // One live plan per customer (049): close the previous one first; it hands
-    // over its meals still to come (079) — same as the payment webhook.
-    await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
-
-    // Meals left is set by the database from the wallet + cash due (079).
-    const { error: actErr } = await supabaseAdmin
-      .from("subscriptions")
-      .update({
-        status: "active",
-        payment_method: cashDuePaise > 0 ? "cod" : sub.payment_method,
-        cod_due_paise: cashDuePaise,
-        cod_on_credit: cashDuePaise > 0,
-      })
-      .eq("id", subId)
-      .eq("status", "pending")
-    if (actErr) {
-      return {
-        ok: false,
-        error: actErr.code === "23505"
-          ? "This customer already has a live plan with meals left."
-          : `Payment recorded, but the plan didn't start: ${actErr.message}`,
-      }
-    }
-
-    await instantiateOrders(subId)
-    const { data: live } = await supabaseAdmin.from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
-    await notifyEvent("plan_ready", [await recipient(sub.user_id)], {
-      meals: live?.deliveries_remaining ?? plan.meals_total,
-      wallet_note: paidPaise > 0 ? ` and ${rupees(paidPaise)} is in your wallet` : "",
+  // The money first, with its proof — the wallet is the plan (079), so the
+  // plan's meals come from it.
+  if (paidPaise > 0 && proof) {
+    const pay = await recordOfficePayment(ctx, {
+      userId: sub.user_id, subId, amountPaise: paidPaise, proof, source: "admin_activation",
+      reason: renewal ? `Renewal paid — ${sub.plan_name ?? "plan"}` : `Payment received — ${sub.plan_name ?? "plan"}`, idempotencyKey,
     })
+    if (!pay.ok) return pay
+  }
 
-    await supabaseAdmin.rpc("notify_next_meal", { p_sub: subId })
+  // One live plan per customer (049): close the previous one first; it hands
+  // over its meals still to come (079) — same as the payment webhook.
+  await supabaseAdmin.rpc("retire_previous_subscriptions", { p_new_sub: subId })
 
-    revalidatePath(`/subscribers/${subId}`)
-    revalidatePath("/dashboard")
-    revalidatePath("/money")
-    return { ok: true, message: "Plan is live — meals are being scheduled." }
+  // Meals left is set by the database from the wallet + cash due (079).
+  const { error: actErr } = await supabaseAdmin
+    .from("subscriptions")
+    .update({
+      status: "active",
+      payment_method: cashDuePaise > 0 ? "cod" : sub.payment_method,
+      cod_due_paise: cashDuePaise,
+      cod_on_credit: cashDuePaise > 0,
+    })
+    .eq("id", subId)
+    .eq("status", "pending")
+  if (actErr) {
+    return {
+      ok: false,
+      error: actErr.code === "23505"
+        ? "This customer already has a live plan with meals left."
+        : `Payment recorded, but the plan didn't start: ${actErr.message}`,
+    }
+  }
+
+  await instantiateOrders(subId)
+  const { data: live } = await supabaseAdmin.from("subscriptions").select("deliveries_remaining").eq("id", subId).single()
+  await notifyEvent("plan_ready", [await recipient(sub.user_id)], {
+    meals: live?.deliveries_remaining ?? plan.meals_total,
+    wallet_note: paidPaise > 0 ? ` and ${rupees(paidPaise)} is in your wallet` : "",
   })
+
+  await supabaseAdmin.rpc("notify_next_meal", { p_sub: subId })
+
+  revalidatePath(`/subscribers/${subId}`)
+  revalidatePath("/dashboard")
+  revalidatePath("/money")
+  return { ok: true, message: renewal ? "Renewed — the new plan is live and meals are being scheduled." : "Plan is live — meals are being scheduled." }
 }
 
 // ── Addresses ─────────────────────────────────────────────────────────────
@@ -600,5 +609,132 @@ export async function recordDelivery(subId: string, input: RecordDeliveryInput, 
     revalidatePath("/operations")
     revalidatePath("/money")
     return { ok: true, message: `Recorded — ${rupees(r.total)} charged to the wallet for ${input.slot} on ${input.date}.` }
+  })
+}
+
+// ── Renew plan (office) ───────────────────────────────────────────────────
+
+export type RenewInput = {
+  planId: string
+  mealsLunch: number
+  mealsDinner: number
+  days: string[]
+  addonIds: string[]
+  paidPaise: number
+  cashDuePaise: number
+  proof: ProofInput | null
+  reason: string
+  idempotencyKey: string
+}
+
+// Renews a customer's plan from the office — the same thing as Renew in the
+// app (renew-subscription + payment), for when they can't do it themselves.
+// The plan settings are asked again; their details, address and food
+// preferences stay as they are. A new plan continues this one (renewed_from):
+// the money goes in with its proof and / or as cash to collect, then the old
+// plan closes and hands over any meals it still had (069 / 079), and the new
+// one goes live. Action password + a written reason.
+export async function renewPlan(subId: string, input: RenewInput, password: string): Promise<ActionResult> {
+  return sensitive("subscribers.renewPlan", password, {
+    subscriptionId: subId, amountPaise: input.paidPaise,
+    details: { plan: input.planId, lunch: input.mealsLunch, dinner: input.mealsDinner, days: input.days, addons: input.addonIds, cash_due: input.cashDuePaise, reason: input.reason },
+  }, async (ctx): Promise<ActionResult> => {
+    if (input.reason.trim().length < 3) return { ok: false, error: "Say why the office is renewing this plan." }
+    const okCount = (n: number) => Number.isInteger(n) && n >= 0 && n <= 3
+    if (!okCount(input.mealsLunch) || !okCount(input.mealsDinner) || input.mealsLunch + input.mealsDinner < 1) {
+      return { ok: false, error: "Choose between 1 and 3 meals for lunch and/or dinner." }
+    }
+    if (input.paidPaise + input.cashDuePaise <= 0) return { ok: false, error: "Enter what was paid or what's still to collect." }
+
+    const { data: old } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id, user_id, status, plan_id, plan_name, delivery_mode, batch_id_lunch, batch_id_dinner, cod_due_paise, pause_from, drinks_lunch, drinks_dinner, pickup_location_lunch, pickup_location_dinner")
+      .eq("id", subId)
+      .maybeSingle()
+    if (!old) return { ok: false, error: "Plan not found." }
+    if (!["active", "paused", "expired"].includes(old.status)) {
+      return { ok: false, error: `A ${old.status} plan can't be renewed — create a new subscription from Users instead.` }
+    }
+    if (old.status !== "expired") {
+      // The new plan wouldn't carry the pause, and cash still owed belongs to this plan.
+      if (old.status === "paused" || old.pause_from) return { ok: false, error: "Resume deliveries (or cancel the pause) first, then renew." }
+      if ((old.cod_due_paise ?? 0) > 0) return { ok: false, error: "Record the cash still due on this plan first, then renew." }
+    }
+
+    const { data: plan } = await supabaseAdmin
+      .from("plans").select("id, name, base_price, meals_total, is_active").eq("id", input.planId).maybeSingle()
+    if (!plan || !plan.is_active) return { ok: false, error: "That plan isn't available." }
+
+    const addonIds = Array.from(new Set(input.addonIds))
+    const [{ data: validAddons }, { data: oldAddons }, { data: oldSchedule }] = await Promise.all([
+      addonIds.length
+        ? supabaseAdmin.from("addons").select("id").in("id", addonIds).eq("is_active", true)
+        : Promise.resolve({ data: [] as { id: string }[] }),
+      supabaseAdmin.from("subscription_addons").select("addon_id, sub_option").eq("subscription_id", subId),
+      supabaseAdmin.from("subscription_schedule").select("day_of_week, meal_template_id").eq("subscription_id", subId),
+    ])
+    if ((validAddons ?? []).length !== addonIds.length) return { ok: false, error: "One of those add-ons isn't available." }
+    const days = DOW.filter((d) => input.days.includes(d))
+
+    // 1. The renewal, pending until it's paid for below.
+    const { data: created, error: insErr } = await supabaseAdmin
+      .from("subscriptions")
+      .insert({
+        user_id: old.user_id,
+        plan_id: plan.id,
+        plan_name: (plan.id === old.plan_id ? old.plan_name : null) ?? plan.name,
+        menu_type: "M1",
+        status: "pending",
+        payment_method: input.cashDuePaise > 0 ? "cod" : "online",
+        delivery_mode: old.delivery_mode ?? "opt-out",
+        meals_per_day: input.mealsLunch + input.mealsDinner,
+        meals_lunch: input.mealsLunch,
+        meals_dinner: input.mealsDinner,
+        drinks_lunch: input.mealsLunch > 0 ? old.drinks_lunch : 0,
+        drinks_dinner: input.mealsDinner > 0 ? old.drinks_dinner : 0,
+        deliveries_remaining: 0,
+        batch_id_lunch: old.batch_id_lunch,
+        batch_id_dinner: old.batch_id_dinner,
+        pickup_location_lunch: old.pickup_location_lunch,
+        pickup_location_dinner: old.pickup_location_dinner,
+        renewed_from: old.id,
+        no_delivery_days: days.length === 0,
+      })
+      .select("id")
+      .single()
+    if (insErr || !created) return { ok: false, error: dbError(insErr, "Could not start the renewal.") }
+    ctx.note({ userId: old.user_id, details: { new_subscription: created.id, renewed_from: old.id } })
+
+    // 2. Add-ons (an add-on kept keeps the option they'd picked) and delivery days.
+    if (addonIds.length) {
+      const kept = new Map(((oldAddons ?? []) as { addon_id: string; sub_option: string | null }[]).map((a) => [a.addon_id, a.sub_option]))
+      const { error } = await supabaseAdmin.from("subscription_addons").insert(
+        addonIds.map((id) => ({ subscription_id: created.id, addon_id: id, sub_option: kept.get(id) ?? null }))
+      )
+      if (error) return { ok: false, error: `Renewal started, but add-ons failed: ${error.message}` }
+    }
+    if (days.length) {
+      let starter = ((oldSchedule ?? []) as { meal_template_id: string | null }[]).find((r) => r.meal_template_id)?.meal_template_id ?? null
+      if (!starter) {
+        const { data: m } = await supabaseAdmin
+          .from("meal_templates").select("id").eq("is_active", true).eq("subscription_valid", true)
+          .not("category", "in", DRINK_CATEGORY_LIST).limit(1).maybeSingle()
+        starter = m?.id ?? null
+      }
+      if (starter) {
+        const { error } = await supabaseAdmin.from("subscription_schedule").insert(
+          days.map((d) => ({ subscription_id: created.id, day_of_week: d, meal_template_id: starter }))
+        )
+        if (error) return { ok: false, error: `Renewal started, but delivery days failed: ${error.message}` }
+      }
+    }
+
+    // 3. Paid for and live — the same steps as Activate plan.
+    const res = await activatePlan(ctx, created.id, input.paidPaise, input.cashDuePaise, input.proof, input.idempotencyKey, true)
+    revalidatePath(`/subscribers/${subId}`)
+    revalidatePath(`/subscribers/${created.id}`)
+    revalidatePath("/subscribers")
+    if (!res.ok) return res
+    return { ok: true, message: `${res.message ?? "Renewed."} Opening the new plan…`, newSubscriptionId: created.id }
   })
 }

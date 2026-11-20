@@ -843,3 +843,130 @@ export function RecordDeliveryModal({
     </ModalOverlay>
   )
 }
+
+// ── Renew plan (office) ───────────────────────────────────────────────────
+
+export type RenewFormValue = {
+  planId: string
+  mealsLunch: number
+  mealsDinner: number
+  days: string[]
+  addonIds: string[]
+  paidPaise: number
+  cashDuePaise: number
+  proof: ProofInput | null
+  reason: string
+  idempotencyKey: string
+}
+
+export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addons, pending, onClose, onSave }: {
+  initial: { planId: string; mealsLunch: number; mealsDinner: number; days: string[]; addonIds: string[] }
+  noDeliveryDays: boolean
+  walletBalance: number
+  plans: { id: string; name: string; base_price: number; meals_total: number }[]
+  addons: { id: string; name: string; price_per_meal: number }[]
+  pending: boolean
+  onClose: () => void
+  onSave: (v: RenewFormValue) => void
+}) {
+  const [planId, setPlanId] = useState(plans.some((p) => p.id === initial.planId) ? initial.planId : (plans[0]?.id ?? ""))
+  const [mealsLunch, setMealsLunch] = useState(initial.mealsLunch)
+  const [mealsDinner, setMealsDinner] = useState(initial.mealsDinner)
+  const [days, setDays] = useState<string[]>(initial.days.length || noDeliveryDays ? initial.days : [...DAYS])
+  const [addonIds, setAddonIds] = useState<string[]>(initial.addonIds)
+  const [paid, setPaid] = useState("")
+  const [due, setDue] = useState("")
+  const [proof, setProof] = useState<ProofInput>(emptyProof)
+  const [reason, setReason] = useState("")
+  const [key] = useState(() => crypto.randomUUID())
+
+  const plan = plans.find((p) => p.id === planId)
+  const addonPerMeal = addons.filter((a) => addonIds.includes(a.id)).reduce((n, a) => n + a.price_per_meal, 0)
+  const total = plan ? plan.base_price + addonPerMeal * plan.meals_total : 0
+  const paidPaise = rupeesToPaise(paid)
+  const duePaise = due.trim() ? rupeesToPaise(due) : Math.max(total - paidPaise, 0)
+
+  const problem =
+    !plan ? "Pick a plan." :
+    mealsLunch + mealsDinner < 1 ? "Set at least one meal per day." :
+    paidPaise + duePaise <= 0 ? "Enter what was paid or what's still to collect." :
+    paidPaise > 0 && proofProblem(proof, paidPaise) ? proofProblem(proof, paidPaise) :
+    reason.trim().length < 3 ? "Write why the office is renewing this plan." :
+    null
+
+  return (
+    <ModalOverlay onClose={onClose} wide>
+      <ModalCard title="Renew plan" onClose={onClose}>
+        <div className="space-y-4">
+          <p className="text-xs text-gray-500 bg-[#F9FBF7] border border-[#e2e8d5] rounded-lg p-3">
+            For a customer who can&apos;t renew in the app. Their details, addresses and food preferences stay as they are —
+            only the plan is set again. The current plan closes and anything left in the wallet
+            ({fmtRupees(walletBalance)}) carries on into the new one.
+          </p>
+          <Field label="Plan">
+            <select value={planId} onChange={(e) => setPlanId(e.target.value)} className={inputCls}>
+              {plans.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.meals_total} meals · ₹{(planMealRate(p) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}/meal
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Lunches per day"><Stepper value={mealsLunch} setValue={setMealsLunch} max={3} /></Field>
+            <Field label="Dinners per day"><Stepper value={mealsDinner} setValue={setMealsDinner} max={3} /></Field>
+          </div>
+          <Field
+            label="Delivery days"
+            hint={days.length === 0 ? "No delivery days: nothing is delivered; they can still walk in or add a meal any day." : undefined}
+          >
+            <Chips options={opts(DAYS)} value={days} onChange={(d) => setDays(DAYS.filter((x) => d.includes(x)))} />
+          </Field>
+          <Field label="Add-ons with every meal">
+            <Chips
+              options={addons.map((a) => ({ value: a.id, label: `${a.name} +${fmtRupees(a.price_per_meal)}` }))}
+              value={addonIds}
+              onChange={setAddonIds}
+            />
+          </Field>
+
+          <div className="rounded-xl bg-[#F9FBF7] border border-[#e2e8d5] px-3 py-2.5 text-sm flex items-center justify-between">
+            <span>Plan price</span>
+            <span className="font-semibold">{fmtRupees(total)}</span>
+          </div>
+          <Field label="Paid (₹)" hint="Money received outside the app — it goes into the wallet with its proof.">
+            <input inputMode="decimal" value={paid} onChange={(e) => setPaid(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0" className={inputCls} />
+          </Field>
+          {paidPaise > 0 && <PaymentProofFields value={proof} onChange={setProof} amountPaise={paidPaise} />}
+          <Field label="Cash still to collect (₹)" hint="Meals run on credit until it's recorded.">
+            <input inputMode="decimal" value={due} onChange={(e) => setDue(e.target.value.replace(/[^\d.]/g, ""))} placeholder={String(Math.max(total - paidPaise, 0) / 100)} className={inputCls} />
+          </Field>
+
+          <Field label="Reason (required)" hint="Kept in the admin log. You'll be asked for your action password.">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              placeholder="e.g. Customer paid by UPI on WhatsApp — the app's checkout kept failing"
+              className="w-full rounded-lg border border-[#e2e8d5] bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#1B5E20]/30"
+            />
+          </Field>
+          {problem && <p className="text-xs text-amber-700">{problem}</p>}
+        </div>
+        <ModalFooter>
+          <GhostBtn onClick={onClose}>Cancel</GhostBtn>
+          <PrimaryBtn
+            disabled={pending || !!problem}
+            onClick={() => onSave({
+              planId, mealsLunch, mealsDinner, days, addonIds,
+              paidPaise, cashDuePaise: duePaise, proof: paidPaise > 0 ? proof : null,
+              reason: reason.trim(), idempotencyKey: key,
+            })}
+          >
+            Renew plan
+          </PrimaryBtn>
+        </ModalFooter>
+      </ModalCard>
+    </ModalOverlay>
+  )
+}

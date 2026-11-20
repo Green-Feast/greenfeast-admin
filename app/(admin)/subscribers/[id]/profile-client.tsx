@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import {
   Phone, Calendar, MapPin, Utensils, StickyNote, Pencil, Mail,
   Pause, Play, X, Plus, CheckCircle, AlertCircle, Pin,
-  Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle, PackageCheck,
+  Clock, Banknote, Wallet, Star, Trash2, CalendarDays, AlertTriangle, PackageCheck, RefreshCw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useActionPassword } from "@/components/action-password"
@@ -32,12 +32,13 @@ import {
   removeCustomerAddress,
   addPaidMeals,
   recordDelivery,
+  renewPlan,
   type ActionResult,
 } from "./actions"
 import {
   ModalOverlay, ModalCard, ModalFooter, Field, GhostBtn, PrimaryBtn, DangerBtn, inputCls, fmtRupees,
   IdentityModal, PlanModal, DietaryModal, AddressModal, CashModal, ActivateModal, FixedDishModal,
-  AddPaidMealsModal, RecordDeliveryModal,
+  AddPaidMealsModal, RecordDeliveryModal, RenewModal,
   type DietaryValue, type AddressFormValue,
 } from "./profile-editors"
 import { mapsLink } from "@/lib/address"
@@ -172,7 +173,7 @@ export type WalletTx = {
 
 type Modal =
   | "pause" | "cancel" | "identity" | "plan" | "dietary" | "address"
-  | "cash" | "activate" | "fixed" | "paidMeals" | "recordDelivery" | null
+  | "cash" | "activate" | "fixed" | "paidMeals" | "recordDelivery" | "renew" | null
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -438,6 +439,13 @@ export function ProfileClient({
             )}
             {!isPendingPlan && (
               <>
+                <ActionBtn
+                  icon={<RefreshCw className="w-3.5 h-3.5" />}
+                  label="Renew plan"
+                  color="green"
+                  disabled={isPending}
+                  onClick={() => setModal("renew")}
+                />
                 <ActionBtn
                   icon={<Plus className="w-3.5 h-3.5" />}
                   label="Add paid meals"
@@ -1141,6 +1149,41 @@ export function ProfileClient({
             `Activate ${subscription.planName} for ${user.name || "this customer"}${paid > 0 ? ` with ${fmtRupees(paid)} received` : ""}.`,
             (pw) => activatePendingPlan(subscriptionId, paid, due, proof, key, pw),
           )}
+        />
+      )}
+
+      {modal === "renew" && (
+        <RenewModal
+          initial={{
+            planId: subscription.planId,
+            mealsLunch: subscription.mealsLunch,
+            mealsDinner: subscription.mealsDinner,
+            days: subscription.deliveryDays,
+            addonIds: addons.map((a) => a.id),
+          }}
+          noDeliveryDays={subscription.noDeliveryDays}
+          walletBalance={walletBalance ?? 0}
+          plans={catalogue.plans}
+          addons={catalogue.addons}
+          pending={isPending}
+          onClose={() => setModal(null)}
+          onSave={(v) => {
+            askPassword(`Renew ${user.name || "this customer"}'s plan (${catalogue.plans.find((p) => p.id === v.planId)?.name ?? v.planId}) — ${v.reason}`).then((pw) => {
+              if (pw === null) return
+              startTransition(async () => {
+                try {
+                  const res = await renewPlan(subscriptionId, v, pw)
+                  if (!res.ok) return showToast("error", res.error)
+                  setModal(null)
+                  showToast("success", res.message ?? "Renewed.")
+                  if (res.newSubscriptionId) router.push(`/subscribers/${res.newSubscriptionId}`)
+                  else router.refresh()
+                } catch (e) {
+                  showToast("error", failure(e))
+                }
+              })
+            })
+          }}
         />
       )}
 

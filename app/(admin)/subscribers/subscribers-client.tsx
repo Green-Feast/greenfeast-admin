@@ -2,7 +2,7 @@
 
 import { Fragment, useState, useMemo, useEffect, useRef, useTransition } from "react";
 import Link from "next/link";
-import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, Plus, AlertCircle, ExternalLink, Download, FileText, Trash2, ArrowLeft, Pencil } from "lucide-react";
+import { Search, X, Phone, Calendar, Utensils, StickyNote, ChevronLeft, ChevronRight, ExternalLink, Download, FileText, Trash2, ArrowLeft, Pencil } from "lucide-react";
 import { saveNotes } from "@/app/(admin)/subscribers/[id]/actions";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -211,11 +211,9 @@ function NotesCell({ subscriptionId, value, onSaved }: { subscriptionId: string;
 function DetailPanel({
   subscriber,
   onClose,
-  onAction,
 }: {
   subscriber: Subscriber | null;
   onClose: () => void;
-  onAction: () => void;
 }) {
   const [notes, setNotes] = useState("");
   const [visible, setVisible] = useState(false);
@@ -391,20 +389,6 @@ function DetailPanel({
             <ExternalLink className="w-3.5 h-3.5" />
             Full Profile
           </Link>
-          <div className="flex gap-2">
-            <button
-              onClick={onAction}
-              className="flex-1 py-2 text-xs font-medium rounded-lg border border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors"
-            >
-              Pause
-            </button>
-            <button
-              onClick={onAction}
-              className="flex-1 py-2 text-xs font-medium rounded-lg border border-[#e2e8d5] bg-white text-[#1B5E20] hover:bg-green-50 transition-colors"
-            >
-              Extend Plan
-            </button>
-          </div>
         </div>
       </aside>
     </>
@@ -434,22 +418,6 @@ function Row({
         {label}
       </span>
       <span className="text-right">{children}</span>
-    </div>
-  );
-}
-
-/* ─── Toast ─────────────────────────────────────────────────────────────────── */
-
-function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
-  useEffect(() => {
-    const t = setTimeout(onDismiss, 3000);
-    return () => clearTimeout(t);
-  }, [onDismiss]);
-
-  return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2.5 bg-[#1A1A1A] text-white text-sm px-4 py-2.5 rounded-xl shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200">
-      <AlertCircle className="w-4 h-4 text-[#FDD835] shrink-0" />
-      {message}
     </div>
   );
 }
@@ -570,7 +538,6 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
   const [planFilter, setPlanFilter] = useState("All");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Subscriber | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   // Notes saved from the table show (and export) right away.
   const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
   const subscribers = useMemo(
@@ -606,9 +573,6 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  function showToast() {
-    setToast("Feature available in full version");
-  }
 
   const CRM_COLUMNS: { header: string; get: (s: Subscriber) => string }[] = [
     { header: "Code", get: (s) => s.code },
@@ -699,13 +663,6 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
           >
             <FileText className="w-4 h-4" />
             Export CRM (PDF)
-          </Button>
-          <Button
-            onClick={showToast}
-            className="bg-[#1B5E20] hover:bg-[#155116] text-white h-9 px-4 gap-1.5"
-          >
-            <Plus className="w-4 h-4" />
-            Add Subscriber
           </Button>
           <Button
             onClick={() => setShowDeleted(true)}
@@ -901,13 +858,8 @@ export function SubscribersClient({ initialSubscribers, deletedAccounts }: { ini
       <DetailPanel
         subscriber={selected}
         onClose={() => setSelected(null)}
-        onAction={() => {
-          setToast("Feature available in full version");
-        }}
       />
 
-      {/* Toast */}
-      {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
     </div>
   );
 }
