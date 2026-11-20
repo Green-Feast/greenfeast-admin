@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { isTestMode, modeUserIds } from "@/lib/mode"
-import { advanceBatch, advanceOrder, clearDeliveryTime, deliverOrders, notifyStatus, skipUndelivered, undoDelivered, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
+import { advanceBatch, advanceOrder, clearDeliveryTime, deliverOrders, notifyStatus, skipUndelivered, type DeliveryStatus, type MealSlot } from "@/lib/delivery"
 import { istToday } from "@/lib/ist"
 import { audited, sensitive } from "@/lib/audit"
 import { recordCod, type CodInput } from "@/lib/money-ops"
@@ -126,26 +126,6 @@ export async function skipOrderNoCharge(orderId: string): Promise<{ ok: true; me
   })
 }
 
-// A meal marked delivered by mistake (068): the charge goes back to the
-// wallet, the meal back on the plan, and the customer is told.
-export async function undoOrderDelivery(orderId: string, password: string): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
-  return sensitive("operations.undoOrderDelivery", password, { ref: orderId }, async (ctx): Promise<{ ok: true; message: string } | { ok: false; error: string }> => {
-    try {
-      const { refunded, userId, subscriptionId } = await undoDelivered(orderId, ctx)
-      ctx.note({ userId, subscriptionId, amountPaise: refunded })
-      revalidatePath("/operations")
-      revalidatePath("/dashboard")
-      return {
-        ok: true,
-        message: refunded > 0
-          ? `Undone — ₹${(refunded / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })} back in their wallet, meal back on the plan.`
-          : "Undone — meal back on the plan.",
-      }
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
-    }
-  })
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Delivery partner app (migration 057): a drop the partner couldn't make,

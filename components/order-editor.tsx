@@ -8,10 +8,9 @@
 // charge, or undo a wrong "delivered" (068) — for days ops forgot to mark.
 
 import { useEffect, useMemo, useState, useTransition } from "react"
-import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, Undo2, CupSoda } from "lucide-react"
+import { X, Loader2, Minus, Plus, AlertTriangle, Pin, Search, Trash2, RotateCcw, MapPin, CheckCircle2, Ban, CupSoda } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { istToday } from "@/lib/ist"
-import { useActionPassword } from "@/components/action-password"
 import { isDrinkCategory, DRINK_NOT_PICKED } from "@/lib/drinks"
 import {
   getSlotContext,
@@ -26,7 +25,6 @@ import {
   adminRemoveExtraDish,
   adminDeliverSlot,
   adminSkipUndelivered,
-  adminUndoDelivered,
   setFixedDish,
   clearFixedDish,
   type SlotContext,
@@ -75,7 +73,6 @@ export function OrderEditor({
   const [ctx, setCtx] = useState<SlotContext | null>(null)
   const [loadError, setLoadError] = useState("")
   const [pending, startTransition] = useTransition()
-  const askPassword = useActionPassword()
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   // Dish picker: which order it changes, or "new" for an extra dish.
   const [picking, setPicking] = useState<string | "new" | null>(null)
@@ -255,19 +252,6 @@ export function OrderEditor({
                   <p className="text-xs text-gray-500 capitalize mt-0.5">
                     {o.status.replace(/_/g, " ")}{o.status === "delivered" ? "" : " — dish and portions can't be changed now"}
                   </p>
-                  {o.status === "delivered" && (
-                    <button
-                      disabled={pending}
-                      onClick={() => {
-                        if (!window.confirm(`Undo — ${ctx.customerName}'s ${o.mealName} on ${dayLabel(target.date)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return
-                        askPassword(`Undo ${ctx.customerName}'s ${o.mealName} on ${dayLabel(target.date)} — the charge goes back to their wallet.`)
-                          .then((pw) => { if (pw !== null) run(() => adminUndoDelivered(o.id, pw)) })
-                      }}
-                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-red-200 bg-white text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
-                    >
-                      <Undo2 className="w-3 h-3" /> Undo — it wasn&apos;t delivered
-                    </button>
-                  )}
                 </div>
               ))}
 

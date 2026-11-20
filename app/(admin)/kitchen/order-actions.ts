@@ -17,7 +17,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { mealRate } from "@/lib/pricing"
 import { requireAdmin, requireAdminStrict } from "@/lib/auth"
 import { istToday, isSlotLocked } from "@/lib/ist"
-import { deliverOrders, skipUndelivered, undoDelivered } from "@/lib/delivery"
+import { deliverOrders, skipUndelivered } from "@/lib/delivery"
 import { DRINK_CATEGORIES, DRINK_AS_MEAL_ERROR, DRINK_NOT_PICKED, isDrinkCategory } from "@/lib/drinks"
 import { addressText } from "@/lib/address"
 
@@ -589,24 +589,6 @@ export async function adminSkipUndelivered(subscriptionId: string, date: string,
   })
 }
 
-export async function adminUndoDelivered(orderId: string, password: string): Promise<EditResult> {
-  return sensitive("kitchen.adminUndoDelivered", password, { ref: orderId }, async (ctx): Promise<EditResult> => {
-    try {
-      const { refunded, userId, subscriptionId } = await undoDelivered(orderId, ctx)
-      ctx.note({ userId, subscriptionId, amountPaise: refunded })
-      refresh(subscriptionId ?? undefined)
-      revalidatePath("/operations")
-      return {
-        ok: true,
-        message: refunded > 0
-          ? `Undone — ${rupeesText(refunded)} back in the wallet and the meal back on the plan.`
-          : "Undone — the meal is back on the plan.",
-      }
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : "Could not undo it." }
-    }
-  })
-}
 
 // ── Skip / bring back ─────────────────────────────────────────────────────
 

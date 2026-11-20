@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, Undo2, ChevronLeft, ChevronRight, History, CupSoda } from "lucide-react";
+import { Loader2, Download, FileText, ChefHat, Truck, CheckCircle2, DoorClosed, AlertTriangle, Banknote, Camera, Ban, ChevronLeft, ChevronRight, History, CupSoda } from "lucide-react";
 import { KitchenClosureDialog, ClosedBanner, type KitchenClosure } from "./kitchen-closure";
 import { cn } from "@/lib/utils";
 import { generateDailyLists, generateKitchenSheets, generateDeliverySheet, generateSlotMasterSheet } from "./daily-lists";
@@ -14,7 +14,6 @@ import {
   dismissCashReport,
   deliveryPhotoUrl,
   skipOrderNoCharge,
-  undoOrderDelivery,
 } from "./actions";
 import type { DeliveryStatus, MealSlot } from "@/lib/delivery";
 import { setAddressBatch } from "@/app/(admin)/batches/actions";
@@ -282,20 +281,6 @@ export function OperationsClient({
     });
   }
 
-  // Marked delivered by mistake: refunded, back on the plan, customer told (068).
-  function handleUndo(s: OperationsSubscriber) {
-    if (!window.confirm(`Undo — ${s.name}'s ${slot} on ${shortDay(serverDate)} wasn't delivered? What it was charged goes back to their wallet, the meal goes back on their plan, and they're told.`)) return;
-    setBusyRow(s.orderId);
-    startTransition(async () => {
-      const pw = await askPassword(`Undo ${s.name}'s ${slot} on ${shortDay(serverDate)} — the charge goes back to their wallet.`);
-      if (pw === null) { setBusyRow(null); return; }
-      const res = await undoOrderDelivery(s.orderId, pw);
-      setBusyRow(null);
-      showToast(res.ok ? res.message : res.error);
-      if (res.ok) router.refresh();
-    });
-  }
-
   function handleCollect(s: OperationsSubscriber) {
     setCashFor({ subscriptionId: s.subscriptionId, name: s.name, due: s.codDue, report: null });
   }
@@ -526,7 +511,6 @@ export function OperationsClient({
             <span className="font-semibold">{shortDay(serverDate)} is an earlier day.</span>{" "}
             Marking a meal delivered charges the wallet now (no &quot;delivered&quot; message goes out days later).
             Didn&apos;t go? Skip it with <Ban className="inline w-3.5 h-3.5 -mt-0.5" /> — nothing is charged.
-            Marked delivered by mistake? <Undo2 className="inline w-3.5 h-3.5 -mt-0.5" /> refunds it.
           </span>
         </div>
       )}
@@ -820,15 +804,6 @@ export function OperationsClient({
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-[#1B5E20] bg-green-50 px-2 py-1 rounded-md">
                             <CheckCircle2 className="w-3.5 h-3.5" />Delivered
                           </span>
-                          <button
-                            onClick={() => handleUndo(s)}
-                            disabled={busyRow === s.orderId}
-                            title="Undo — it wasn't delivered (refunds the wallet)"
-                            aria-label="Undo delivered"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#e2e8d5] text-gray-400 hover:border-red-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
-                          >
-                            {busyRow === s.orderId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Undo2 className="w-3.5 h-3.5" />}
-                          </button>
                         </div>
                       ) : terminal ? (
                         <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md shrink-0 capitalize">
