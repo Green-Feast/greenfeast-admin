@@ -153,6 +153,9 @@ export function IdentityModal({ initial, pending, onClose, onSave }: {
 // ── Plan ──────────────────────────────────────────────────────────────────
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const
+// A plan with no saved days means every day the kitchen cooks — Mon to Sat.
+// Sunday is the day off; the office ticks it only on purpose (083).
+const WEEKDAYS: string[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 export type PlanFormValue = {
   planId: string
@@ -175,7 +178,7 @@ export function PlanModal({ initial, noDeliveryDays, plans, addons, pending, onC
   onClose: () => void
   onSave: (v: PlanFormValue) => void
 }) {
-  const [v, setV] = useState<PlanFormValue>({ ...initial, days: initial.days.length || noDeliveryDays ? initial.days : [...DAYS] })
+  const [v, setV] = useState<PlanFormValue>({ ...initial, days: initial.days.length || noDeliveryDays ? initial.days : [...WEEKDAYS] })
   const set = <K extends keyof PlanFormValue>(k: K, val: PlanFormValue[K]) => setV((p) => ({ ...p, [k]: val }))
   return (
     <ModalOverlay onClose={onClose} wide>
@@ -876,7 +879,7 @@ export function RenewModal({ initial, noDeliveryDays, walletBalance, plans, addo
   const [planId, setPlanId] = useState(plans.some((p) => p.id === initial.planId) ? initial.planId : (plans[0]?.id ?? ""))
   const [mealsLunch, setMealsLunch] = useState(initial.mealsLunch)
   const [mealsDinner, setMealsDinner] = useState(initial.mealsDinner)
-  const [days, setDays] = useState<string[]>(initial.days.length || noDeliveryDays ? initial.days : [...DAYS])
+  const [days, setDays] = useState<string[]>(initial.days.length || noDeliveryDays ? initial.days : [...WEEKDAYS])
   const [addonIds, setAddonIds] = useState<string[]>(initial.addonIds)
   const [paid, setPaid] = useState("")
   const [due, setDue] = useState("")

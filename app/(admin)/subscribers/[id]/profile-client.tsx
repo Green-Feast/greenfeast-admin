@@ -337,7 +337,8 @@ export function ProfileClient({
   }
   const takesEveryDay = subscription.deliveryDays.length === 0 && !subscription.noDeliveryDays
   const takesNoDelivery = subscription.deliveryDays.length === 0 && subscription.noDeliveryDays
-  const takesDelivery = (dayIdx: number) => takesEveryDay || subscription.deliveryDays.includes(DOW_ORDER[dayIdx])
+  // "Every day" is Mon–Sat: Sunday only when the office set it (083).
+  const takesDelivery = (dayIdx: number) => (takesEveryDay && DOW_ORDER[dayIdx] !== "Sun") || subscription.deliveryDays.includes(DOW_ORDER[dayIdx])
 
   const walletCredited = walletTransactions.filter(t => t.type === "credit").reduce((s, t) => s + t.amount, 0)
   const walletDebited = walletTransactions.filter(t => t.type === "debit").reduce((s, t) => s + t.amount, 0)
