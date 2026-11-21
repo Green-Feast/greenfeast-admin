@@ -369,6 +369,8 @@ export async function setCashDue(subId: string, duePaise: number, onCredit: bool
       .update({ cod_due_paise: duePaise, cod_on_credit: duePaise > 0 && onCredit, payment_method: duePaise > 0 ? "cod" : undefined })
       .eq("id", subId)
     if (error) return { ok: false, error: error.message }
+    // A higher cash due pays for more meals (on credit): make them now.
+    await instantiateOrders(subId)
     revalidatePath(`/subscribers/${subId}`)
     revalidatePath("/dashboard")
     return { ok: true, message: duePaise > 0 ? `Cash due set to ${rupees(duePaise)}.` : "Nothing due now." }

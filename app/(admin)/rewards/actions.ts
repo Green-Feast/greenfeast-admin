@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireAdmin } from "@/lib/auth"
 import { notifyEvent } from "@/lib/notifications"
 import { background } from "@/lib/background"
+import { instantiateForUser } from "@/lib/instantiate"
 import { dbError, sensitive } from "@/lib/audit"
 import { bankRefund } from "@/lib/money-ops"
 
@@ -37,6 +38,8 @@ export async function refundToWallet(userId: string, amountPaise: number, reason
     if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
     ctx.note({ ref: refundId as string })
     background(async () => notifyEvent("refund_wallet", [await recipient(userId)], { amount: rupees(amountPaise), reason: reason.trim() }))
+    // Meals this money now pays for are made now, not at 1 AM.
+    background(() => instantiateForUser(userId))
     revalidatePath("/rewards")
     revalidatePath("/money")
     return { ok: true, message: `${rupees(amountPaise)} added to the wallet and the customer was notified.` }
@@ -108,6 +111,7 @@ export async function giftMeals(userId: string, meals: number, reason: string, p
     if (error) return { ok: false, error: dbError(error, "Could not gift the meals.") }
     const amount = (data as { amount?: number } | null)?.amount ?? 0
     ctx.note({ amountPaise: amount })
+    background(() => instantiateForUser(userId))
     revalidatePath("/rewards")
     revalidatePath("/money")
     return { ok: true, message: `${meals} meal${meals === 1 ? "" : "s"} (${rupees(amount)}) added to their wallet — they've been told.` }
@@ -125,6 +129,7 @@ export async function giftMoney(userId: string, amountPaise: number, reason: str
     })
     if (error) return { ok: false, error: dbError(error, "Could not add the gift.") }
     const about = (data as { about_meals?: number } | null)?.about_meals ?? 0
+    background(() => instantiateForUser(userId))
     revalidatePath("/rewards")
     revalidatePath("/money")
     return { ok: true, message: `${rupees(amountPaise)} added to their wallet${about ? ` (about ${about} meal${about === 1 ? "" : "s"})` : ""} — they've been told.` }

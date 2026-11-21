@@ -26,3 +26,13 @@ export async function instantiateOrders(subscriptionId: string) {
     console.error("instantiate-orders call failed:", e);
   }
 }
+
+// The customer's live plan(s), after money lands in their wallet without a
+// plan change (a gift, a refund to the wallet, a higher cash due): meals the
+// money now pays for are made straight away instead of at the 1 AM check.
+// make_default_cart never makes a slot twice (105), so this is always safe.
+export async function instantiateForUser(userId: string) {
+  const { supabaseAdmin } = await import("./supabase-admin");
+  const { data } = await supabaseAdmin.from("subscriptions").select("id").eq("user_id", userId).eq("status", "active");
+  for (const s of (data ?? []) as { id: string }[]) await instantiateOrders(s.id);
+}
