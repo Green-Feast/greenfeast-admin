@@ -93,15 +93,15 @@ export async function resumeSubscription(subId: string) {
     await supabaseAdmin.from("subscriptions")
       .update({ status: "active", pause_from: null, pause_until: null })
       .eq("id", subId)
-    // Bring back the meals the pause cancelled (it used to leave them cancelled,
-    // and the nightly order job can't recreate a day that already has an order).
-    // Removed extra dishes are 'cancelled' too and stay gone.
+    // Bring back the meals the pause cancelled — only those (skip_reason
+    // 'pause'). Anything cancelled for another reason stays gone: reviving it
+    // could bill a meal twice (107).
     const { data: paused } = await supabaseAdmin.from("orders")
       .select("id, delivery_date, meal_slot")
       .eq("subscription_id", subId)
       .gte("delivery_date", istToday())
       .eq("status", "cancelled")
-      .or("skip_reason.eq.pause,and(skip_reason.is.null,extra_dish.eq.false)")
+      .eq("skip_reason", "pause")
     const ids = openIds(paused as OrderRef[] | null)
     if (ids.length > 0) {
       await supabaseAdmin.from("orders").update({ status: "scheduled", skip_reason: null }).in("id", ids)
@@ -559,7 +559,9 @@ export async function addPaidMeals(
       p_paid_on: collect ? null : proof!.paidOn,
       p_note: collect ? null : (proof!.note || null),
       p_reason: reason.trim(),
-      p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: collect ? null : idempotencyKey,
+      // The dialog's one-time key for both kinds (107): a repeated submit of
+      // "cash to collect" can't add the cash due twice.
+      p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: idempotencyKey,
       p_amount: byAmount ? amountPaise : null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not add the meals.") }
@@ -588,6 +590,8 @@ export type RecordDeliveryInput = {
   addressId: string | null
   locationId: string | null
   reason: string
+  /** One-time key from the dialog (107). */
+  idempotencyKey?: string
 }
 
 // Record a delivery: a meal that went out but isn't in the app. Charged to
@@ -606,6 +610,7 @@ export async function recordDelivery(subId: string, input: RecordDeliveryInput, 
       p_location: input.mode === "delivery" ? null : input.locationId,
       p_reason: input.reason.trim(),
       p_admin: ctx.admin.id, p_action: ctx.actionId,
+      p_idem: input.idempotencyKey ?? null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not record the delivery.") }
     const r = data as { total: number; user_id: string; orders: string[] }

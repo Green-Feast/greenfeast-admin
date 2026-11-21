@@ -125,6 +125,8 @@ export type SettleInput = {
   reference?: string;
   /** refund_bank: the Cashfree payment to refund against */
   paymentId?: string;
+  /** One-time key from the dialog (107): a repeated submit changes nothing. */
+  idempotencyKey?: string;
 };
 
 /**
@@ -143,6 +145,7 @@ export async function settleBalance(ctx: SensitiveCtx, userId: string, subId: st
     const { data, error } = await supabaseAdmin.rpc("admin_refund_offline", {
       p_user: userId, p_amount: input.amountPaise, p_method: input.method ?? "", p_reference: input.reference ?? "",
       p_reason: reason, p_admin: ctx.admin.id, p_action: ctx.actionId,
+      p_idem: input.idempotencyKey ? `${input.idempotencyKey}:refund` : null,
     });
     if (error) return { ok: false, error: dbError(error, "Could not record the refund.") };
     refundId = data as string;
@@ -156,6 +159,7 @@ export async function settleBalance(ctx: SensitiveCtx, userId: string, subId: st
   const { error } = await supabaseAdmin.rpc("admin_settle_balance", {
     p_user: userId, p_sub: subId, p_decision: input.decision, p_amount: input.amountPaise, p_reason: reason,
     p_refund: refundId, p_admin: ctx.admin.id, p_action: ctx.actionId,
+    p_idem: input.idempotencyKey ? `${input.idempotencyKey}:settle` : null,
   });
   if (error) return { ok: false, error: dbError(error, "Could not record the decision.") };
 

@@ -52,6 +52,8 @@ export function RefundDialog({
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  // One-time key (107), new after every refund that goes through.
+  const [refundKey, setRefundKey] = useState(() => crypto.randomUUID());
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -101,10 +103,11 @@ export function RefundDialog({
     setResult(null);
     startTransition(async () => {
       const r = kind === "wallet"
-        ? await refundToWallet(customer.id, amountPaise, reason, pw)
+        ? await refundToWallet(customer.id, amountPaise, reason, pw, refundKey)
         : kind === "bank"
           ? await refundToBank(selectedPayment!.id, amountPaise, reason, pw)
-          : await refundOffline(customer.id, amountPaise, method as "cash" | "upi" | "bank_transfer", reference.trim(), reason, pw);
+          : await refundOffline(customer.id, amountPaise, method as "cash" | "upi" | "bank_transfer", reference.trim(), reason, pw, refundKey);
+      if (r.ok) setRefundKey(crypto.randomUUID());
       setResult(r.ok ? { ok: true, text: r.message } : { ok: false, text: r.error });
       if (r.ok) {
         setAmount("");

@@ -616,14 +616,27 @@ export async function adminSkipSlot(subscriptionId: string, date: string, slot: 
 export async function adminUnskipSlot(subscriptionId: string, date: string, slot: Slot): Promise<EditResult> {
   return audited<EditResult>("kitchen.adminUnskipSlot", { subscriptionId, details: { date, slot } }, async () => {
     await requireAdmin()
-    const { data: skipped } = await supabaseAdmin
+    const { data: allSkipped } = await supabaseAdmin
       .from("orders")
-      .select("id, quantity")
+      .select("id, quantity, updated_at")
       .eq("subscription_id", subscriptionId)
       .eq("delivery_date", date)
       .eq("meal_slot", slot)
+      .eq("walk_in", false)
       .eq("status", "skipped")
-    if (!skipped?.length) return { ok: false, error: "Nothing skipped here." }
+    if (!allSkipped?.length) return { ok: false, error: "Nothing skipped here." }
+    // Never two meals in one slot (107): if this lunch / dinner already has a
+    // meal, there's nothing to bring back.
+    const { data: live } = await supabaseAdmin
+      .from("orders").select("id")
+      .eq("subscription_id", subscriptionId).eq("delivery_date", date).eq("meal_slot", slot)
+      .eq("walk_in", false)
+      .in("status", ["scheduled", "confirmed", "preparing", "out_for_delivery", "delivered"])
+      .limit(1)
+    if (live?.length) return { ok: false, error: "This meal already has an order — edit that instead." }
+    // Only the most recent skip comes back, not every meal ever skipped here.
+    const latest = Math.max(...(allSkipped as any[]).map((o) => new Date(o.updated_at).getTime()))
+    const skipped = (allSkipped as any[]).filter((o) => latest - new Date(o.updated_at).getTime() < 2 * 60 * 1000)
     const need = skipped.reduce((n, o: any) => n + (o.quantity ?? 1), 0)
 
     const { data: sub } = await supabaseAdmin

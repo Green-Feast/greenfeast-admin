@@ -304,6 +304,8 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
   const [meals, setMeals] = useState(1);
   // Meals (× a meal's worth) or an amount — the meal counter follows the wallet either way (104).
   const [by, setBy] = useState<"meals" | "amount">("meals");
+  // One-time key (107), new after every gift that goes through.
+  const [giftKey, setGiftKey] = useState(() => crypto.randomUUID());
   const [amountText, setAmountText] = useState("");
   const amountPaise = Math.round((parseFloat(amountText) || 0) * 100);
   const [reason, setReason] = useState("");
@@ -341,7 +343,8 @@ function GiftDialog({ customers, onClose }: { customers: RefundCustomer[]; onClo
     if (pw === null) return;
     setResult(null);
     startTransition(async () => {
-      const r = by === "amount" ? await giftMoney(customer.id, amountPaise, reason, pw) : await giftMeals(customer.id, meals, reason, pw);
+      const r = by === "amount" ? await giftMoney(customer.id, amountPaise, reason, pw, giftKey) : await giftMeals(customer.id, meals, reason, pw, giftKey);
+      if (r.ok) setGiftKey(crypto.randomUUID());
       setResult(r.ok ? { ok: true, text: r.message } : { ok: false, text: r.error });
       if (r.ok) setReason("");
     });

@@ -15,9 +15,11 @@ export type SettleValue = {
   method: "" | "cash" | "upi" | "bank_transfer"
   reference: string
   paymentId: string
+  /** One-time key (107), fresh each time the dialog opens. */
+  key: string
 }
 
-export const emptySettle = (): SettleValue => ({ decision: "", amountPaise: 0, reason: "", method: "", reference: "", paymentId: "" })
+export const emptySettle = (): SettleValue => ({ decision: "", amountPaise: 0, reason: "", method: "", reference: "", paymentId: "", key: crypto.randomUUID() })
 
 export function settleProblem(v: SettleValue, balance: number, payments: RefundablePayment[]): string | null {
   if (!v.decision) return "Choose what happens to the balance."
@@ -46,6 +48,7 @@ export function toSettleInput(v: SettleValue) {
     method: v.method || undefined,
     reference: v.reference.trim() || undefined,
     paymentId: v.paymentId || undefined,
+    idempotencyKey: v.key || undefined,
   } as const
 }
 

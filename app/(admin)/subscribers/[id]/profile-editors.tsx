@@ -676,6 +676,7 @@ export type RecordDeliveryValue = {
   locationId: string | null
   reason: string
   items: { kind: "meal" | "drink"; dish: string; qty: number; addons: { id: string; qty: number }[] }[]
+  idempotencyKey: string
 }
 
 export function RecordDeliveryModal({
@@ -702,6 +703,8 @@ export function RecordDeliveryModal({
   const [locationId, setLocationId] = useState(locations[0]?.id ?? "")
   const [reason, setReason] = useState("")
   const [rows, setRows] = useState<RecordRow[]>([{ kind: "meal", dish: meals[0]?.id ?? "", qty: 1, addons: {} }])
+  // One-time key (107): a repeated submit can't charge the wallet twice.
+  const [key] = useState(() => crypto.randomUUID())
 
   const setRow = (i: number, patch: Partial<RecordRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const rowCost = (r: RecordRow) =>
@@ -859,6 +862,7 @@ export function RecordDeliveryModal({
               addressId: mode === "delivery" ? addressId : null,
               locationId: mode === "delivery" ? null : locationId,
               reason: reason.trim(),
+              idempotencyKey: key,
               items: rows.map((r) => ({
                 kind: r.kind, dish: r.dish, qty: r.qty,
                 addons: r.kind === "meal" ? Object.entries(r.addons).map(([id, qty]) => ({ id, qty })) : [],

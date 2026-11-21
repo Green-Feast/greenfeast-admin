@@ -27,13 +27,14 @@ async function recipient(userId: string) {
 // (undelivered meal, quality issue, wrong or missing item…). One transaction
 // in the database (admin_refund_to_wallet): the refund row and the credit,
 // stamped with the admin and this action.
-export async function refundToWallet(userId: string, amountPaise: number, reason: string, password: string): Promise<RefundResult> {
+export async function refundToWallet(userId: string, amountPaise: number, reason: string, password: string, idempotencyKey?: string): Promise<RefundResult> {
   return sensitive("rewards.refundToWallet", password, { userId, amountPaise, details: { reason } }, async (ctx): Promise<RefundResult> => {
     if (!userId) return { ok: false, error: "Pick a customer." }
     if (!validAmount(amountPaise)) return { ok: false, error: "Enter an amount between ₹1 and ₹1,00,000." }
     if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
     const { data: refundId, error } = await supabaseAdmin.rpc("admin_refund_to_wallet", {
       p_user: userId, p_amount: amountPaise, p_reason: reason.trim(), p_admin: ctx.admin.id, p_action: ctx.actionId,
+      p_idem: idempotencyKey ?? null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
     ctx.note({ ref: refundId as string })
@@ -70,7 +71,8 @@ export async function refundToBank(paymentId: string, amountPaise: number, reaso
 // Money handed back outside Cashfree — cash, UPI from our account, a bank
 // transfer — with its reference (admin_refund_offline). Taken from the wallet.
 export async function refundOffline(
-  userId: string, amountPaise: number, method: "cash" | "upi" | "bank_transfer", reference: string, reason: string, password: string
+  userId: string, amountPaise: number, method: "cash" | "upi" | "bank_transfer", reference: string, reason: string, password: string,
+  idempotencyKey?: string
 ): Promise<RefundResult> {
   return sensitive("rewards.refundOffline", password, { userId, amountPaise, details: { method, reference, reason } }, async (ctx): Promise<RefundResult> => {
     if (!userId) return { ok: false, error: "Pick a customer." }
@@ -78,7 +80,7 @@ export async function refundOffline(
     if (!reason.trim()) return { ok: false, error: "Add a reason." }
     const { data: refundId, error } = await supabaseAdmin.rpc("admin_refund_offline", {
       p_user: userId, p_amount: amountPaise, p_method: method, p_reference: reference, p_reason: reason.trim(),
-      p_admin: ctx.admin.id, p_action: ctx.actionId,
+      p_admin: ctx.admin.id, p_action: ctx.actionId, p_idem: idempotencyKey ?? null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not record the refund.") }
     ctx.note({ ref: refundId as string })
@@ -101,12 +103,13 @@ export async function mealWorth(userId: string): Promise<number | null> {
 
 // Gift meals: a meal's worth × meals into the wallet, recorded and messaged
 // (template meal_gift) by gift_meals(), stamped with the admin (092).
-export async function giftMeals(userId: string, meals: number, reason: string, password: string): Promise<RefundResult> {
+export async function giftMeals(userId: string, meals: number, reason: string, password: string, idempotencyKey?: string): Promise<RefundResult> {
   return sensitive("rewards.giftMeals", password, { userId, details: { meals, reason } }, async (ctx): Promise<RefundResult> => {
     if (!Number.isInteger(meals) || meals < 1 || meals > 30) return { ok: false, error: "Gift between 1 and 30 meals." }
     if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
     const { data, error } = await supabaseAdmin.rpc("admin_gift_meals", {
       p_user: userId, p_meals: meals, p_reason: reason.trim(), p_admin: ctx.admin.id, p_admin_email: ctx.admin.email, p_action: ctx.actionId,
+      p_idem: idempotencyKey ?? null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not gift the meals.") }
     const amount = (data as { amount?: number } | null)?.amount ?? 0
@@ -120,12 +123,13 @@ export async function giftMeals(userId: string, meals: number, reason: string, p
 
 // Gift money (104): an amount into the wallet, recorded as a gift; the
 // customer is told it's about N meals. Up to 30 meals' worth.
-export async function giftMoney(userId: string, amountPaise: number, reason: string, password: string): Promise<RefundResult> {
+export async function giftMoney(userId: string, amountPaise: number, reason: string, password: string, idempotencyKey?: string): Promise<RefundResult> {
   return sensitive("rewards.giftMoney", password, { userId, amountPaise, details: { reason } }, async (ctx): Promise<RefundResult> => {
     if (!Number.isInteger(amountPaise) || amountPaise < 100) return { ok: false, error: "Enter an amount." }
     if (!reason.trim()) return { ok: false, error: "Add a reason — the customer sees it." }
     const { data, error } = await supabaseAdmin.rpc("admin_gift_money", {
       p_user: userId, p_amount: amountPaise, p_reason: reason.trim(), p_admin: ctx.admin.id, p_admin_email: ctx.admin.email, p_action: ctx.actionId,
+      p_idem: idempotencyKey ?? null,
     })
     if (error) return { ok: false, error: dbError(error, "Could not add the gift.") }
     const about = (data as { about_meals?: number } | null)?.about_meals ?? 0
