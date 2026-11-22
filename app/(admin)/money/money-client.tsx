@@ -110,8 +110,10 @@ export function MoneyClient({ data }: { data: MoneyData }) {
 
   const byCat = (type: "credit" | "debit", group?: string) =>
     (s?.by_category ?? []).filter((c) => c.type === type && (!group || CATEGORY[c.category]?.group === group))
-  const moneyIn = sumBy(byCat("credit", "money_in"), (c) => c.amount)
-  const otherCredits = sumBy(byCat("credit"), (c) => c.amount) - moneyIn
+  // Money received is net of the office's pre-audit corrections (money_in debits),
+  // so the cards add up: opening + received + other credits − charged − refunded − kept = closing.
+  const moneyIn = sumBy(byCat("credit", "money_in"), (c) => c.amount) - sumBy(byCat("debit", "money_in"), (c) => c.amount)
+  const otherCredits = sumBy(byCat("credit", "credit"), (c) => c.amount)
   const mealsCharged = sumBy(byCat("debit", "spend"), (c) => c.amount)
   const refundsOut = sumBy(byCat("debit", "out"), (c) => c.amount)
   const income = sumBy(byCat("debit", "income"), (c) => c.amount)
@@ -120,7 +122,7 @@ export function MoneyClient({ data }: { data: MoneyData }) {
   const csv = {
     ledger: () => toCsv(
       ["Date (IST)", "Customer code", "Customer", "Type", "Category", "Amount (₹)", "Reason", "Reference", "Admin", "Archived"],
-      data.ledger.map((r) => [fmtDateTime(r.at), r.code, r.name, r.type, categoryLabel(r.category), paiseToRupeesNumber(r.type === "credit" ? r.amount : -r.amount), r.reason, r.reference, r.admin ?? "", r.archived ? "yes" : ""])),
+      data.ledger.map((r) => [fmtDateTime(r.at), r.code, r.name, r.type, categoryLabel(r.category, r.type), paiseToRupeesNumber(r.type === "credit" ? r.amount : -r.amount), r.reason, r.reference, r.admin ?? "", r.archived ? "yes" : ""])),
     payments: () => toCsv(
       ["Paid on", "Created (IST)", "Customer code", "Customer", "Amount (₹)", "Status", "Method", "Cash (₹)", "UPI (₹)", "Source", "Proof reference", "Recorded by", "Cashfree order", "Cashfree payment", "Coupon", "Discount (₹)", "Wallet credit used (₹)", "Credited to wallet", "Note"],
       data.payments.map((p) => [p.paidOn ?? "", fmtDateTime(p.createdAt), p.code, p.name, paiseToRupeesNumber(p.amount), p.status, methodLabel(p.method), paiseToRupeesNumber(p.cash), paiseToRupeesNumber(p.upi), sourceLabel(p.source), p.proof ?? "", p.recordedBy ?? "", p.cfOrderId ?? "", p.cfPaymentId ?? "", p.couponCode ?? "", paiseToRupeesNumber(p.discount), paiseToRupeesNumber(p.walletCarry), p.credited ? "yes" : "no", p.note ?? ""])),
@@ -175,7 +177,7 @@ export function MoneyClient({ data }: { data: MoneyData }) {
       ...(isCurrent ? [["Wallets right now (live)", rs(s.wallets_now)]] : []),
     ])
     table("Ledger by category", ["Type", "Category", "Entries", "Amount"],
-      s.by_category.map((c) => [c.type, categoryLabel(c.category), c.count, rs(c.amount)]))
+      s.by_category.map((c) => [c.type, categoryLabel(c.category, c.type), c.count, rs(c.amount)]))
     table("Money received (by day paid)", ["Method", "Source", "Payments", "Amount", "Cash", "UPI"],
       s.payments.map((p) => [methodLabel(p.method), sourceLabel(p.source), p.count, rs(p.amount), rs(p.cash), rs(p.upi)]))
     table("Refunds", ["Kind", "Status", "Count", "Amount"], s.refunds.map((r) => [r.kind, r.status, r.count, rs(r.amount)]))
@@ -235,7 +237,7 @@ export function MoneyClient({ data }: { data: MoneyData }) {
           <Kpi label="Opening wallets" value={rupees(s.opening_balance)} hint={`owed on ${fmtDate(data.from)}`}
             info="Money customers had already paid but not yet eaten, at the start of the month (midnight IST on the 1st). GreenFeast owes it to them as meals, so it's a liability — not income. It's the same as last month's closing wallets." />
           <Kpi label="Money received" value={rupees(moneyIn)} hint="Cashfree, cash, UPI, opening balances, office adds" tone="green"
-            info="Real money that came in this month and went into customer wallets: Cashfree payments, cash and UPI the office recorded (with proof), opening balances moved from earlier records, and meals / balance the office added before 18 Nov (always paid). This is cash the company received." />
+            info="Real money that came in this month and went into customer wallets: Cashfree payments, cash and UPI the office recorded (with proof), opening balances moved from earlier records, and meals / balance the office added before 18 Nov (always paid), less the office's corrections from before 18 Nov. This is cash the company received." />
           <Kpi label="Other credits" value={rupees(otherCredits)} hint="gifts, referrals, refunds to wallet" tone="amber"
             info="Wallet money added without a payment this month: gift meals, referral rewards, refunds to wallet, undone deliveries and failed bank refunds put back. No cash came in, but customers can now eat this much more — it adds to what GreenFeast owes." />
           <Kpi label="Meals charged" value={rupees(mealsCharged)} hint="delivered meals"
@@ -445,7 +447,7 @@ function SummaryTab({ s, isCurrent, decisions, onCsv }: { s: Summary; isCurrent:
         <Table head={["Category", { label: "Entries", right: true }, { label: "Amount", right: true }]} empty={s.by_category.length === 0}>
           {s.by_category.map((c) => (
             <tr key={c.type + c.category}>
-              <Td><span className={cn("mr-2 text-[10px] font-semibold uppercase", c.type === "credit" ? "text-[#1B5E20]" : "text-red-600")}>{c.type === "credit" ? "in" : "out"}</span>{categoryLabel(c.category)}</Td>
+              <Td><span className={cn("mr-2 text-[10px] font-semibold uppercase", c.type === "credit" ? "text-[#1B5E20]" : "text-red-600")}>{c.type === "credit" ? "in" : "out"}</span>{categoryLabel(c.category, c.type)}</Td>
               <Td right>{c.count}</Td><Td right>{rupees(c.amount)}</Td>
             </tr>
           ))}
@@ -541,7 +543,7 @@ function LedgerTab({ rows, onCsv }: { rows: LedgerRow[]; onCsv: () => void }) {
           <tr key={r.id}>
             <Td muted>{fmtDateTime(r.at)}</Td>
             <Td><Who code={r.code} name={r.name} />{r.archived && <span className="ml-1.5 text-[10px] uppercase text-gray-400">archived</span>}</Td>
-            <Td>{categoryLabel(r.category)}</Td>
+            <Td>{categoryLabel(r.category, r.type)}</Td>
             <Td right><span className={r.type === "credit" ? "text-[#1B5E20]" : "text-red-600"}>{r.type === "credit" ? "+" : "−"}{rupees(r.amount)}</span></Td>
             <Td wrap>{r.reason}</Td>
             <Td muted><span className="font-mono text-[11px]">{r.reference.length > 20 ? `${r.reference.slice(0, 20)}…` : r.reference}</span></Td>

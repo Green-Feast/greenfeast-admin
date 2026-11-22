@@ -25,7 +25,9 @@ export const CATEGORY: Record<string, { label: string; group: "money_in" | "cred
   legacy_adjustment:    { label: "Paid — added by the office before 18 Nov", group: "money_in" },
 }
 
-export const categoryLabel = (c: string | null | undefined) => (c ? CATEGORY[c]?.label ?? c : "—")
+// An office wallet edit before 18 Nov that took money out was a correction, not a payment.
+export const categoryLabel = (c: string | null | undefined, type?: string | null) =>
+  c === "legacy_adjustment" && type === "debit" ? "Office correction before 18 Nov" : (c ? CATEGORY[c]?.label ?? c : "—")
 
 export const METHOD: Record<string, string> = {
   cashfree: "Cashfree",
