@@ -20,7 +20,9 @@ export const CATEGORY: Record<string, { label: string; group: "money_in" | "cred
   forfeit:              { label: "Balance forfeited", group: "income" },
   account_closed:       { label: "Account closed — balance", group: "income" },
   rounding_income:      { label: "Plan rounding (kept)", group: "income" },
-  legacy_adjustment:    { label: "Old manual adjustment / added meals", group: "legacy" },
+  // Add meals / wallet edits from before the money audit (18 Nov): always paid
+  // money taken by the office, so it counts as money received (decided 23 Nov).
+  legacy_adjustment:    { label: "Paid — added by the office before 18 Nov", group: "money_in" },
 }
 
 export const categoryLabel = (c: string | null | undefined) => (c ? CATEGORY[c]?.label ?? c : "—")

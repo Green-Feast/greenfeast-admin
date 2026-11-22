@@ -234,8 +234,8 @@ export function MoneyClient({ data }: { data: MoneyData }) {
         <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
           <Kpi label="Opening wallets" value={rupees(s.opening_balance)} hint={`owed on ${fmtDate(data.from)}`}
             info="Money customers had already paid but not yet eaten, at the start of the month (midnight IST on the 1st). GreenFeast owes it to them as meals, so it's a liability — not income. It's the same as last month's closing wallets." />
-          <Kpi label="Money received" value={rupees(moneyIn)} hint="Cashfree, cash, UPI, opening balances" tone="green"
-            info="Real money that came in this month and went into customer wallets: Cashfree payments, cash and UPI the office recorded (with proof), and opening balances moved from earlier records. This is cash the company received." />
+          <Kpi label="Money received" value={rupees(moneyIn)} hint="Cashfree, cash, UPI, opening balances, office adds" tone="green"
+            info="Real money that came in this month and went into customer wallets: Cashfree payments, cash and UPI the office recorded (with proof), opening balances moved from earlier records, and meals / balance the office added before 18 Nov (always paid). This is cash the company received." />
           <Kpi label="Other credits" value={rupees(otherCredits)} hint="gifts, referrals, refunds to wallet" tone="amber"
             info="Wallet money added without a payment this month: gift meals, referral rewards, refunds to wallet, undone deliveries and failed bank refunds put back. No cash came in, but customers can now eat this much more — it adds to what GreenFeast owes." />
           <Kpi label="Meals charged" value={rupees(mealsCharged)} hint="delivered meals"
