@@ -485,7 +485,7 @@ function CouponEditor({
                 </tbody>
               </table>
             </div>
-            <p className="text-[11px] text-gray-400 mt-1.5">Add-ons are not discounted. The 5-meal trial can&apos;t take a coupon.</p>
+            <p className="text-[11px] text-gray-400 mt-1.5">Add-ons are not discounted. A trial coupon is applied by the office (Create subscription); the app doesn&apos;t offer codes on the trial.</p>
           </section>
 
           {/* 3. Who */}
